@@ -48,13 +48,20 @@ jobs:
       - name: Build
         run: bash scripts/build.sh release
 
-      - name: Get latest tag
+      - name: Get image version
         id: tag
         run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0)
-          echo "TAG_NAME=$LATEST_TAG" >> $GITHUB_OUTPUT
+          if LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null); then
+            echo "TAG_NAME=$LATEST_TAG" >> $GITHUB_OUTPUT
+            echo "HAS_TAG=true" >> $GITHUB_OUTPUT
+          else
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            echo "TAG_NAME=dev-$SHORT_SHA" >> $GITHUB_OUTPUT
+            echo "HAS_TAG=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload Release
+        if: steps.tag.outputs.HAS_TAG == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: build/archives/*
