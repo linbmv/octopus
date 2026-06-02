@@ -8,31 +8,39 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestGeminiGenerateContentOnlyAllowsGenerateContent(t *testing.T) {
+func TestGeminiContentActionOnlyAllowsContentActions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	called := false
-	r.POST("/v1beta/models/*action", geminiGenerateContentOnly(func(c *gin.Context) {
-		called = true
-		c.Status(http.StatusNoContent)
-	}))
-
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-1.5-flash:generateContent", nil)
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusNoContent)
+	tests := []string{
+		"/v1beta/models/gemini-1.5-flash:generateContent",
+		"/v1beta/models/gemini-1.5-flash:streamGenerateContent",
 	}
-	if !called {
-		t.Fatal("next handler was not called")
+
+	for _, path := range tests {
+		t.Run(path, func(t *testing.T) {
+			r := gin.New()
+			called := false
+			r.POST("/v1beta/models/*action", geminiContentActionOnly(func(c *gin.Context) {
+				called = true
+				c.Status(http.StatusNoContent)
+			}))
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, path, nil)
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", w.Code, http.StatusNoContent)
+			}
+			if !called {
+				t.Fatal("next handler was not called")
+			}
+		})
 	}
 }
 
-func TestGeminiGenerateContentOnlyRejectsUnsupportedActions(t *testing.T) {
+func TestGeminiContentActionOnlyRejectsUnsupportedActions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tests := []string{
-		"/v1beta/models/gemini-1.5-flash:streamGenerateContent",
 		"/v1beta/models/gemini-1.5-flash:countTokens",
 		"/v1beta/models/gemini-1.5-flash:batchGenerateContent",
 	}
@@ -41,7 +49,7 @@ func TestGeminiGenerateContentOnlyRejectsUnsupportedActions(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			r := gin.New()
 			called := false
-			r.POST("/v1beta/models/*action", geminiGenerateContentOnly(func(c *gin.Context) {
+			r.POST("/v1beta/models/*action", geminiContentActionOnly(func(c *gin.Context) {
 				called = true
 				c.Status(http.StatusNoContent)
 			}))

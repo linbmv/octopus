@@ -66,13 +66,13 @@ func registerRelayRoutes(r *gin.Engine) {
 	v1.POST("/images/variations", relay.Handler(llm.APIFormatOpenAIImageVariation))
 
 	v1beta := r.Group("/v1beta", middleware.APIKeyAuth())
-	v1beta.POST("/models/*action", middleware.RequireJSON(), geminiGenerateContentOnly(relay.Handler(llm.APIFormatGeminiContents)))
+	v1beta.POST("/models/*action", middleware.RequireJSON(), geminiContentActionOnly(relay.Handler(llm.APIFormatGeminiContents)))
 }
 
-func geminiGenerateContentOnly(next gin.HandlerFunc) gin.HandlerFunc {
+func geminiContentActionOnly(next gin.HandlerFunc) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		action := c.Param("action")
-		if !strings.HasPrefix(action, "/") || !strings.HasSuffix(action, ":generateContent") {
+		if !strings.HasPrefix(action, "/") || (!strings.HasSuffix(action, ":generateContent") && !strings.HasSuffix(action, ":streamGenerateContent")) {
 			resp.Error(c, http.StatusNotFound, resp.ErrResourceNotFound)
 			c.Abort()
 			return

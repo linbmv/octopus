@@ -129,12 +129,19 @@ func getGeminiModel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !lo.Contains(models, requestedModel) {
+	matchedModel := ""
+	for _, m := range models {
+		if strings.EqualFold(m, requestedModel) {
+			matchedModel = m
+			break
+		}
+	}
+	if matchedModel == "" {
 		resp.Error(c, http.StatusNotFound, resp.ErrResourceNotFound)
 		return
 	}
 
-	c.JSON(200, newGeminiModel(requestedModel))
+	c.JSON(200, newGeminiModel(matchedModel))
 }
 
 func availableModelsForAPIKey(c *gin.Context) ([]string, error) {
@@ -167,7 +174,7 @@ func newGeminiModel(name string) model.GeminiModel {
 		Description:                name,
 		InputTokenLimit:            1048576,
 		OutputTokenLimit:           65536,
-		SupportedGenerationMethods: []string{"generateContent"},
+		SupportedGenerationMethods: []string{"generateContent", "countTokens"},
 	}
 }
 
