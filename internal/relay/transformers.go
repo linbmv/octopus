@@ -77,7 +77,8 @@ func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key s
 		}
 	case llm.RequestTypeCompact:
 		switch channelType {
-		case llm.APIFormatOpenAIResponse,
+		case llm.APIFormatOpenAIChatCompletion,
+			llm.APIFormatOpenAIResponse,
 			llm.APIFormatOpenAIResponseCompact:
 			return responses.NewOutboundTransformer(baseURL, key)
 		default:

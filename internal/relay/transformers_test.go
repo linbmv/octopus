@@ -125,6 +125,7 @@ func TestNewOutboundKeepsCurrentImageCompatibility(t *testing.T) {
 
 func TestNewOutboundKeepsCurrentCompactCompatibility(t *testing.T) {
 	assertOutboundCompatible(t, []outboundCase{
+		{"openai_chat", llm.APIFormatOpenAIChatCompletion, llm.RequestTypeCompact},
 		{"openai_responses", llm.APIFormatOpenAIResponse, llm.RequestTypeCompact},
 		{"openai_responses_compact", llm.APIFormatOpenAIResponseCompact, llm.RequestTypeCompact},
 	})
