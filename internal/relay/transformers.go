@@ -29,6 +29,8 @@ func newInbound(format llm.APIFormat) transformer.Inbound {
 		return openai.NewImageVariationInboundTransformer()
 	case llm.APIFormatAnthropicMessage:
 		return anthropic.NewInboundTransformer()
+	case llm.APIFormatGeminiContents:
+		return gemini.NewInboundTransformer()
 	default:
 		return nil
 	}

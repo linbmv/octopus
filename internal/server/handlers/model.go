@@ -52,6 +52,12 @@ func init() {
 			router.NewRoute("/models", http.MethodGet).
 				Handle(getModelList),
 		)
+	router.NewGroupRouter("/v1beta").
+		Use(middleware.APIKeyAuth()).
+		AddRoute(
+			router.NewRoute("/models", http.MethodGet).
+				Handle(getModelList),
+		)
 }
 
 func getModelList(c *gin.Context) {
@@ -73,6 +79,19 @@ func getModelList(c *gin.Context) {
 		models = lo.Filter(models, func(m string, _ int) bool {
 			return lo.Contains(supportedModels, m)
 		})
+	}
+
+	if c.GetString("request_type") == "gemini" {
+		var geminiModels []model.GeminiModel
+		for _, m := range models {
+			geminiModels = append(geminiModels, model.GeminiModel{
+				Name:        "models/" + m,
+				DisplayName: m,
+				Description: m,
+			})
+		}
+		c.JSON(200, model.GeminiModelList{Models: geminiModels})
+		return
 	}
 
 	if c.GetString("request_type") == "anthropic" {

@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/relay"
@@ -63,4 +64,19 @@ func registerRelayRoutes(r *gin.Engine) {
 	v1.POST("/images/generations", middleware.RequireJSON(), relay.Handler(llm.APIFormatOpenAIImageGeneration))
 	v1.POST("/images/edits", relay.Handler(llm.APIFormatOpenAIImageEdit))
 	v1.POST("/images/variations", relay.Handler(llm.APIFormatOpenAIImageVariation))
+
+	v1beta := r.Group("/v1beta", middleware.APIKeyAuth())
+	v1beta.POST("/models/*action", middleware.RequireJSON(), geminiGenerateContentOnly(relay.Handler(llm.APIFormatGeminiContents)))
+}
+
+func geminiGenerateContentOnly(next gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		action := c.Param("action")
+		if !strings.HasPrefix(action, "/") || !strings.HasSuffix(action, ":generateContent") {
+			resp.Error(c, http.StatusNotFound, resp.ErrResourceNotFound)
+			c.Abort()
+			return
+		}
+		next(c)
+	}
 }
