@@ -25,4 +25,5 @@ type relayAttempt struct {
 	outAdapter transformer.Outbound
 	channel    *dbmodel.Channel
 	usedKey    dbmodel.ChannelKey
+	trackingID string // 活跃请求跟踪 ID
 }

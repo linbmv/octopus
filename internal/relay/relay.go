@@ -171,6 +171,17 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 func (ra *relayAttempt) run() (bool, error) {
 	span := ra.iter.StartAttempt(ra.channel.ID, ra.usedKey.ID, ra.channel.Name)
 
+	// 开始跟踪活跃请求
+	ra.trackingID = StartTracking(
+		ra.internalRequest.Model,
+		ra.channel.ID,
+		ra.channel.Name,
+		ra.usedKey.ID,
+		ra.metrics.APIKeyID,
+		ra.iter.Index()+1,
+	)
+	defer StopTracking(ra.trackingID)
+
 	upstreamStatusCode, fwdErr := ra.forward()
 	if fwdErr == nil && upstreamStatusCode == 0 {
 		upstreamStatusCode = http.StatusOK
@@ -286,6 +297,12 @@ func (ra *relayAttempt) forward() (int, error) {
 			contentType = result.Response.Headers.Get("Content-Type")
 		}
 	}
+
+	// 软错误检测：HTTP 200 但内容是错误，触发重试
+	if isSoftError(statusCode, result.Response.Body, contentType) {
+		return statusCode, fmt.Errorf("soft error detected: upstream returned 200 but content indicates error")
+	}
+
 	ra.c.Data(statusCode, contentType, result.Response.Body)
 	return statusCode, nil
 }
@@ -326,6 +343,9 @@ func (ra *relayAttempt) writeStream(ctx context.Context, clientStream streams.St
 	if clientStream == nil {
 		return fmt.Errorf("empty pipeline stream")
 	}
+
+	// 更新活跃请求状态为流式传输
+	UpdateState(ra.trackingID, StateStreaming)
 
 	// 设置 SSE 响应头
 	ra.c.Header("Content-Type", "text/event-stream")
