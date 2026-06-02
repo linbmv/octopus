@@ -41,8 +41,19 @@ func GroupGet(id int, ctx context.Context) (*model.Group, error) {
 func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
 	group, ok := groupMap.Get(name)
 	if !ok {
+		// 尝试后备查找：去掉常见后缀
+		fallbackName := stripModelSuffix(name)
+		if fallbackName != name {
+			group, ok = groupMap.Get(fallbackName)
+			if ok {
+				// 找到后备模型，继续处理
+				goto processGroup
+			}
+		}
 		return model.Group{}, fmt.Errorf("group not found")
 	}
+
+processGroup:
 	if len(group.Items) == 0 {
 		group.Items = nil
 		return group, nil
@@ -58,6 +69,23 @@ func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
 	}
 	group.Items = enabledItems
 	return group, nil
+}
+
+// stripModelSuffix 去除模型名的常见后缀
+func stripModelSuffix(name string) string {
+	suffixes := []string{
+		"-openai-compact",
+		"-openai",
+		"-compact",
+		"-anthropic",
+		"-gemini",
+	}
+	for _, suffix := range suffixes {
+		if len(name) > len(suffix) && name[len(name)-len(suffix):] == suffix {
+			return name[:len(name)-len(suffix)]
+		}
+	}
+	return name
 }
 
 func GroupCreate(group *model.Group, ctx context.Context) error {
