@@ -40,6 +40,9 @@ func APIKeyAuth() gin.HandlerFunc {
 		} else if auth := c.Request.Header.Get("Authorization"); auth != "" {
 			apiKey = strings.TrimPrefix(auth, "Bearer ")
 			requestType = "openai"
+		} else if key := c.Request.Header.Get("x-goog-api-key"); key != "" {
+			apiKey = key
+			requestType = "gemini"
 		} else if key := c.Query("key"); key != "" {
 			apiKey = key
 			requestType = "gemini"
