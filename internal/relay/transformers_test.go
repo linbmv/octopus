@@ -22,6 +22,7 @@ func TestNewInboundKeepsCurrentPublicFormats(t *testing.T) {
 	}{
 		{"openai_chat", llm.APIFormatOpenAIChatCompletion},
 		{"openai_responses", llm.APIFormatOpenAIResponse},
+		{"openai_responses_compact", llm.APIFormatOpenAIResponseCompact},
 		{"openai_embeddings", llm.APIFormatOpenAIEmbedding},
 		{"openai_image_generation", llm.APIFormatOpenAIImageGeneration},
 		{"openai_image_edit", llm.APIFormatOpenAIImageEdit},
@@ -71,7 +72,6 @@ func TestNewInboundDoesNotExposeNewUpstreamFormats(t *testing.T) {
 		name   string
 		format llm.APIFormat
 	}{
-		{"openai_responses_compact", llm.APIFormatOpenAIResponseCompact},
 		{"openai_completions", llm.APIFormatOpenAICompletion},
 		{"openai_video", llm.APIFormatOpenAIVideo},
 		{"gemini_embeddings", llm.APIFormatGeminiEmbedding},
@@ -123,6 +123,13 @@ func TestNewOutboundKeepsCurrentImageCompatibility(t *testing.T) {
 	})
 }
 
+func TestNewOutboundKeepsCurrentCompactCompatibility(t *testing.T) {
+	assertOutboundCompatible(t, []outboundCase{
+		{"openai_responses", llm.APIFormatOpenAIResponse, llm.RequestTypeCompact},
+		{"openai_responses_compact", llm.APIFormatOpenAIResponseCompact, llm.RequestTypeCompact},
+	})
+}
+
 func TestNewOutboundDefaultsNilRequestToChat(t *testing.T) {
 	got, err := newOutbound(llm.APIFormatOpenAIChatCompletion, nil, testBaseURL, testAPIKey)
 	if err != nil {
@@ -137,7 +144,6 @@ func TestNewOutboundRejectsUnsupportedRequestTypesExplicitly(t *testing.T) {
 	tests := []llm.RequestType{
 		llm.RequestTypeRerank,
 		llm.RequestTypeVideo,
-		llm.RequestTypeCompact,
 		llm.RequestTypeCompletion,
 		llm.RequestType("unknown"),
 	}
@@ -161,7 +167,6 @@ func TestNewOutboundRejectsUnsupportedRequestTypesExplicitly(t *testing.T) {
 func TestNewOutboundRejectsNewUpstreamFormats(t *testing.T) {
 	tests := []outboundCase{
 		{"openai_completions", llm.APIFormatOpenAICompletion, llm.RequestTypeCompletion},
-		{"openai_responses_compact", llm.APIFormatOpenAIResponseCompact, llm.RequestTypeCompact},
 		{"openai_video", llm.APIFormatOpenAIVideo, llm.RequestTypeVideo},
 		{"gemini_embeddings", llm.APIFormatGeminiEmbedding, llm.RequestTypeEmbedding},
 		{"jina_embeddings", llm.APIFormatJinaEmbedding, llm.RequestTypeEmbedding},
