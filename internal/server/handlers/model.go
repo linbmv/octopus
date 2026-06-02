@@ -57,39 +57,24 @@ func init() {
 		AddRoute(
 			router.NewRoute("/models", http.MethodGet).
 				Handle(getModelList),
+		).
+		AddRoute(
+			router.NewRoute("/models/*action", http.MethodGet).
+				Handle(getGeminiModel),
 		)
 }
 
 func getModelList(c *gin.Context) {
-	models, err := op.GroupListModel(c.Request.Context())
+	models, err := availableModelsForAPIKey(c)
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
-	}
-	apiKeyId := c.GetInt("api_key_id")
-	apiKey, err := op.APIKeyGet(apiKeyId, c.Request.Context())
-	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if apiKey.SupportedModels != "" {
-		supportedModels := lo.Map(strings.Split(apiKey.SupportedModels, ","), func(s string, _ int) string {
-			return strings.TrimSpace(s)
-		})
-		models = lo.Filter(models, func(m string, _ int) bool {
-			return lo.Contains(supportedModels, m)
-		})
 	}
 
 	if c.GetString("request_type") == "gemini" {
-		var geminiModels []model.GeminiModel
-		for _, m := range models {
-			geminiModels = append(geminiModels, model.GeminiModel{
-				Name:        "models/" + m,
-				DisplayName: m,
-				Description: m,
-			})
-		}
+		geminiModels := lo.Map(models, func(m string, _ int) model.GeminiModel {
+			return newGeminiModel(m)
+		})
 		c.JSON(200, model.GeminiModelList{Models: geminiModels})
 		return
 	}
@@ -128,6 +113,61 @@ func getModelList(c *gin.Context) {
 			"data":    openAIModels,
 			"object":  "list",
 		})
+	}
+}
+
+func getGeminiModel(c *gin.Context) {
+	requestedModel := strings.TrimPrefix(c.Param("action"), "/")
+	requestedModel = strings.TrimPrefix(requestedModel, "models/")
+	if requestedModel == "" {
+		resp.Error(c, http.StatusNotFound, resp.ErrResourceNotFound)
+		return
+	}
+
+	models, err := availableModelsForAPIKey(c)
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !lo.Contains(models, requestedModel) {
+		resp.Error(c, http.StatusNotFound, resp.ErrResourceNotFound)
+		return
+	}
+
+	c.JSON(200, newGeminiModel(requestedModel))
+}
+
+func availableModelsForAPIKey(c *gin.Context) ([]string, error) {
+	models, err := op.GroupListModel(c.Request.Context())
+	if err != nil {
+		return nil, err
+	}
+	apiKeyId := c.GetInt("api_key_id")
+	apiKey, err := op.APIKeyGet(apiKeyId, c.Request.Context())
+	if err != nil {
+		return nil, err
+	}
+	if apiKey.SupportedModels == "" {
+		return models, nil
+	}
+
+	supportedModels := lo.Map(strings.Split(apiKey.SupportedModels, ","), func(s string, _ int) string {
+		return strings.TrimSpace(s)
+	})
+	return lo.Filter(models, func(m string, _ int) bool {
+		return lo.Contains(supportedModels, m)
+	}), nil
+}
+
+func newGeminiModel(name string) model.GeminiModel {
+	return model.GeminiModel{
+		Name:                       "models/" + name,
+		Version:                    "001",
+		DisplayName:                name,
+		Description:                name,
+		InputTokenLimit:            1048576,
+		OutputTokenLimit:           65536,
+		SupportedGenerationMethods: []string{"generateContent"},
 	}
 }
 

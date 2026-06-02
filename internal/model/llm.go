@@ -20,9 +20,13 @@ type LLMChannel struct {
 }
 
 type GeminiModel struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName"`
-	Description string `json:"description"`
+	Name                       string   `json:"name"`
+	Version                    string   `json:"version,omitempty"`
+	DisplayName                string   `json:"displayName"`
+	Description                string   `json:"description"`
+	InputTokenLimit            int      `json:"inputTokenLimit,omitempty"`
+	OutputTokenLimit           int      `json:"outputTokenLimit,omitempty"`
+	SupportedGenerationMethods []string `json:"supportedGenerationMethods,omitempty"`
 }
 
 type GeminiModelList struct {
