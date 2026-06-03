@@ -115,6 +115,30 @@ func (c *Channel) GetBaseUrl() string {
 	return bestURL
 }
 
+func (k ChannelKey) IsAvailable(nowSec int64) bool {
+	if !k.Enabled || k.ChannelKey == "" {
+		return false
+	}
+	if k.StatusCode == 429 && k.LastUseTimeStamp > 0 {
+		return nowSec-k.LastUseTimeStamp >= int64(5*time.Minute/time.Second)
+	}
+	return true
+}
+
+func (c *Channel) GetChannelKeyByID(keyID int) ChannelKey {
+	if c == nil || keyID == 0 || len(c.Keys) == 0 {
+		return ChannelKey{}
+	}
+
+	nowSec := time.Now().Unix()
+	for _, k := range c.Keys {
+		if k.ID == keyID && k.IsAvailable(nowSec) {
+			return k
+		}
+	}
+	return ChannelKey{}
+}
+
 func (c *Channel) GetChannelKey() ChannelKey {
 	if c == nil || len(c.Keys) == 0 {
 		return ChannelKey{}
@@ -127,13 +151,8 @@ func (c *Channel) GetChannelKey() ChannelKey {
 	bestSet := false
 
 	for _, k := range c.Keys {
-		if !k.Enabled || k.ChannelKey == "" {
+		if !k.IsAvailable(nowSec) {
 			continue
-		}
-		if k.StatusCode == 429 && k.LastUseTimeStamp > 0 {
-			if nowSec-k.LastUseTimeStamp < int64(5*time.Minute/time.Second) {
-				continue
-			}
 		}
 		if !bestSet || k.TotalCost < bestCost {
 			best = k

@@ -136,7 +136,13 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 		return nil, nil
 	}
 
-	usedKey := channel.GetChannelKey()
+	usedKey := dbmodel.ChannelKey{}
+	if stickyKeyID := r.iter.StickyKeyID(); stickyKeyID > 0 {
+		usedKey = channel.GetChannelKeyByID(stickyKeyID)
+	}
+	if usedKey.ChannelKey == "" {
+		usedKey = channel.GetChannelKey()
+	}
 	if usedKey.ChannelKey == "" {
 		r.iter.Skip(channel.ID, 0, channel.Name, "no available key")
 		return nil, nil
