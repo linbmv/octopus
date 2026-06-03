@@ -78,7 +78,7 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 		globalStats.RequestFailed = 1
 	}
 
-	channelID, channelName := finalChannel(attempts)
+	channelID, channelName, finalKeyID, finalStatus := finalAttempt(attempts)
 	op.StatsTotalUpdate(globalStats)
 	op.StatsHourlyUpdate(globalStats)
 	op.StatsDailyUpdate(context.Background(), globalStats)
@@ -93,30 +93,31 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 		})
 	}
 
-	log.Infof("relay complete: model=%s, channel=%d(%s), success=%t, duration=%dms, input_token=%d, output_token=%d, input_cost=%f, output_cost=%f, total_cost=%f, attempts=%d",
-		m.RequestModel, channelID, channelName, success, duration.Milliseconds(),
-		m.Stats.InputToken, m.Stats.OutputToken,
-		m.Stats.InputCost, m.Stats.OutputCost, m.Stats.InputCost+m.Stats.OutputCost,
-		len(attempts))
+	log.Infof(
+		"relay complete: model=%s, channel=%d(%s), final_key_id=%d, final_status=%s, "+
+			"success=%t, duration=%dms, input_token=%d, output_token=%d, input_cost=%f, "+
+			"output_cost=%f, total_cost=%f, attempts=%d",
+		m.RequestModel, channelID, channelName, finalKeyID, finalStatus,
+		success, duration.Milliseconds(), m.Stats.InputToken, m.Stats.OutputToken,
+		m.Stats.InputCost, m.Stats.OutputCost, m.Stats.InputCost+m.Stats.OutputCost, len(attempts),
+	)
 
 	// 客户端断开或请求上下文取消后仍要保存最终审计日志，因此持久化阶段主动脱离请求取消信号。
 	m.saveLog(context.WithoutCancel(ctx), err, duration, attempts, channelID, channelName)
 }
 
-func finalChannel(attempts []model.ChannelAttempt) (int, string) {
-	var lastID int
-	var lastName string
+func finalAttempt(attempts []model.ChannelAttempt) (int, string, int, model.AttemptStatus) {
+	var last model.ChannelAttempt
 	for i := len(attempts) - 1; i >= 0; i-- {
 		a := attempts[i]
 		if a.Status == model.AttemptSuccess {
-			return a.ChannelID, a.ChannelName
+			return a.ChannelID, a.ChannelName, a.ChannelKeyID, a.Status
 		}
-		if a.Status == model.AttemptFailed && lastID == 0 {
-			lastID = a.ChannelID
-			lastName = a.ChannelName
+		if a.Status == model.AttemptFailed && last.ChannelID == 0 {
+			last = a
 		}
 	}
-	return lastID, lastName
+	return last.ChannelID, last.ChannelName, last.ChannelKeyID, last.Status
 }
 
 func (m *RelayMetrics) saveLog(ctx context.Context, err error, duration time.Duration, attempts []model.ChannelAttempt, channelID int, channelName string) {

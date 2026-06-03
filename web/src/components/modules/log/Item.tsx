@@ -41,6 +41,39 @@ function formatDuration(ms: number): string {
     return `${(ms / 1000).toFixed(2)}s`;
 }
 
+function attemptStatusLabel(status: ChannelAttempt['status']): string {
+    switch (status) {
+        case 'success':
+            return '成功';
+        case 'failed':
+            return '失败';
+        case 'circuit_break':
+            return '熔断';
+        case 'skipped':
+            return '跳过';
+        default:
+            return status;
+    }
+}
+
+function attemptStatusClass(status: ChannelAttempt['status']): string {
+    switch (status) {
+        case 'success':
+            return 'bg-primary/15 text-primary';
+        case 'circuit_break':
+            return 'bg-amber-500/15 text-amber-600 dark:text-amber-400';
+        case 'skipped':
+            return 'bg-muted text-muted-foreground';
+        case 'failed':
+        default:
+            return 'bg-destructive/15 text-destructive';
+    }
+}
+
+function formatAttemptKey(attempt: ChannelAttempt): string {
+    return attempt.channel_key_id ? `密钥 #${attempt.channel_key_id}` : '密钥 -';
+}
+
 interface RetryBadgeWithTooltipProps {
     channelName: string;
     brandColor: string;
@@ -48,8 +81,6 @@ interface RetryBadgeWithTooltipProps {
 }
 
 function RetryBadgeWithTooltip({ channelName, brandColor, attempts }: RetryBadgeWithTooltipProps) {
-    const t = useTranslations('log.card');
-
     return (
         <Tooltip>
             <TooltipTrigger asChild>
@@ -69,19 +100,20 @@ function RetryBadgeWithTooltip({ channelName, brandColor, attempts }: RetryBadge
                             <Badge
                                 className={cn(
                                     "h-5 shrink-0 px-1.5 text-[10px] font-bold uppercase shadow-none border-0",
-                                    attempt.status === 'success'
-                                        ? "bg-primary/15 text-primary"
-                                        : "bg-destructive/15 text-destructive"
+                                    attemptStatusClass(attempt.status)
                                 )}
                             >
-                                {attempt.status === 'success' ? t('success') : t('failed')}
+                                {attemptStatusLabel(attempt.status)}
                             </Badge>
                             <div className="flex min-w-0 flex-col flex-1">
-                                <span className="truncate text-xs font-semibold text-foreground">
-                                    {attempt.channel_name}
-                                </span>
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                    <span className="truncate text-xs font-semibold text-foreground">
+                                        {attempt.channel_name}
+                                    </span>
+                                    {attempt.sticky && <Pin className="size-3 shrink-0 text-amber-500" />}
+                                </div>
                                 <span className="text-[10px] text-muted-foreground">
-                                    {attempt.model_name} • {formatDuration(attempt.duration)}
+                                    {attempt.model_name} • {formatAttemptKey(attempt)} • {formatDuration(attempt.duration)}
                                 </span>
                             </div>
                         </div>
@@ -395,14 +427,29 @@ export function LogCard({ log }: { log: RelayLog }) {
                                                                                 : "bg-destructive/5 border-destructive/20 hover:bg-destructive/10"
                                                                         )}
                                                                     >
-                                                                        <div className="flex items-center gap-2">
-                                                                            <span className="font-semibold text-foreground">
-                                                                                {attempt.channel_name}
-                                                                            </span>
-                                                                            <span className="text-muted-foreground">
-                                                                                ({attempt.model_name})
-                                                                            </span>
-                                                                            <span className="ml-auto text-muted-foreground tabular-nums font-mono">
+                                                                        <div className="flex items-start gap-2">
+                                                                            <Badge
+                                                                                className={cn(
+                                                                                    "h-5 shrink-0 px-1.5 text-[10px] font-bold uppercase shadow-none border-0",
+                                                                                    attemptStatusClass(attempt.status)
+                                                                                )}
+                                                                            >
+                                                                                {attemptStatusLabel(attempt.status)}
+                                                                            </Badge>
+                                                                            <div className="min-w-0 flex-1">
+                                                                                <div className="flex min-w-0 items-center gap-1.5">
+                                                                                    <span className="font-semibold text-foreground truncate">
+                                                                                        {attempt.channel_name}
+                                                                                    </span>
+                                                                                    {attempt.sticky && <Pin className="size-3.5 shrink-0 text-amber-500" />}
+                                                                                </div>
+                                                                                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                                                                                    <span>{attempt.model_name}</span>
+                                                                                    <span>{formatAttemptKey(attempt)}</span>
+                                                                                    <span>第 {attempt.attempt_num} 次</span>
+                                                                                </div>
+                                                                            </div>
+                                                                            <span className="text-muted-foreground tabular-nums font-mono">
                                                                                 {formatDuration(attempt.duration)}
                                                                             </span>
                                                                         </div>

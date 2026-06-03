@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bestruirui/octopus/internal/helper"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
@@ -137,7 +138,8 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 	}
 
 	usedKey := dbmodel.ChannelKey{}
-	if stickyKeyID := r.iter.StickyKeyID(); stickyKeyID > 0 {
+	stickyKeyID := r.iter.StickyKeyID()
+	if stickyKeyID > 0 {
 		usedKey = channel.GetChannelKeyByID(stickyKeyID)
 	}
 	if usedKey.ChannelKey == "" {
@@ -161,9 +163,13 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 	r.internalRequest.Model = item.ModelName
 	r.metrics.ActualModel = item.ModelName
 	r.metrics.ParamOverride = ""
-	log.Infof("request model %s, mode: %d, forwarding to channel: %s model: %s (attempt %d/%d, sticky=%t)",
+	log.Infof(
+		"request model %s, mode: %d, forwarding to channel: %s model: %s "+
+			"(attempt %d/%d, sticky=%t, channel_id=%d, channel_key_id=%d, sticky_key_id=%d, key_remark=%s)",
 		r.metrics.RequestModel, r.group.Mode, channel.Name, item.ModelName,
-		r.iter.Index()+1, r.iter.Len(), r.iter.IsSticky())
+		r.iter.Index()+1, r.iter.Len(), r.iter.IsSticky(),
+		channel.ID, usedKey.ID, stickyKeyID, safeKeyRemark(usedKey.Remark),
+	)
 
 	return &relayAttempt{
 		relayRun:   r,
@@ -469,6 +475,23 @@ func (ra *relayAttempt) writeStream(ctx context.Context, clientStream streams.St
 			ra.c.Writer.Flush()
 		}
 	}
+}
+
+func safeKeyRemark(remark string) string {
+	remark = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, remark))
+	if remark == "" {
+		return "-"
+	}
+	runes := []rune(remark)
+	if len(runes) > 64 {
+		return string(runes[:64]) + "..."
+	}
+	return remark
 }
 
 // relayPipelineMiddleware 承接 octopus 自己的通道级副作用：
