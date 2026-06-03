@@ -13,6 +13,7 @@ import { getModelIcon } from '@/lib/model-icons';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { CopyIconButton } from '@/components/common/CopyButton';
+import { parseUsageCacheTokens } from '@/lib/usage-cache-tokens';
 import {
     MorphingDialog,
     MorphingDialogTrigger,
@@ -223,6 +224,7 @@ export function LogCard({ log }: { log: RelayLog }) {
         [log.actual_model_name]
     );
     const requestAPIKeyName = useMemo(() => log.request_api_key_name?.trim() ?? '', [log.request_api_key_name]);
+    const usageCacheTokens = useMemo(() => parseUsageCacheTokens(log.response_content), [log.response_content]);
 
     const hasError = !!log.error;
     const hasMultipleAttempts = log.attempts && log.attempts.length > 1;
@@ -486,9 +488,29 @@ export function LogCard({ log }: { log: RelayLog }) {
                                             <div className="flex items-center gap-2 px-3 md:px-4 py-2.5 md:py-3 border-b border-border bg-muted/50 shrink-0">
                                                 <MessageSquare className="size-4 text-purple-500" />
                                                 <span className="text-sm font-medium text-card-foreground">{t('responseContent')}</span>
-                                                <Badge variant="secondary" className="ml-auto text-xs">
-                                                    {log.output_tokens.toLocaleString()} {t('tokens')}
-                                                </Badge>
+                                                <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+                                                    {usageCacheTokens && usageCacheTokens.cachedReadTokens > 0 && (
+                                                        <Badge
+                                                            variant="secondary"
+                                                            className="text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                                            title={usageCacheTokens.sourcePath}
+                                                        >
+                                                            缓存读 {usageCacheTokens.cachedReadTokens.toLocaleString()}
+                                                        </Badge>
+                                                    )}
+                                                    {usageCacheTokens && usageCacheTokens.cachedWriteTokens > 0 && (
+                                                        <Badge
+                                                            variant="secondary"
+                                                            className="text-xs bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                                            title={usageCacheTokens.sourcePath}
+                                                        >
+                                                            缓存写 {usageCacheTokens.cachedWriteTokens.toLocaleString()}
+                                                        </Badge>
+                                                    )}
+                                                    <Badge variant="secondary" className="text-xs">
+                                                        {log.output_tokens.toLocaleString()} {t('tokens')}
+                                                    </Badge>
+                                                </div>
                                             </div>
                                             <div className="flex-1 overflow-auto min-h-0">
                                                 <DeferredJsonContent content={log.response_content} fallbackText={t('noResponseContent')} />
