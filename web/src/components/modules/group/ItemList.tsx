@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { Layers, GripVertical, X, Trash2, Power } from 'lucide-react';
+import { Layers, GripVertical, X, Trash2 } from 'lucide-react';
 import {
     DragDropContext,
     Draggable,
@@ -90,12 +90,51 @@ function MemberItem({
                 isRemoving && 'opacity-0',
                 isDisabled && 'opacity-60 grayscale'
             )}>
-                <span className={cn(
-                    'size-5 rounded-md text-xs font-bold grid place-items-center shrink-0',
-                    isDisabled ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary'
-                )}>
-                    {index + 1}
-                </span>
+                {onToggleDisabled ? (
+                    <Tooltip side="top" sideOffset={10} align="center">
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                // 数字编号兼作启用/禁用开关：点击切换成员禁用状态，替代原先紧挨删除键的电源按钮以减少误触。
+                                // 渠道级禁用时不允许在此切换：成员级开关无法覆盖渠道整体禁用状态。
+                                disabled={channelDisabled}
+                                aria-pressed={!memberDisabled}
+                                aria-label={
+                                    channelDisabled
+                                        ? t('item.channelDisabled')
+                                        : memberDisabled
+                                            ? t('item.enable')
+                                            : t('item.disable')
+                                }
+                                onClick={() => onToggleDisabled(member.id, !memberDisabled)}
+                                className={cn(
+                                    'size-5 rounded-md text-xs font-bold grid place-items-center shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                                    channelDisabled
+                                        ? 'bg-muted text-muted-foreground/50 cursor-not-allowed'
+                                        : memberDisabled
+                                            ? 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                            : 'bg-primary/10 text-primary hover:bg-primary/20'
+                                )}
+                            >
+                                {index + 1}
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                            {channelDisabled
+                                ? t('item.channelDisabled')
+                                : memberDisabled
+                                    ? t('item.enable')
+                                    : t('item.disable')}
+                        </TooltipContent>
+                    </Tooltip>
+                ) : (
+                    <span className={cn(
+                        'size-5 rounded-md text-xs font-bold grid place-items-center shrink-0',
+                        isDisabled ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary'
+                    )}>
+                        {index + 1}
+                    </span>
+                )}
 
                 <div
                     className={cn(
@@ -138,36 +177,6 @@ function MemberItem({
                             isDisabled && 'text-muted-foreground'
                         )}
                     />
-                )}
-
-                {onToggleDisabled && (
-                    <Tooltip side="top" sideOffset={10} align="center">
-                        <TooltipTrigger asChild>
-                            <button
-                                type="button"
-                                // 渠道级禁用时不允许在此切换：成员级开关无法覆盖渠道整体禁用状态。
-                                disabled={channelDisabled}
-                                onClick={() => onToggleDisabled(member.id, !memberDisabled)}
-                                className={cn(
-                                    'p-1 rounded transition-colors',
-                                    channelDisabled
-                                        ? 'text-muted-foreground/40 cursor-not-allowed'
-                                        : memberDisabled
-                                            ? 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                                            : 'text-primary hover:bg-primary/10'
-                                )}
-                            >
-                                <Power className="size-3.5" />
-                            </button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            {channelDisabled
-                                ? t('item.channelDisabled')
-                                : memberDisabled
-                                    ? t('item.enable')
-                                    : t('item.disable')}
-                        </TooltipContent>
-                    </Tooltip>
                 )}
 
                 {(!showConfirmDelete || !confirmDelete) && (

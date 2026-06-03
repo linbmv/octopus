@@ -440,6 +440,8 @@
             "totalTime": "总耗时",
             "input": "输入",
             "output": "输出",
+            "cacheRead": "缓存读",
+            "cacheWrite": "缓存写",
             "cost": "费用",
             "requestContent": "请求内容",
             "responseContent": "响应内容",

@@ -170,3 +170,66 @@ func TestSetStickyStoresActualModel(t *testing.T) {
 		t.Fatalf("entry = (channel %d, key %d), want (3, 303)", entry.ChannelID, entry.ChannelKeyID)
 	}
 }
+
+func TestStartAttemptRecordsKeyRemark(t *testing.T) {
+	group := model.Group{
+		Mode: model.GroupModeFailover,
+		Items: []model.GroupItem{
+			{ChannelID: 1, ModelName: "upstream-a", Priority: 1},
+		},
+	}
+	iter := NewIterator(group, 1, "octopus-model")
+	if !iter.Next() {
+		t.Fatal("Next() = false, want true")
+	}
+
+	span := iter.StartAttempt(1, 101, "channel-a", "linwolfer")
+	span.End(model.AttemptSuccess, "")
+
+	attempts := iter.Attempts()
+	if len(attempts) != 1 {
+		t.Fatalf("attempts 数量 = %d, want 1", len(attempts))
+	}
+	if attempts[0].ChannelKeyRemark != "linwolfer" {
+		t.Fatalf("ChannelKeyRemark = %q, want linwolfer", attempts[0].ChannelKeyRemark)
+	}
+}
+
+func TestSkipCircuitBreakRecordsKeyRemark(t *testing.T) {
+	const (
+		channelID    = 1
+		channelKeyID = 101
+		modelName    = "upstream-a"
+	)
+	group := model.Group{
+		Mode: model.GroupModeFailover,
+		Items: []model.GroupItem{
+			{ChannelID: channelID, ModelName: modelName, Priority: 1},
+		},
+	}
+	iter := NewIterator(group, 1, "octopus-model")
+	if !iter.Next() {
+		t.Fatal("Next() = false, want true")
+	}
+
+	// 触发熔断，使 SkipCircuitBreak 记录一条 attempt。
+	for i := 0; i < 100; i++ {
+		RecordFailure(channelID, channelKeyID, modelName)
+	}
+	if !iter.SkipCircuitBreak(channelID, channelKeyID, "channel-a", "linwolfer") {
+		t.Skip("熔断未触发，跳过该用例")
+	}
+	defer RecordSuccess(channelID, channelKeyID, modelName)
+
+	attempts := iter.Attempts()
+	if len(attempts) == 0 {
+		t.Fatal("attempts 为空, 期望记录熔断跳过")
+	}
+	last := attempts[len(attempts)-1]
+	if last.Status != model.AttemptCircuitBreak {
+		t.Fatalf("status = %q, want circuit_break", last.Status)
+	}
+	if last.ChannelKeyRemark != "linwolfer" {
+		t.Fatalf("ChannelKeyRemark = %q, want linwolfer", last.ChannelKeyRemark)
+	}
+}

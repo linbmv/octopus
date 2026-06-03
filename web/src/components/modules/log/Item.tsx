@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect } from 'react';
-import { Clock, Cpu, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound } from 'lucide-react';
+import { Clock, Cpu, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, DatabaseZap } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { motion, AnimatePresence } from 'motion/react';
 import JsonView from '@uiw/react-json-view';
@@ -71,8 +71,9 @@ function attemptStatusClass(status: ChannelAttempt['status']): string {
     }
 }
 
+// 仅显示本次实际使用的渠道 key 备注；无备注返回空字符串，由调用方决定是否渲染。
 function formatAttemptKey(attempt: ChannelAttempt): string {
-    return attempt.channel_key_id ? `密钥 #${attempt.channel_key_id}` : '密钥 -';
+    return attempt.channel_key_remark?.trim() ?? '';
 }
 
 interface RetryBadgeWithTooltipProps {
@@ -114,7 +115,7 @@ function RetryBadgeWithTooltip({ channelName, brandColor, attempts }: RetryBadge
                                     {attempt.sticky && <Pin className="size-3 shrink-0 text-amber-500" />}
                                 </div>
                                 <span className="text-[10px] text-muted-foreground">
-                                    {attempt.model_name} • {formatAttemptKey(attempt)} • {formatDuration(attempt.duration)}
+                                    {[attempt.model_name, formatAttemptKey(attempt), formatDuration(attempt.duration)].filter(Boolean).join(' • ')}
                                 </span>
                             </div>
                         </div>
@@ -225,6 +226,14 @@ export function LogCard({ log }: { log: RelayLog }) {
     );
     const requestAPIKeyName = useMemo(() => log.request_api_key_name?.trim() ?? '', [log.request_api_key_name]);
     const usageCacheTokens = useMemo(() => parseUsageCacheTokens(log.response_content), [log.response_content]);
+    // 单次尝试时主卡片直接展示本次使用的 key 备注：优先成功尝试，否则取最后一次尝试。
+    const keyRemark = useMemo(() => {
+        const attempts = log.attempts ?? [];
+        if (attempts.length === 0) return '';
+        const success = attempts.find((a) => a.status === 'success');
+        const target = success ?? attempts[attempts.length - 1];
+        return target.channel_key_remark?.trim() ?? '';
+    }, [log.attempts]);
 
     const hasError = !!log.error;
     const hasMultipleAttempts = log.attempts && log.attempts.length > 1;
@@ -265,11 +274,17 @@ export function LogCard({ log }: { log: RelayLog }) {
                                 <span className="text-muted-foreground truncate" title={log.actual_model_name}>
                                     {log.actual_model_name}
                                 </span>
+                                {!hasMultipleAttempts && keyRemark && (
+                                    <span className="flex items-center gap-1 shrink-0 text-xs text-muted-foreground" title={keyRemark}>
+                                        <KeyRound className="size-3 shrink-0 text-sky-500" />
+                                        <span className="truncate max-w-[8rem]">{keyRemark}</span>
+                                    </span>
+                                )}
                                 {log.attempts?.some(a => a.sticky) && (
                                     <Pin className="size-3.5 shrink-0 text-amber-500" />
                                 )}
                             </div>
-                            <div className="grid grid-cols-2 md:grid-cols-7 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground">
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground">
                                 <div className="flex items-center gap-1.5">
                                     <Clock className="size-3.5 shrink-0" style={{ color: brandColor }} />
                                     <span>{formatTime(log.time)}</span>
@@ -298,6 +313,18 @@ export function LogCard({ log }: { log: RelayLog }) {
                                     <ArrowUpFromLine className="size-3.5 shrink-0 text-purple-500" />
                                     <span>{t('output')} {log.output_tokens.toLocaleString()}</span>
                                 </div>
+                                {usageCacheTokens && usageCacheTokens.cachedReadTokens > 0 && (
+                                    <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400" title={usageCacheTokens.sourcePath}>
+                                        <DatabaseZap className="size-3.5 shrink-0" />
+                                        <span>{t('cacheRead')} {usageCacheTokens.cachedReadTokens.toLocaleString()}</span>
+                                    </div>
+                                )}
+                                {usageCacheTokens && usageCacheTokens.cachedWriteTokens > 0 && (
+                                    <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400" title={usageCacheTokens.sourcePath}>
+                                        <DatabaseZap className="size-3.5 shrink-0" />
+                                        <span>{t('cacheWrite')} {usageCacheTokens.cachedWriteTokens.toLocaleString()}</span>
+                                    </div>
+                                )}
                                 <div className="flex items-center gap-1.5">
                                     <DollarSign className="size-3.5 shrink-0 text-emerald-500" />
                                     <span className="font-medium text-emerald-600 dark:text-emerald-400">

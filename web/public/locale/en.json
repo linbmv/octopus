@@ -440,6 +440,8 @@
             "totalTime": "Total",
             "input": "Input",
             "output": "Output",
+            "cacheRead": "Cache Read",
+            "cacheWrite": "Cache Write",
             "cost": "Cost",
             "requestContent": "Request Content",
             "responseContent": "Response Content",

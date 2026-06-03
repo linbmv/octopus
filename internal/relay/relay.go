@@ -151,7 +151,9 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 		r.iter.Skip(channel.ID, 0, channel.Name, "no available key")
 		return nil, nil
 	}
-	if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
+	// 清洗一次本次实际使用的 key 备注，供熔断跳过记录、终端日志和 attempt 持久化复用。
+	keyRemark := cleanKeyRemark(usedKey.Remark)
+	if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {
 		return nil, nil
 	}
 
@@ -180,12 +182,13 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 		outAdapter: outAdapter,
 		channel:    channel,
 		usedKey:    usedKey,
+		keyRemark:  keyRemark,
 	}, nil
 }
 
 // run 统一管理一次通道尝试的完整生命周期。
 func (ra *relayAttempt) run() (bool, error) {
-	span := ra.iter.StartAttempt(ra.channel.ID, ra.usedKey.ID, ra.channel.Name)
+	span := ra.iter.StartAttempt(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, ra.keyRemark)
 
 	// 开始跟踪活跃请求
 	ra.trackingID = StartTracking(
@@ -588,21 +591,28 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 	}
 }
 
-func safeKeyRemark(remark string) string {
+// cleanKeyRemark 清洗渠道 key 备注用于持久化：去除控制字符、trim、截断到 64 rune。
+// 空备注返回空字符串，便于日志层用 omitempty 省略、前端按“仅显示备注”处理。
+func cleanKeyRemark(remark string) string {
 	remark = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
 		}
 		return r
 	}, remark))
-	if remark == "" {
-		return "-"
-	}
 	runes := []rune(remark)
 	if len(runes) > 64 {
 		return string(runes[:64]) + "..."
 	}
 	return remark
+}
+
+// safeKeyRemark 在 cleanKeyRemark 基础上，为终端日志把空备注展示为 "-"。
+func safeKeyRemark(remark string) string {
+	if cleaned := cleanKeyRemark(remark); cleaned != "" {
+		return cleaned
+	}
+	return "-"
 }
 
 // relayPipelineMiddleware 承接 octopus 自己的通道级副作用：

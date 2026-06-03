@@ -290,6 +290,37 @@ func TestSafeKeyRemarkTruncatesLongInput(t *testing.T) {
 	}
 }
 
+func TestCleanKeyRemark(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// 与 safeKeyRemark 的差异：空备注返回空字符串，便于持久化层用 omitempty 省略。
+		{"空字符串", "", ""},
+		{"仅空白", "   ", ""},
+		{"控制字符被剥离", "ab\x00\x07cd", "abcd"},
+		{"正常备注", "linwolfer", "linwolfer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cleanKeyRemark(tt.in); got != tt.want {
+				t.Fatalf("cleanKeyRemark(%q) = %q, 期望 %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanKeyRemarkTruncatesLongInput(t *testing.T) {
+	got := cleanKeyRemark(strings.Repeat("x", 100))
+	if len([]rune(got)) != 64+3 {
+		t.Fatalf("长度 = %d, 期望 67 (64 字符 + 省略号)", len([]rune(got)))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("期望截断省略号, got %q", got)
+	}
+}
+
 // TestStreamAggregationProducesBodyAndUsage 锁定 writeStream 依赖的核心契约：
 // 入站聚合器能把客户端格式的流式分片合成完整响应体并提取最终 usage。
 func TestStreamAggregationProducesBodyAndUsage(t *testing.T) {

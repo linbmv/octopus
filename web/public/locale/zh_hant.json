@@ -440,6 +440,8 @@
             "totalTime": "總耗時",
             "input": "輸入",
             "output": "輸出",
+            "cacheRead": "快取讀",
+            "cacheWrite": "快取寫",
             "cost": "費用",
             "requestContent": "請求內容",
             "responseContent": "響應內容",
