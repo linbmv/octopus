@@ -382,6 +382,11 @@
             "selectChannel": "Channel",
             "selectModel": "Model"
         },
+        "item": {
+            "enable": "Enable",
+            "disable": "Temporarily disable",
+            "channelDisabled": "Channel disabled"
+        },
         "mode": {
             "roundRobin": "Round Robin",
             "random": "Random",
@@ -518,6 +523,8 @@
             "model": "Model",
             "enabled": "Enabled",
             "proxy": "Use Proxy",
+            "rawPassthrough": "Raw Passthrough",
+            "rawPassthroughHint": "OpenAI Chat only. Forwards the original request JSON upstream (only the model is patched) to improve prompt cache hits. Avoid combining with Param Override.",
             "modelCustomPlaceholder": "Custom model name",
             "modelAdd": "Add",
             "modelRefresh": "Refresh",

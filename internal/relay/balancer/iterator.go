@@ -33,17 +33,23 @@ func NewIterator(group model.Group, apiKeyID int, requestModel string) *Iterator
 		stickyTTL := time.Duration(group.SessionKeepTime) * time.Second
 		if sticky := GetSticky(apiKeyID, requestModel, stickyTTL); sticky != nil {
 			for i, item := range candidates {
-				if item.ChannelID == sticky.ChannelID {
-					if i > 0 {
-						// 将粘性通道移到最前面
-						stickyItem := candidates[i]
-						copy(candidates[1:i+1], candidates[0:i])
-						candidates[0] = stickyItem
-					}
-					stickyIdx = 0
-					stickyKeyID = sticky.ChannelKeyID
-					break
+				// 同渠道可能服务多个实际模型；仅当 actual model 也一致才复用 sticky，
+				// 否则前缀不同会导致上游 prompt cache miss，失去粘性的意义。
+				if item.ChannelID != sticky.ChannelID {
+					continue
 				}
+				if sticky.ModelName != "" && sticky.ModelName != item.ModelName {
+					continue
+				}
+				if i > 0 {
+					// 将粘性通道移到最前面
+					stickyItem := candidates[i]
+					copy(candidates[1:i+1], candidates[0:i])
+					candidates[0] = stickyItem
+				}
+				stickyIdx = 0
+				stickyKeyID = sticky.ChannelKeyID
+				break
 			}
 		}
 	}

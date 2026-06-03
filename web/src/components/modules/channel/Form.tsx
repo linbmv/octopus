@@ -40,6 +40,7 @@ export interface ChannelFormData {
     auto_sync: boolean;
     auto_group: AutoGroupType;
     match_regex: string;
+    raw_passthrough: boolean;
 }
 
 export interface ChannelFormProps {
@@ -601,6 +602,15 @@ export function ChannelForm({
                         />
                         <span className="text-sm text-card-foreground">{t('autoSync')}</span>
                     </label>
+                    {formData.type === ChannelType.OpenAIChat && (
+                        <label className="flex items-center gap-2 cursor-pointer" title={t('rawPassthroughHint')}>
+                            <Switch
+                                checked={formData.raw_passthrough}
+                                onCheckedChange={(checked) => onFormDataChange({ ...formData, raw_passthrough: checked })}
+                            />
+                            <span className="text-sm text-card-foreground">{t('rawPassthrough')}</span>
+                        </label>
+                    )}
                 </div>
             </div>
 

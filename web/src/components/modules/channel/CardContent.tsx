@@ -58,6 +58,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         auto_sync: channel.auto_sync,
         auto_group: channel.auto_group,
         match_regex: channel.match_regex ?? '',
+        raw_passthrough: channel.raw_passthrough,
     });
     const t = useTranslations('channel.detail');
 
@@ -114,6 +115,8 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
             // Empty string means "clear" for patch semantics; backend maps it to NULL.
             req.match_regex = nextMatchRegex;
         }
+
+        if (formData.raw_passthrough !== channel.raw_passthrough) req.raw_passthrough = formData.raw_passthrough;
 
         const originalKeys = channel.keys;
         const originalByID = new Map(originalKeys.map((k) => [k.id, k]));

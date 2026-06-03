@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { Layers, GripVertical, X, Trash2 } from 'lucide-react';
+import { Layers, GripVertical, X, Trash2, Power } from 'lucide-react';
 import {
     DragDropContext,
     Draggable,
@@ -20,6 +20,7 @@ export interface SelectedMember extends LLMChannel {
     id: string;
     item_id?: number;
     weight?: number;
+    disabled?: boolean;
 }
 
 function reorderList<T>(list: T[], startIndex: number, endIndex: number): T[] {
@@ -40,6 +41,7 @@ function MemberItem({
     member,
     onRemove,
     onWeightChange,
+    onToggleDisabled,
     isRemoving,
     index,
     showWeight = false,
@@ -50,6 +52,7 @@ function MemberItem({
     member: SelectedMember;
     onRemove: (id: string) => void;
     onWeightChange?: (id: string, weight: number) => void;
+    onToggleDisabled?: (id: string, disabled: boolean) => void;
     isRemoving?: boolean;
     index: number;
     showWeight?: boolean;
@@ -58,8 +61,12 @@ function MemberItem({
     dnd: MemberItemDnd;
 }) {
     const { Avatar: ModelAvatar } = getModelIcon(member.name);
+    const t = useTranslations('group');
     const [confirmDelete, setConfirmDelete] = useState(false);
-    const isDisabled = member.enabled === false;
+    // 渠道本身被禁用，或成员被临时禁用，都视为不可用。成员级禁用可在此切换，渠道级禁用只能在渠道页处理。
+    const memberDisabled = member.disabled === true;
+    const channelDisabled = member.enabled === false;
+    const isDisabled = memberDisabled || channelDisabled;
 
     return (
         <div
@@ -133,6 +140,36 @@ function MemberItem({
                     />
                 )}
 
+                {onToggleDisabled && (
+                    <Tooltip side="top" sideOffset={10} align="center">
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                // 渠道级禁用时不允许在此切换：成员级开关无法覆盖渠道整体禁用状态。
+                                disabled={channelDisabled}
+                                onClick={() => onToggleDisabled(member.id, !memberDisabled)}
+                                className={cn(
+                                    'p-1 rounded transition-colors',
+                                    channelDisabled
+                                        ? 'text-muted-foreground/40 cursor-not-allowed'
+                                        : memberDisabled
+                                            ? 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                            : 'text-primary hover:bg-primary/10'
+                                )}
+                            >
+                                <Power className="size-3.5" />
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                            {channelDisabled
+                                ? t('item.channelDisabled')
+                                : memberDisabled
+                                    ? t('item.enable')
+                                    : t('item.disable')}
+                        </TooltipContent>
+                    </Tooltip>
+                )}
+
                 {(!showConfirmDelete || !confirmDelete) && (
                     <motion.button
                         layoutId={`delete-btn-member-${layoutScope ?? 'default'}-${member.id}`}
@@ -182,6 +219,7 @@ export interface MemberListProps {
     onReorder: (members: SelectedMember[]) => void;
     onRemove: (id: string) => void;
     onWeightChange?: (id: string, weight: number) => void;
+    onToggleDisabled?: (id: string, disabled: boolean) => void;
     /**
      * When true, auto-scroll the list to bottom when a *new visible* member appears
      * (i.e. a new member id is added). Useful in "editor" flows. Defaults to true.
@@ -214,6 +252,7 @@ export function MemberList({
     onReorder,
     onRemove,
     onWeightChange,
+    onToggleDisabled,
     autoScrollOnAdd = true,
     onDragStart,
     onDrop,
@@ -320,6 +359,7 @@ export function MemberList({
                                                 member={member}
                                                 onRemove={onRemove}
                                                 onWeightChange={onWeightChange}
+                                                onToggleDisabled={onToggleDisabled}
                                                 isRemoving={removingIds.has(member.id)}
                                                 index={index}
                                                 showWeight={showWeight}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/resp"
+	"github.com/bestruirui/octopus/internal/utils/jsonpatch"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
@@ -163,6 +165,8 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 	r.internalRequest.Model = item.ModelName
 	r.metrics.ActualModel = item.ModelName
 	r.metrics.ParamOverride = ""
+	// 重置上次尝试的出站摘要，避免重试到非透传渠道时残留上一候选的 raw passthrough 摘要。
+	r.metrics.OutboundRequestSummary = nil
 	log.Infof(
 		"request model %s, mode: %d, forwarding to channel: %s model: %s "+
 			"(attempt %d/%d, sticky=%t, channel_id=%d, channel_key_id=%d, sticky_key_id=%d, key_remark=%s)",
@@ -211,7 +215,7 @@ func (ra *relayAttempt) run() (bool, error) {
 			RequestSuccess: 1,
 		})
 		balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
-		balancer.SetSticky(ra.metrics.APIKeyID, ra.metrics.RequestModel, ra.channel.ID, ra.usedKey.ID)
+		balancer.SetSticky(ra.metrics.APIKeyID, ra.metrics.RequestModel, ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
 		return false, nil
 	}
 
@@ -256,6 +260,36 @@ func parseRequest(c *gin.Context, inboundType llm.APIFormat, inAdapter transform
 	return internalRequest, nil
 }
 
+// errFirstTokenTimeout 标记首字超时触发的 context 取消原因，用于和客户端断开等其他取消区分。
+var errFirstTokenTimeout = errors.New("first token timeout")
+
+// newFirstTokenGuard 构造首字超时守卫：
+//   - 返回的 ctx 在超时且首 token 未到达时被以 errFirstTokenTimeout 取消；
+//   - stop 在收到首个 token 时调用，停止计时并让后续流不再受该阈值约束；
+//   - release 在本次尝试结束时调用，停止计时并释放 context 资源。
+//
+// 计时器回调与 stop 通过同一个 settled CAS 互斥决断：谁先成功谁生效，
+// 消除“首事件已到但尚未处理时计时器误触发取消”的竞态（误切通道/截断流）。
+func newFirstTokenGuard(parent context.Context, timeout time.Duration) (ctx context.Context, stop func(), release func()) {
+	cctx, cancel := context.WithCancelCause(parent)
+	var settled atomic.Bool
+	timer := time.AfterFunc(timeout, func() {
+		if settled.CompareAndSwap(false, true) {
+			cancel(errFirstTokenTimeout)
+		}
+	})
+	stop = func() {
+		// 先抢占 settled 再停表：即使计时器已在并发触发，CAS 失败也不会把已成功的首 token 误判为超时。
+		settled.Store(true)
+		timer.Stop()
+	}
+	release = func() {
+		timer.Stop()
+		cancel(nil)
+	}
+	return cctx, stop, release
+}
+
 // forward 转发请求到上游服务
 func (ra *relayAttempt) forward() (int, error) {
 	ctx := ra.c.Request.Context()
@@ -269,6 +303,18 @@ func (ra *relayAttempt) forward() (int, error) {
 		return 0, err
 	}
 
+	// 首字超时覆盖“发出上游请求 → 收到首个 token”全过程，包含 pipeline.Process 内部阻塞等待响应头的阶段。
+	// 出站 HTTP client 没有响应头超时，仅靠 SSE 建立后的计时器无法打断仍卡在 client.Do 等响应头的请求。
+	// 只对客户端流式请求生效：非流式没有“首个 token”语义，整段响应可能合法地长于该阈值。
+	fwdCtx := ctx
+	stopFirstTokenGuard := func() {}
+	wantStream := ra.internalRequest.Stream != nil && *ra.internalRequest.Stream
+	if sec := ra.group.FirstTokenTimeOut; sec > 0 && wantStream {
+		var release func()
+		fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, time.Duration(sec)*time.Second)
+		defer release()
+	}
+
 	relayMiddleware := &relayPipelineMiddleware{attempt: ra}
 	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(httpClient)).
 		Pipeline(
@@ -277,15 +323,19 @@ func (ra *relayAttempt) forward() (int, error) {
 			pipeline.WithMiddlewares(stream.EnsureUsage(), relayMiddleware),
 			pipeline.WithEmptyResponseDetection(),
 		).
-		Process(ctx, ra.internalRequest.RawRequest)
+		Process(fwdCtx, ra.internalRequest.RawRequest)
 	if err != nil {
+		// 等待响应头阶段触发首字超时：此时尚未写客户端，返回明确错误以便切换下一通道。
+		if errors.Is(context.Cause(fwdCtx), errFirstTokenTimeout) {
+			return relayMiddleware.upstreamStatusCode, fmt.Errorf("first token timeout (%ds)", ra.group.FirstTokenTimeOut)
+		}
 		return relayMiddleware.upstreamStatusCode, err
 	}
 	if result == nil {
 		return 0, fmt.Errorf("empty pipeline result")
 	}
 	if result.Stream {
-		if err := ra.writeStream(ctx, result.EventStream); err != nil {
+		if err := ra.writeStream(fwdCtx, stopFirstTokenGuard, result.EventStream); err != nil {
 			return http.StatusOK, err
 		}
 		return http.StatusOK, nil
@@ -320,6 +370,10 @@ func (ra *relayAttempt) forward() (int, error) {
 }
 
 func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.Request) {
+	// raw passthrough 必须先于 ParamOverride/CustomHeader：先把出站 body 还原为客户端原始字节，
+	// 再让既有覆盖逻辑在其之上叠加，保持渠道配置语义不变。
+	rawPassthroughApplied := ra.applyRawPassthrough(outboundRequest)
+	paramOverrideApplied := false
 	// ParamOverride 只覆盖 JSON 请求体；multipart 图片编辑等请求不能按 map 合并。
 	if ra.channel.ParamOverride != nil && *ra.channel.ParamOverride != "" && strings.Contains(strings.ToLower(outboundRequest.Headers.Get("Content-Type")+" "+outboundRequest.ContentType), "application/json") {
 		var bodyMap map[string]any
@@ -337,9 +391,14 @@ func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.R
 				} else {
 					outboundRequest.Body = modifiedBody
 					ra.metrics.ParamOverride = *ra.channel.ParamOverride
+					paramOverrideApplied = true
 				}
 			}
 		}
+	}
+	// raw passthrough 生效时，出站 body 与标准化 llm.Request 不同，记录最终出站摘要供审计核对实际发送语义。
+	if rawPassthroughApplied {
+		ra.metrics.RecordOutboundRequestSummary(outboundRequest.Body, true, paramOverrideApplied)
 	}
 	for _, header := range ra.channel.CustomHeader {
 		// pipeline 在 raw request middleware 前已经写入 Auth；同名敏感头保持认证配置优先，延续旧 BuildHttpRequest 的覆盖顺序。
@@ -350,10 +409,69 @@ func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.R
 	}
 }
 
+// applyRawPassthrough 在 OpenAI Chat 入站转 OpenAI Chat 出站、且渠道开启开关时，
+// 用客户端原始 JSON body 替换 outbound transformer 重序列化后的 body，避免字段重排和未知字段丢失，
+// 以提升上游 prompt cache 命中率。仅替换顶层 model 为本次 attempt 的真实上游模型，并按需补流式 usage 标记。
+// 返回 true 表示本次确实用原始 body 替换了出站请求。
+func (ra *relayAttempt) applyRawPassthrough(outboundRequest *httpclient.Request) bool {
+	if !ra.channel.RawPassthrough {
+		return false
+	}
+	// 入站与出站都必须是 OpenAI Chat，且为 chat 请求，避免把原始 body 透传给异构协议或 embedding/image 等请求。
+	if ra.internalRequest.APIFormat != llm.APIFormatOpenAIChatCompletion || ra.channel.Type != llm.APIFormatOpenAIChatCompletion {
+		return false
+	}
+	if ra.internalRequest.RequestType != "" && ra.internalRequest.RequestType != llm.RequestTypeChat {
+		return false
+	}
+	if ra.internalRequest.RawRequest == nil || len(ra.internalRequest.RawRequest.Body) == 0 {
+		return false
+	}
+	// 出站必须是 JSON body；multipart 等非 JSON 请求不参与透传。
+	if !strings.Contains(strings.ToLower(outboundRequest.Headers.Get("Content-Type")+" "+outboundRequest.ContentType), "application/json") {
+		return false
+	}
+
+	rawBody := ra.internalRequest.RawRequest.Body
+	// 安全门槛：raw body 必须是带顶层 string model 的合法 JSON 对象，否则回退常规转换路径，绝不发送错误模型。
+	rawModel, ok := jsonpatch.TopLevelModel(rawBody)
+	if !ok {
+		return false
+	}
+
+	// 复制后再 patch，禁止原地修改 RawRequest.Body，避免重试或切换渠道时污染原始请求。
+	patched := make([]byte, len(rawBody))
+	copy(patched, rawBody)
+
+	if rawModel != ra.internalRequest.Model {
+		// 实际上游模型与原始请求不同：必须 patch 成功才能透传，否则会把请求发到错误模型上。
+		next, modelPatched := jsonpatch.PatchModel(patched, ra.internalRequest.Model)
+		if !modelPatched {
+			return false
+		}
+		patched = next
+	}
+
+	// 流式请求补 stream_options.include_usage=true：raw body 替换发生在 stream.EnsureUsage 之后，
+	// 不补这个标记会丢失 usage 聚合所需的最终 usage chunk。
+	if ra.internalRequest.Stream != nil && *ra.internalRequest.Stream {
+		if next, _ := jsonpatch.EnsureStreamIncludeUsage(patched); next != nil {
+			patched = next
+		}
+	}
+
+	outboundRequest.Body = patched
+	return true
+}
+
 // writeStream 把 pipeline 输出的客户端格式流写回请求方，并保留首 token 超时切换通道的行为。
-func (ra *relayAttempt) writeStream(ctx context.Context, clientStream streams.Stream[*httpclient.StreamEvent]) error {
+// stopFirstTokenGuard 在收到首个 token 后调用，停止 forward 阶段建立的首字超时计时器。
+func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard func(), clientStream streams.Stream[*httpclient.StreamEvent]) error {
 	if clientStream == nil {
 		return fmt.Errorf("empty pipeline stream")
+	}
+	if stopFirstTokenGuard == nil {
+		stopFirstTokenGuard = func() {}
 	}
 
 	// 更新活跃请求状态为流式传输
@@ -388,9 +506,17 @@ func (ra *relayAttempt) writeStream(ctx context.Context, clientStream streams.St
 			}
 		}()
 		// Next 可能阻塞等待上游 token；放到协程里让首 token 超时和客户端断开都能及时打断本次通道尝试。
+		readerFirst := true
 		for clientStream.Next() {
+			event := clientStream.Current()
+			// 收到首个有效事件立刻停掉首字超时计时器：在事件入队前就赢下与计时器的 CAS 竞态，
+			// 消除“事件已到、主循环尚未取走”窗口内计时器误取消 context 导致误切通道/截断流的问题。
+			if readerFirst && event != nil && len(event.Data) > 0 {
+				stopFirstTokenGuard()
+				readerFirst = false
+			}
 			select {
-			case results <- sseReadResult{event: clientStream.Current()}:
+			case results <- sseReadResult{event: event}:
 			case <-done:
 				return
 			case <-ctx.Done():
@@ -407,28 +533,20 @@ func (ra *relayAttempt) writeStream(ctx context.Context, clientStream streams.St
 	}()
 
 	firstTokenTimeoutSec := ra.group.FirstTokenTimeOut
-	var firstTokenTimer *time.Timer
-	var firstTokenC <-chan time.Time
-	if firstTokenTimeoutSec > 0 {
-		firstTokenTimer = time.NewTimer(time.Duration(firstTokenTimeoutSec) * time.Second)
-		firstTokenC = firstTokenTimer.C
-		defer func() {
-			if firstTokenTimer != nil {
-				firstTokenTimer.Stop()
-			}
-		}()
-	}
 
 	for {
 		select {
 		case <-ctx.Done():
+			// 首字超时在收到首个 token 前触发：返回错误以切换下一通道。
+			// 其余取消（客户端断开、或首 token 之后的取消）按正常停止处理，不再切换通道。
+			if firstToken && errors.Is(context.Cause(ctx), errFirstTokenTimeout) {
+				log.Warnf("first token timeout (%ds), switching channel", firstTokenTimeoutSec)
+				_ = clientStream.Close()
+				return fmt.Errorf("first token timeout (%ds)", firstTokenTimeoutSec)
+			}
 			log.Infof("client disconnected, stopping stream")
 			_ = clientStream.Close()
 			return nil
-		case <-firstTokenC:
-			log.Warnf("first token timeout (%ds), switching channel", firstTokenTimeoutSec)
-			_ = clientStream.Close()
-			return fmt.Errorf("first token timeout (%ds)", firstTokenTimeoutSec)
 		case r, ok := <-results:
 			if !ok {
 				log.Infof("stream end")
@@ -459,16 +577,9 @@ func (ra *relayAttempt) writeStream(ctx context.Context, clientStream streams.St
 			if firstToken {
 				ra.metrics.FirstTokenTime = time.Now()
 				firstToken = false
-				if firstTokenTimer != nil {
-					if !firstTokenTimer.Stop() {
-						select {
-						case <-firstTokenTimer.C:
-						default:
-						}
-					}
-					firstTokenTimer = nil
-					firstTokenC = nil
-				}
+				// 首字超时计时器已由 reader 协程在事件入队前停掉，这里只记录首 token 时间。
+				// 仍兜底调用一次（幂等）以防 reader 停表路径未覆盖到的边界。
+				stopFirstTokenGuard()
 			}
 
 			ra.c.SSEvent(r.event.Type, r.event.Data)

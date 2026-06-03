@@ -100,6 +100,7 @@ export function GroupCard({ group }: { group: Group }) {
                 channel_name: channelNameByKey.get(modelChannelKey(item.channel_id, item.model_name)) ?? `Channel ${item.channel_id}`,
                 item_id: item.id,
                 weight: item.weight,
+                disabled: item.disabled ?? false,
             })),
         [group.items, channelNameByKey, enabledByKey]
     );
@@ -154,6 +155,19 @@ export function GroupCard({ group }: { group: Group }) {
         const member = members.find((m) => m.id === id);
         if (member?.item_id !== undefined) updateGroup.mutate({ id: group.id!, items_to_delete: [member.item_id] }, { onSuccess, onError });
     }, [members, group.id, updateGroup, onSuccess, onError]);
+
+    const handleToggleDisabled = useCallback((id: string, disabled: boolean) => {
+        const member = members.find((m) => m.id === id);
+        if (!member?.item_id) return;
+        const priority = priorityByItemId.get(member.item_id);
+        if (!priority) return;
+        // 乐观更新本地状态，禁用切换即时反馈；priority/weight 一并回传以匹配后端批量更新契约。
+        setMembers((prev) => prev.map((m) => m.id === id ? { ...m, disabled } : m));
+        updateGroup.mutate(
+            { id: group.id!, items_to_update: [{ id: member.item_id, priority, weight: member.weight ?? 1, disabled }] },
+            { onSuccess, onError }
+        );
+    }, [members, group.id, priorityByItemId, updateGroup, onSuccess, onError]);
 
     const handleWeightChange = useCallback((id: string, weight: number) => {
         setMembers((prev) => prev.map((m) => m.id === id ? { ...m, weight } : m));
@@ -343,6 +357,7 @@ export function GroupCard({ group }: { group: Group }) {
                     onReorder={setMembers}
                     onRemove={handleRemoveMember}
                     onWeightChange={handleWeightChange}
+                    onToggleDisabled={handleToggleDisabled}
                     onDragStart={handleDragStart}
                     onDrop={handleDropReorder}
                     onDragFinish={handleDragFinish}

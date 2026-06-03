@@ -12,6 +12,7 @@ export interface GroupItem {
     model_name: string;
     priority: number;
     weight: number;
+    disabled?: boolean;
 }
 
 /**
@@ -48,12 +49,13 @@ export interface GroupItemAddRequest {
 }
 
 /**
- * 更新 item 请求 (仅 priority)
+ * 更新 item 请求 (priority / weight / disabled)
  */
 export interface GroupItemUpdateRequest {
     id: number;
     priority: number;
     weight: number;
+    disabled?: boolean; // 仅在禁用状态变更时发送
 }
 
 /**

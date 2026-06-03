@@ -26,6 +26,8 @@ type GroupItem struct {
 	ModelName string `json:"model_name" gorm:"not null;index:idx_group_channel_model,unique"`
 	Priority  int    `json:"priority"`
 	Weight    int    `json:"weight"`
+	// Disabled 临时禁用该分组成员（不影响渠道本身）。零值 false 表示启用，存量数据与新建成员默认启用。
+	Disabled bool `json:"disabled" gorm:"not null;default:false"`
 }
 
 // GroupUpdateRequest 分组更新请求 - 仅包含变更的数据
@@ -51,9 +53,10 @@ type GroupItemAddRequest struct {
 
 // GroupItemUpdateRequest 更新 item 请求
 type GroupItemUpdateRequest struct {
-	ID       int `json:"id" binding:"required"`
-	Priority int `json:"priority,omitempty"`
-	Weight   int `json:"weight,omitempty"`
+	ID       int   `json:"id" binding:"required"`
+	Priority int   `json:"priority,omitempty"`
+	Weight   int   `json:"weight,omitempty"`
+	Disabled *bool `json:"disabled,omitempty"` // 仅在禁用状态变更时发送
 }
 type GroupIDAndLLMName struct {
 	ChannelID int

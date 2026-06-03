@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"maps"
 	"time"
@@ -32,6 +34,19 @@ type RelayMetrics struct {
 
 	// 参数覆盖
 	ParamOverride string
+
+	// 出站请求摘要；raw passthrough 会绕过标准化 llm.Request，日志需记录最终出站语义摘要用于审计。
+	OutboundRequestSummary *OutboundRequestSummary
+}
+
+type OutboundRequestSummary struct {
+	RawPassthrough       bool           `json:"raw_passthrough"`
+	ParamOverrideApplied bool           `json:"param_override_applied,omitempty"`
+	BodyBytes            int            `json:"body_bytes"`
+	BodySHA256           string         `json:"body_sha256"`
+	Model                string         `json:"model,omitempty"`
+	Stream               *bool          `json:"stream,omitempty"`
+	StreamOptions        map[string]any `json:"stream_options,omitempty"`
 }
 
 func (m *RelayMetrics) RecordUsage(usage *llm.Usage) {
@@ -60,6 +75,31 @@ func (m *RelayMetrics) RecordUsage(usage *llm.Usage) {
 		float64(tokenDetails.WriteCachedTokens)*modelPrice.CacheWrite +
 		float64(nonCachedTokens)*modelPrice.Input) * 1e-6
 	m.Stats.OutputCost = float64(usage.CompletionTokens) * modelPrice.Output * 1e-6
+}
+
+func (m *RelayMetrics) RecordOutboundRequestSummary(body []byte, rawPassthrough bool, paramOverrideApplied bool) {
+	sum := sha256.Sum256(body)
+	summary := &OutboundRequestSummary{
+		RawPassthrough:       rawPassthrough,
+		ParamOverrideApplied: paramOverrideApplied,
+		BodyBytes:            len(body),
+		BodySHA256:           hex.EncodeToString(sum[:]),
+	}
+
+	var bodyMap map[string]any
+	if err := json.Unmarshal(body, &bodyMap); err == nil {
+		if model, ok := bodyMap["model"].(string); ok {
+			summary.Model = model
+		}
+		if stream, ok := bodyMap["stream"].(bool); ok {
+			summary.Stream = &stream
+		}
+		if streamOptions, ok := bodyMap["stream_options"].(map[string]any); ok {
+			summary.StreamOptions = streamOptions
+		}
+	}
+
+	m.OutboundRequestSummary = summary
 }
 
 func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attempts []model.ChannelAttempt) {
@@ -170,21 +210,28 @@ func (m *RelayMetrics) requestContent() string {
 	if err != nil {
 		return ""
 	}
-	if m.ParamOverride == "" {
-		return string(reqJSON)
-	}
 
 	var reqMap map[string]any
 	if err := json.Unmarshal(reqJSON, &reqMap); err != nil {
-		return string(reqJSON)
-	}
-	var override map[string]any
-	if err := json.Unmarshal([]byte(m.ParamOverride), &override); err != nil {
+		// 解析失败时退回最朴素的可审计内容；若有出站摘要则无法并入，但保留原始请求体优先。
 		return string(reqJSON)
 	}
 
-	// 日志里的请求体要反映本次实际发给上游的参数覆盖，但失败解析时保留原始可审计内容。
-	maps.Copy(reqMap, override)
+	if m.ParamOverride != "" {
+		var override map[string]any
+		if err := json.Unmarshal([]byte(m.ParamOverride), &override); err == nil {
+			// 日志里的请求体要反映本次实际发给上游的参数覆盖。
+			maps.Copy(reqMap, override)
+		}
+	}
+
+	// raw passthrough 实际发往上游的是 patch 后的原始字节，与标准化 llm.Request 不同。
+	// 这里并入出站摘要（model/stream/stream_options/字节数/sha256），让审计能核对真实出站语义，
+	// 但不落库完整 raw body，避免未知字段与敏感内容全文入库。
+	if m.OutboundRequestSummary != nil {
+		reqMap["_outbound_request"] = m.OutboundRequestSummary
+	}
+
 	finalJSON, err := json.Marshal(reqMap)
 	if err != nil {
 		return string(reqJSON)

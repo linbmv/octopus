@@ -382,6 +382,11 @@
             "selectChannel": "渠道",
             "selectModel": "模型"
         },
+        "item": {
+            "enable": "启用",
+            "disable": "临时禁用",
+            "channelDisabled": "渠道已禁用"
+        },
         "mode": {
             "roundRobin": "轮询",
             "random": "随机",
@@ -518,6 +523,8 @@
             "model": "模型",
             "enabled": "启用",
             "proxy": "使用代理",
+            "rawPassthrough": "原始透传",
+            "rawPassthroughHint": "仅 OpenAI Chat 同格式生效。将客户端原始请求 JSON 透传到上游（仅替换 model），以提升 prompt 缓存命中率。建议不要与参数覆盖同时使用。",
             "modelCustomPlaceholder": "自定义模型名称",
             "modelAdd": "添加",
             "modelRefresh": "刷新",

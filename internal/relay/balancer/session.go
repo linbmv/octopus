@@ -10,6 +10,7 @@ import (
 type SessionEntry struct {
 	ChannelID    int
 	ChannelKeyID int
+	ModelName    string // 成功时使用的实际上游模型名，用于命中时校验，避免同渠道多模型导致 prompt cache miss
 	Timestamp    time.Time
 }
 
@@ -41,11 +42,13 @@ func GetSticky(apiKeyID int, requestModel string, ttl time.Duration) *SessionEnt
 }
 
 // SetSticky 写入/更新粘性记录
-func SetSticky(apiKeyID int, requestModel string, channelID, keyID int) {
+// actualModel 为本次成功 attempt 使用的实际上游模型名，命中复用时需与候选模型一致。
+func SetSticky(apiKeyID int, requestModel string, channelID, keyID int, actualModel string) {
 	key := sessionKey(apiKeyID, requestModel)
 	globalSession.Store(key, &SessionEntry{
 		ChannelID:    channelID,
 		ChannelKeyID: keyID,
+		ModelName:    actualModel,
 		Timestamp:    time.Now(),
 	})
 }

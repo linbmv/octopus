@@ -61,6 +61,9 @@ processGroup:
 
 	enabledItems := make([]model.GroupItem, 0, len(group.Items))
 	for _, item := range group.Items {
+		if item.Disabled {
+			continue
+		}
 		channel, ok := channelCache.Get(item.ChannelID)
 		if !ok || !channel.Enabled {
 			continue
@@ -155,20 +158,34 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 		ids := make([]int, len(req.ItemsToUpdate))
 		priorityCase := "CASE id"
 		weightCase := "CASE id"
+		disabledCase := "CASE id"
+		hasDisabledChange := false
 		for i, item := range req.ItemsToUpdate {
 			ids[i] = item.ID
 			priorityCase += fmt.Sprintf(" WHEN %d THEN %d", item.ID, item.Priority)
 			weightCase += fmt.Sprintf(" WHEN %d THEN %d", item.ID, item.Weight)
+			// disabled 为可选项：仅对显式变更的成员生成 WHEN 分支，其余走 ELSE 保留原值。
+			// 使用 true/false 字面量以兼容 Postgres 布尔列的严格类型校验。
+			if item.Disabled != nil {
+				hasDisabledChange = true
+				disabledCase += fmt.Sprintf(" WHEN %d THEN %t", item.ID, *item.Disabled)
+			}
 		}
 		priorityCase += " END"
 		weightCase += " END"
+		disabledCase += " ELSE disabled END"
+
+		updateColumns := map[string]interface{}{
+			"priority": gorm.Expr(priorityCase),
+			"weight":   gorm.Expr(weightCase),
+		}
+		if hasDisabledChange {
+			updateColumns["disabled"] = gorm.Expr(disabledCase)
+		}
 
 		if err := tx.Model(&model.GroupItem{}).
 			Where("id IN ? AND group_id = ?", ids, req.ID).
-			Updates(map[string]interface{}{
-				"priority": gorm.Expr(priorityCase),
-				"weight":   gorm.Expr(weightCase),
-			}).Error; err != nil {
+			Updates(updateColumns).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to update items: %w", err)
 		}
