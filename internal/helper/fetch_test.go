@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -227,104 +226,5 @@ func TestFetchModelsGeminiFallsBackToOpenAIWhenEmpty(t *testing.T) {
 	// 第一次打 Gemini 端点，空结果后回退打 OpenAI 端点。
 	if len(paths) != 2 || paths[0] != "/v1beta/models" || paths[1] != "/v1/models" {
 		t.Fatalf("请求路径序列 = %v, 期望 [/v1beta/models /v1/models]", paths)
-	}
-}
-
-func TestFetchModelsSkipsFailedKeyAndUsesNext(t *testing.T) {
-	var auths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		auths = append(auths, auth)
-		if auth == "Bearer bad-key" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error": map[string]any{"message": "Invalid token"},
-			})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(model.OpenAIModelList{
-			Data: []model.OpenAIModel{{ID: "claude-opus-4-8"}, {ID: "gpt-5.5"}},
-		})
-	}))
-	defer server.Close()
-
-	channel := testChannel(server.URL, llm.APIFormatOpenAIChatCompletion)
-	channel.Keys = []model.ChannelKey{
-		{ID: 1, Enabled: true, ChannelKey: "bad-key", TotalCost: 0},
-		{ID: 2, Enabled: true, ChannelKey: "good-key", TotalCost: 1},
-	}
-
-	models, err := FetchModels(context.Background(), channel)
-	if err != nil {
-		t.Fatalf("FetchModels 错误: %v", err)
-	}
-	if len(models) != 2 || models[0] != "claude-opus-4-8" || models[1] != "gpt-5.5" {
-		t.Fatalf("模型列表 = %v，期望 [claude-opus-4-8 gpt-5.5]", models)
-	}
-	if len(auths) != 2 || auths[0] != "Bearer bad-key" || auths[1] != "Bearer good-key" {
-		t.Fatalf("Authorization 序列 = %v，期望先尝试坏 key 再尝试好 key", auths)
-	}
-}
-
-func TestFetchModelsReturnsHTTPErrorMessage(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error": map[string]any{"message": "Invalid token"},
-		})
-	}))
-	defer server.Close()
-
-	_, err := FetchModels(context.Background(), testChannel(server.URL, llm.APIFormatOpenAIChatCompletion))
-	if err == nil {
-		t.Fatal("FetchModels 未返回错误")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "HTTP 401") || !strings.Contains(msg, "Invalid token") {
-		t.Fatalf("错误信息 = %q，期望包含 HTTP 401 和 Invalid token", msg)
-	}
-}
-
-func TestFetchModelsReturnsErrorOnHTMLResponse(t *testing.T) {
-	// 模拟 Cloudflare 人机校验页：HTTP 200 + text/html。
-	// 期望被识别为 HTML 并给出可诊断错误，而不是隐晦的 "invalid character '<'"。
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("<!DOCTYPE html><html><head><title>Just a moment...</title></head><body></body></html>"))
-	}))
-	defer server.Close()
-
-	_, err := FetchModels(context.Background(), testChannel(server.URL, llm.APIFormatOpenAIChatCompletion))
-	if err == nil {
-		t.Fatal("FetchModels 未返回错误（期望识别 HTML 响应）")
-	}
-	if !strings.Contains(err.Error(), "HTML") {
-		t.Fatalf("错误信息 = %q，期望包含 HTML 提示", err.Error())
-	}
-}
-
-func TestFetchModelsAnthropicFallsBackToOpenAIOnHTTPError(t *testing.T) {
-	// anyrouter 类双格式网关：/v1/models 用 x-api-key 返回 401，但用 Bearer(OpenAI 风格)能列模型。
-	// Anthropic 类型渠道应在 x-api-key 失败后回退到 Bearer，仍拿到模型，而不是直接报 401。
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Api-Key") != "" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "未提供令牌"}})
-			return
-		}
-		// Bearer 回退路径
-		_ = json.NewEncoder(w).Encode(model.OpenAIModelList{
-			Data: []model.OpenAIModel{{ID: "claude-opus-4-8"}, {ID: "claude-sonnet-4-5-20250929"}},
-		})
-	}))
-	defer server.Close()
-
-	models, err := FetchModels(context.Background(), testChannel(server.URL, llm.APIFormatAnthropicMessage))
-	if err != nil {
-		t.Fatalf("期望回退到 OpenAI 成功，却报错: %v", err)
-	}
-	if len(models) != 2 || models[0] != "claude-opus-4-8" {
-		t.Fatalf("models=%v，期望回退拿到 [claude-opus-4-8 claude-sonnet-4-5-20250929]", models)
 	}
 }

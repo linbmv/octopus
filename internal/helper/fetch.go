@@ -3,12 +3,8 @@ package helper
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/dlclark/regexp2"
@@ -21,39 +17,7 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	keys := availableFetchKeys(request)
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("没有可用的渠道密钥")
-	}
-
-	var lastErr error
-	for i, key := range keys {
-		requestWithKey := request
-		requestWithKey.Keys = []model.ChannelKey{key}
-
-		fetchModel, err := fetchModelsWithKey(client, ctx, requestWithKey)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		// 部分中转在 key 无权列模型时会返回 200 + 空列表；继续试下一个 key，避免误判。
-		if len(fetchModel) == 0 {
-			lastErr = fmt.Errorf("获取模型列表失败：%s 返回空模型列表，可能无权列出模型或密钥不可用", fetchKeyLabel(key, i))
-			continue
-		}
-		return filterFetchedModels(fetchModel, request.MatchRegex)
-	}
-
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, fmt.Errorf("获取模型列表失败：所有渠道密钥都返回空模型列表")
-}
-
-func fetchModelsWithKey(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
 	fetchModel := make([]string, 0)
-	var err error
 	switch request.Type {
 	case llm.APIFormatAnthropicMessage:
 		fetchModel, err = fetchAnthropicModels(client, ctx, request)
@@ -65,27 +29,9 @@ func fetchModelsWithKey(client *http.Client, ctx context.Context, request model.
 	if err != nil {
 		return nil, err
 	}
-	return fetchModel, nil
-}
-
-func availableFetchKeys(request model.Channel) []model.ChannelKey {
-	nowSec := time.Now().Unix()
-	keys := make([]model.ChannelKey, 0, len(request.Keys))
-	for _, key := range request.Keys {
-		if key.IsAvailable(nowSec) {
-			keys = append(keys, key)
-		}
-	}
-	sort.SliceStable(keys, func(i, j int) bool {
-		return keys[i].TotalCost < keys[j].TotalCost
-	})
-	return keys
-}
-
-func filterFetchedModels(fetchModel []string, matchRegex *string) ([]string, error) {
-	if matchRegex != nil && *matchRegex != "" {
+	if request.MatchRegex != nil && *request.MatchRegex != "" {
 		matchModel := make([]string, 0)
-		re, err := regexp2.Compile(*matchRegex, regexp2.ECMAScript)
+		re, err := regexp2.Compile(*request.MatchRegex, regexp2.ECMAScript)
 		if err != nil {
 			return nil, err
 		}
@@ -123,9 +69,6 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if err := ensureModelResponseOK(resp, baseURL+"/models"); err != nil {
-		return nil, err
-	}
 
 	var result model.OpenAIModelList
 
@@ -170,10 +113,6 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 			return nil, err
 		}
 		defer resp.Body.Close()
-		if err := ensureModelResponseOK(resp, baseURL+"/models"); err != nil {
-			// Gemini /v1beta/models 失败时回退到 OpenAI 风格 /v1/models，兼容仅 Bearer 列模型的双格式网关。
-			return fetchOpenAIModels(client, ctx, request)
-		}
 
 		var result model.GeminiModelList
 
@@ -227,11 +166,6 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 			return nil, err
 		}
 		defer resp.Body.Close()
-		if err := ensureModelResponseOK(resp, baseURL+"/models"); err != nil {
-			// Anthropic /v1/models 失败时回退到 OpenAI 风格 /v1/models：
-			// 部分网关该端点只认 Bearer、不认 x-api-key（如 anyrouter），回退后用 Bearer 仍能列出模型。
-			return fetchOpenAIModels(client, ctx, request)
-		}
 
 		var result model.AnthropicModelList
 
@@ -255,81 +189,7 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 	return allModels, nil
 }
 
-func ensureModelResponseOK(resp *http.Response, endpoint string) error {
-	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-		// 2xx 但 Content-Type 是 HTML：通常是 Cloudflare 人机校验页、网络劫持，或 Base URL 指向了网页而非 API。
-		// 直接 json 解码只会得到隐晦的 "invalid character '<'"，这里转成可诊断的明确错误。
-		if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
-			htmlBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			return fmt.Errorf("模型列表接口 %s 返回了 HTML 而非 JSON（Content-Type=%q），常见于部署机访问该站点被 Cloudflare 人机校验/网络劫持拦截，或 Base URL 配置错误。HTML 片段：%s",
-				endpoint, resp.Header.Get("Content-Type"), truncateText(strings.TrimSpace(string(htmlBody)), 120))
-		}
-		return nil
-	}
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	message := extractUpstreamErrorMessage(body)
-	if message != "" {
-		return fmt.Errorf("模型列表接口请求失败：%s 返回 HTTP %d，%s", endpoint, resp.StatusCode, message)
-	}
-
-	bodyText := strings.TrimSpace(string(body))
-	if bodyText != "" {
-		return fmt.Errorf("模型列表接口请求失败：%s 返回 HTTP %d，响应：%s", endpoint, resp.StatusCode, truncateText(bodyText, 300))
-	}
-	return fmt.Errorf("模型列表接口请求失败：%s 返回 HTTP %d", endpoint, resp.StatusCode)
-}
-
-func extractUpstreamErrorMessage(body []byte) string {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return ""
-	}
-	if message, ok := payload["message"].(string); ok && strings.TrimSpace(message) != "" {
-		return strings.TrimSpace(message)
-	}
-	errorValue, ok := payload["error"]
-	if !ok {
-		return ""
-	}
-	if message, ok := errorValue.(string); ok {
-		return strings.TrimSpace(message)
-	}
-	if errorMap, ok := errorValue.(map[string]any); ok {
-		if message, ok := errorMap["message"].(string); ok {
-			return strings.TrimSpace(message)
-		}
-	}
-	return ""
-}
-
-func fetchKeyLabel(key model.ChannelKey, index int) string {
-	if key.ID > 0 {
-		return fmt.Sprintf("密钥 ID %d", key.ID)
-	}
-	return fmt.Sprintf("第 %d 个密钥", index+1)
-}
-
-func truncateText(text string, maxLen int) string {
-	if len(text) <= maxLen {
-		return text
-	}
-	return text[:maxLen] + "..."
-}
-
-// defaultFetchUserAgent 给模型拉取请求一个浏览器风格 UA，避免被部分 CDN/WAF（如 Cloudflare bot 检测）
-// 按默认 "Go-http-client/1.1" 判为爬虫而返回人机校验页。用户可用 CustomHeader 里的 User-Agent 覆盖。
-// 注意：若上游基于 TLS 指纹（JA3/JA4）识别客户端，仅改 UA 不足以绕过，需改用代理出口。
-const defaultFetchUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-
 func applyCustomHeaders(req *http.Request, channel model.Channel) {
-	// 默认补浏览器风格 UA/Accept；放在自定义头之前，用户在 CustomHeader 里配置的同名头可覆盖。
-	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", defaultFetchUserAgent)
-	}
-	if req.Header.Get("Accept") == "" {
-		req.Header.Set("Accept", "application/json, text/plain, */*")
-	}
 	for _, header := range channel.CustomHeader {
 		if header.HeaderKey != "" {
 			req.Header.Set(header.HeaderKey, header.HeaderValue)
