@@ -171,7 +171,8 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 		}
 		defer resp.Body.Close()
 		if err := ensureModelResponseOK(resp, baseURL+"/models"); err != nil {
-			return nil, err
+			// Gemini /v1beta/models 失败时回退到 OpenAI 风格 /v1/models，兼容仅 Bearer 列模型的双格式网关。
+			return fetchOpenAIModels(client, ctx, request)
 		}
 
 		var result model.GeminiModelList
@@ -227,7 +228,9 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 		}
 		defer resp.Body.Close()
 		if err := ensureModelResponseOK(resp, baseURL+"/models"); err != nil {
-			return nil, err
+			// Anthropic /v1/models 失败时回退到 OpenAI 风格 /v1/models：
+			// 部分网关该端点只认 Bearer、不认 x-api-key（如 anyrouter），回退后用 Bearer 仍能列出模型。
+			return fetchOpenAIModels(client, ctx, request)
 		}
 
 		var result model.AnthropicModelList

@@ -303,3 +303,28 @@ func TestFetchModelsReturnsErrorOnHTMLResponse(t *testing.T) {
 		t.Fatalf("错误信息 = %q，期望包含 HTML 提示", err.Error())
 	}
 }
+
+func TestFetchModelsAnthropicFallsBackToOpenAIOnHTTPError(t *testing.T) {
+	// anyrouter 类双格式网关：/v1/models 用 x-api-key 返回 401，但用 Bearer(OpenAI 风格)能列模型。
+	// Anthropic 类型渠道应在 x-api-key 失败后回退到 Bearer，仍拿到模型，而不是直接报 401。
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "未提供令牌"}})
+			return
+		}
+		// Bearer 回退路径
+		_ = json.NewEncoder(w).Encode(model.OpenAIModelList{
+			Data: []model.OpenAIModel{{ID: "claude-opus-4-8"}, {ID: "claude-sonnet-4-5-20250929"}},
+		})
+	}))
+	defer server.Close()
+
+	models, err := FetchModels(context.Background(), testChannel(server.URL, llm.APIFormatAnthropicMessage))
+	if err != nil {
+		t.Fatalf("期望回退到 OpenAI 成功，却报错: %v", err)
+	}
+	if len(models) != 2 || models[0] != "claude-opus-4-8" {
+		t.Fatalf("models=%v，期望回退拿到 [claude-opus-4-8 claude-sonnet-4-5-20250929]", models)
+	}
+}
