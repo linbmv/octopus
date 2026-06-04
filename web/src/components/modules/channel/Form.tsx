@@ -137,7 +137,15 @@ export function ChannelForm({
                     }
                 },
                 onError: (error) => {
-                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    let errorMessage: string;
+                    if (error instanceof Error) {
+                        errorMessage = error.message;
+                    } else if (error && typeof error === 'object' && 'message' in error && typeof (error as { message?: unknown }).message === 'string') {
+                        // 后端 ApiError（{ code, message }）不是 Error 实例，避免回退成 "[object Object]"。
+                        errorMessage = (error as { message: string }).message;
+                    } else {
+                        errorMessage = String(error);
+                    }
                     toast.error(t('modelRefreshFailed'), { description: errorMessage });
                 },
             }

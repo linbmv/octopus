@@ -202,14 +202,23 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	if len(req.KeysToUpdate) > 0 {
 		for _, ku := range req.KeysToUpdate {
 			updates := map[string]interface{}{}
+			resetRuntimeState := false
 			if ku.Enabled != nil {
 				updates["enabled"] = *ku.Enabled
+				if *ku.Enabled {
+					resetRuntimeState = true
+				}
 			}
 			if ku.ChannelKey != nil {
 				updates["channel_key"] = *ku.ChannelKey
+				resetRuntimeState = true
 			}
 			if ku.Remark != nil {
 				updates["remark"] = *ku.Remark
+			}
+			if resetRuntimeState {
+				updates["status_code"] = 0
+				updates["last_use_time_stamp"] = 0
 			}
 			if len(updates) == 0 {
 				continue

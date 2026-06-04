@@ -32,6 +32,21 @@ func TestChannelKeyIsAvailable(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "401 不永久禁用 key（靠熔断器处理，避免误排除可用 key）",
+			key:  ChannelKey{Enabled: true, ChannelKey: "sk-once-401", StatusCode: http.StatusUnauthorized},
+			want: true,
+		},
+		{
+			name: "400 请求错误不影响 key 可用性",
+			key:  ChannelKey{Enabled: true, ChannelKey: "sk-bad-request", StatusCode: http.StatusBadRequest},
+			want: true,
+		},
+		{
+			name: "503 上游临时故障不影响 key 可用性",
+			key:  ChannelKey{Enabled: true, ChannelKey: "sk-upstream-503", StatusCode: http.StatusServiceUnavailable},
+			want: true,
+		},
+		{
 			name: "429 冷却中不可用",
 			key:  ChannelKey{Enabled: true, ChannelKey: "sk-rate-limited", StatusCode: http.StatusTooManyRequests, LastUseTimeStamp: recent429},
 			want: false,
@@ -94,5 +109,18 @@ func TestChannelGetChannelKeyKeepsLowestCostFallback(t *testing.T) {
 	got := ch.GetChannelKey()
 	if got.ID != 2 {
 		t.Errorf("GetChannelKey().ID = %d, want 2", got.ID)
+	}
+}
+
+func TestChannelGetChannelKeyStillUsesKeyAfter401(t *testing.T) {
+	// 401 不应让 key 被永久排除：上游可能偶发返回 401，靠熔断器处理连续失败，
+	// 这里确认被标记 401 的 key 仍可被选中（用户直连可用的 key 不能因一次 401 被废）。
+	ch := &Channel{Keys: []ChannelKey{
+		{ID: 1, Enabled: true, ChannelKey: "sk-once-401", TotalCost: 0, StatusCode: http.StatusUnauthorized},
+	}}
+
+	got := ch.GetChannelKey()
+	if got.ID != 1 {
+		t.Errorf("GetChannelKey().ID = %d, want 1（401 不应禁用 key）", got.ID)
 	}
 }

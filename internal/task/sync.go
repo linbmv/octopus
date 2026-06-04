@@ -40,6 +40,11 @@ func SyncModelsTask() {
 			log.Warnf("failed to fetch models for channel %s: %v", channel.Name, err)
 			continue
 		}
+		// 如果获取到空列表且渠道原本有模型，跳过更新以防误删（可能是 API key 权限不足或临时故障）
+		if len(fetchModels) == 0 && channel.Model != "" {
+			log.Warnf("channel %s fetched empty model list but has existing models, skipping sync to prevent data loss", channel.Name)
+			continue
+		}
 		oldModels := xstrings.SplitTrimCompact(",", channel.Model)
 		newModels := xstrings.TrimCompact(fetchModels)
 		for _, m := range newModels {

@@ -18,23 +18,23 @@ const (
 const ChannelTypeDoubao llm.APIFormat = "doubao"
 
 type Channel struct {
-	ID            int            `json:"id" gorm:"primaryKey"`
-	Name          string         `json:"name" gorm:"unique;not null"`
-	Type          llm.APIFormat  `json:"type"`
-	Enabled       bool           `json:"enabled" gorm:"default:true"`
-	BaseUrls      []BaseUrl      `json:"base_urls" gorm:"serializer:json"`
-	Keys          []ChannelKey   `json:"keys" gorm:"foreignKey:ChannelID"`
-	Model         string         `json:"model"`
-	CustomModel   string         `json:"custom_model"`
-	Proxy         bool           `json:"proxy" gorm:"default:false"`
-	AutoSync      bool           `json:"auto_sync" gorm:"default:false"`
-	AutoGroup     AutoGroupType  `json:"auto_group" gorm:"default:0"`
-	CustomHeader  []CustomHeader `json:"custom_header" gorm:"serializer:json"`
+	ID             int            `json:"id" gorm:"primaryKey"`
+	Name           string         `json:"name" gorm:"unique;not null"`
+	Type           llm.APIFormat  `json:"type"`
+	Enabled        bool           `json:"enabled" gorm:"default:true"`
+	BaseUrls       []BaseUrl      `json:"base_urls" gorm:"serializer:json"`
+	Keys           []ChannelKey   `json:"keys" gorm:"foreignKey:ChannelID"`
+	Model          string         `json:"model"`
+	CustomModel    string         `json:"custom_model"`
+	Proxy          bool           `json:"proxy" gorm:"default:false"`
+	AutoSync       bool           `json:"auto_sync" gorm:"default:false"`
+	AutoGroup      AutoGroupType  `json:"auto_group" gorm:"default:0"`
+	CustomHeader   []CustomHeader `json:"custom_header" gorm:"serializer:json"`
 	ParamOverride  *string        `json:"param_override"`
 	RawPassthrough bool           `json:"raw_passthrough" gorm:"not null;default:false"`
-	ChannelProxy  *string        `json:"channel_proxy"`
-	Stats         *StatsChannel  `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
-	MatchRegex    *string        `json:"match_regex"`
+	ChannelProxy   *string        `json:"channel_proxy"`
+	Stats          *StatsChannel  `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
+	MatchRegex     *string        `json:"match_regex"`
 }
 
 type BaseUrl struct {
@@ -60,18 +60,18 @@ type ChannelKey struct {
 
 // ChannelUpdateRequest 渠道更新请求 - 仅包含变更的数据
 type ChannelUpdateRequest struct {
-	ID            int             `json:"id" binding:"required"`
-	Name          *string         `json:"name,omitempty"`
-	Type          *llm.APIFormat  `json:"type,omitempty"`
-	Enabled       *bool           `json:"enabled,omitempty"`
-	BaseUrls      *[]BaseUrl      `json:"base_urls,omitempty"`
-	Model         *string         `json:"model,omitempty"`
-	CustomModel   *string         `json:"custom_model,omitempty"`
-	Proxy         *bool           `json:"proxy,omitempty"`
-	AutoSync      *bool           `json:"auto_sync,omitempty"`
-	AutoGroup     *AutoGroupType  `json:"auto_group,omitempty"`
-	CustomHeader  *[]CustomHeader `json:"custom_header,omitempty"`
-	ChannelProxy  *string         `json:"channel_proxy,omitempty"`
+	ID             int             `json:"id" binding:"required"`
+	Name           *string         `json:"name,omitempty"`
+	Type           *llm.APIFormat  `json:"type,omitempty"`
+	Enabled        *bool           `json:"enabled,omitempty"`
+	BaseUrls       *[]BaseUrl      `json:"base_urls,omitempty"`
+	Model          *string         `json:"model,omitempty"`
+	CustomModel    *string         `json:"custom_model,omitempty"`
+	Proxy          *bool           `json:"proxy,omitempty"`
+	AutoSync       *bool           `json:"auto_sync,omitempty"`
+	AutoGroup      *AutoGroupType  `json:"auto_group,omitempty"`
+	CustomHeader   *[]CustomHeader `json:"custom_header,omitempty"`
+	ChannelProxy   *string         `json:"channel_proxy,omitempty"`
 	ParamOverride  *string         `json:"param_override,omitempty"`
 	RawPassthrough *bool           `json:"raw_passthrough,omitempty"`
 	MatchRegex     *string         `json:"match_regex,omitempty"`
@@ -117,6 +117,9 @@ func (c *Channel) GetBaseUrl() string {
 	return bestURL
 }
 
+// IsAvailable 判断 key 是否可参与调度。
+// 仅对 429（限流）做 5 分钟冷却；其余失败状态码（如 400/401/403/503）不在此永久禁用 key，
+// 这类失败可能是上游偶发、请求参数或临时故障，连续失败由熔断器（带自动恢复）处理，避免一次偶发就把可用 key 永久排除。
 func (k ChannelKey) IsAvailable(nowSec int64) bool {
 	if !k.Enabled || k.ChannelKey == "" {
 		return false
