@@ -363,7 +363,9 @@
                 "save": "儲存",
                 "copyName": "複製名稱",
                 "delete": "刪除",
-                "confirmDelete": "確認刪除"
+                "confirmDelete": "確認刪除",
+                "enableGroup": "啟用分組",
+                "disableGroup": "臨時停用分組"
             }
         },
         "form": {

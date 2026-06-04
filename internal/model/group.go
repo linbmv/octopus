@@ -10,8 +10,10 @@ const (
 )
 
 type Group struct {
-	ID                int         `json:"id" gorm:"primaryKey"`
-	Name              string      `json:"name" gorm:"unique;not null"`
+	ID   int    `json:"id" gorm:"primaryKey"`
+	Name string `json:"name" gorm:"unique;not null"`
+	// Enabled 临时启用/禁用整个分组（不影响成员和渠道本身）。零值经迁移回填为 true，存量与新建分组默认启用。
+	Enabled           bool        `json:"enabled" gorm:"not null;default:true"`
 	Mode              GroupMode   `json:"mode" gorm:"not null"`
 	MatchRegex        string      `json:"match_regex"`
 	FirstTokenTimeOut int         `json:"first_token_time_out"` // 单个渠道首个Token响应超时时间(秒)
@@ -34,6 +36,7 @@ type GroupItem struct {
 type GroupUpdateRequest struct {
 	ID                int                      `json:"id" binding:"required"`
 	Name              *string                  `json:"name,omitempty"`                 // 仅在名称变更时发送
+	Enabled           *bool                    `json:"enabled,omitempty"`              // 仅在启用状态变更时发送
 	Mode              *GroupMode               `json:"mode,omitempty"`                 // 仅在模式变更时发送
 	MatchRegex        *string                  `json:"match_regex,omitempty"`          // 仅在匹配正则变更时发送
 	FirstTokenTimeOut *int                     `json:"first_token_time_out,omitempty"` // 仅在超时变更时发送(秒)

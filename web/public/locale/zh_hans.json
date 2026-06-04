@@ -363,7 +363,9 @@
                 "save": "保存",
                 "copyName": "复制名称",
                 "delete": "删除",
-                "confirmDelete": "确认删除"
+                "confirmDelete": "确认删除",
+                "enableGroup": "启用分组",
+                "disableGroup": "临时禁用分组"
             }
         },
         "form": {

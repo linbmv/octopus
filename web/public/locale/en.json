@@ -363,7 +363,9 @@
                 "save": "Save",
                 "copyName": "Copy Name",
                 "delete": "Delete",
-                "confirmDelete": "Confirm Delete"
+                "confirmDelete": "Confirm Delete",
+                "enableGroup": "Enable group",
+                "disableGroup": "Temporarily disable group"
             }
         },
         "form": {

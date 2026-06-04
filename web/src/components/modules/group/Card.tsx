@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Trash2, X, Pencil } from 'lucide-react';
+import { Trash2, X, Pencil, Power } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { type Group, useDeleteGroup, useUpdateGroup } from '@/api/endpoints/group';
 import { useModelChannelList } from '@/api/endpoints/model';
@@ -76,6 +76,9 @@ export function GroupCard({ group }: { group: Group }) {
 
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [members, setMembers] = useState<SelectedMember[]>([]);
+    // 整组启用的乐观覆盖值：点击 Power 立即反馈，成功后清空回落到 props，失败也清空回滚。
+    // 用 null 表示“以服务端 group.enabled 为准”，避免用 effect 同步 props 触发级联渲染。
+    const [enabledOverride, setEnabledOverride] = useState<boolean | null>(null);
     const isDragging = useRef(false);
     const weightTimerRef = useRef<NodeJS.Timeout | null>(null);
     const membersRef = useRef<SelectedMember[]>([]);
@@ -105,9 +108,14 @@ export function GroupCard({ group }: { group: Group }) {
         [group.items, channelNameByKey, enabledByKey]
     );
 
+    /* eslint-disable react-hooks/set-state-in-effect */
     useEffect(() => {
-        if (!isDragging.current) setMembers([...displayMembers]);
+        if (!isDragging.current) {
+            // 拖拽列表需要把远端分组成员同步到本地排序状态；拖拽中跳过同步以免打断手势。
+            setMembers([...displayMembers]);
+        }
     }, [displayMembers]);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     useEffect(() => {
         membersRef.current = members;
@@ -127,6 +135,37 @@ export function GroupCard({ group }: { group: Group }) {
         if (typeof v !== 'object' || v === null) return false;
         return 'mode' in v && typeof (v as { mode?: unknown }).mode === 'number';
     })();
+
+    // 仅当本次 mutation 是整组启用切换时才锁 Power 按钮，避免被成员/模式更新影响视觉。
+    const isUpdatingEnabled = (() => {
+        if (!updateGroup.isPending) return false;
+        const v = updateGroup.variables;
+        if (typeof v !== 'object' || v === null) return false;
+        return 'enabled' in v && typeof (v as { enabled?: unknown }).enabled === 'boolean';
+    })();
+
+    // 显示值：乐观覆盖优先，否则取服务端 props；旧响应缺 enabled 时按启用处理。
+    const groupEnabled = enabledOverride ?? group.enabled ?? true;
+
+    const handleToggleGroupEnabled = useCallback(() => {
+        if (!group.id || isUpdatingEnabled) return;
+        const next = !groupEnabled;
+        setEnabledOverride(next); // 乐观更新
+        updateGroup.mutate(
+            { id: group.id, enabled: next },
+            {
+                onSuccess: () => {
+                    setEnabledOverride(null); // 回落到刷新后的 props
+                    onSuccess();
+                },
+                onError: (error: Error) => {
+                    setEnabledOverride(null); // 回滚到 props
+                    onError(error);
+                },
+            }
+        );
+    }, [group.id, groupEnabled, isUpdatingEnabled, updateGroup, onSuccess, onError]);
+
 
     const priorityByItemId = useMemo(() => {
         const map = new Map<number, number>();
@@ -257,13 +296,37 @@ export function GroupCard({ group }: { group: Group }) {
     return (
         <article className="flex flex-col rounded-3xl border border-border bg-card text-card-foreground p-4 custom-shadow">
             <header className="flex items-start justify-between mb-3 relative overflow-visible rounded-xl -mx-1 px-1 -my-1 py-1">
-                <div className="relative flex-1 mr-2 min-w-0 group/title">
+                <div className="relative flex flex-1 items-center gap-2 mr-2 min-w-0 group/title">
                     <Tooltip side="top" sideOffset={10} align="center">
                         <TooltipTrigger asChild>
-                            <h3 className="text-lg font-bold truncate">{group.name}</h3>
+                            <button
+                                type="button"
+                                aria-pressed={groupEnabled}
+                                aria-label={groupEnabled ? t('detail.actions.disableGroup') : t('detail.actions.enableGroup')}
+                                disabled={!group.id || isUpdatingEnabled}
+                                onClick={handleToggleGroupEnabled}
+                                className={cn(
+                                    'flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors',
+                                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                                    'disabled:cursor-not-allowed disabled:opacity-50',
+                                    groupEnabled
+                                        ? 'bg-primary/10 text-primary hover:bg-primary/20'
+                                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                )}
+                            >
+                                <Power className="size-4" />
+                            </button>
                         </TooltipTrigger>
-                        <TooltipContent key={group.name}>{group.name}</TooltipContent>
+                        <TooltipContent>{groupEnabled ? t('detail.actions.disableGroup') : t('detail.actions.enableGroup')}</TooltipContent>
                     </Tooltip>
+                    <div className="relative min-w-0 flex-1 group/title">
+                        <Tooltip side="top" sideOffset={10} align="center">
+                            <TooltipTrigger asChild>
+                                <h3 className={cn('text-lg font-bold truncate', !groupEnabled && 'text-muted-foreground')}>{group.name}</h3>
+                            </TooltipTrigger>
+                            <TooltipContent key={group.name}>{group.name}</TooltipContent>
+                        </Tooltip>
+                    </div>
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">

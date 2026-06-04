@@ -25,6 +25,10 @@ func GroupList(ctx context.Context) ([]model.Group, error) {
 func GroupListModel(ctx context.Context) ([]string, error) {
 	models := []string{}
 	for _, group := range groupCache.GetAll() {
+		// 临时禁用的分组不对外暴露为可用模型。
+		if !group.Enabled {
+			continue
+		}
 		models = append(models, group.Name)
 	}
 	return models, nil
@@ -54,6 +58,11 @@ func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
 	}
 
 processGroup:
+	// 整个分组被临时禁用：返回空候选，让 relay 走“无可用通道”路径，分组本身仍存在于管理列表。
+	if !group.Enabled {
+		group.Items = nil
+		return group, nil
+	}
 	if len(group.Items) == 0 {
 		group.Items = nil
 		return group, nil
@@ -92,6 +101,8 @@ func stripModelSuffix(name string) string {
 }
 
 func GroupCreate(group *model.Group, ctx context.Context) error {
+	// 新建分组默认启用：bool 零值为 false，create payload 未带 enabled 时强制为 true，避免误建成禁用。
+	group.Enabled = true
 	if err := db.GetDB().WithContext(ctx).Create(group).Error; err != nil {
 		return err
 	}
@@ -120,6 +131,11 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 	if req.Name != nil {
 		selectFields = append(selectFields, "name")
 		updates.Name = *req.Name
+	}
+	if req.Enabled != nil {
+		// Select 显式包含 enabled 列，确保能写入 false（GORM Updates 默认跳过零值）。
+		selectFields = append(selectFields, "enabled")
+		updates.Enabled = *req.Enabled
 	}
 	if req.Mode != nil {
 		selectFields = append(selectFields, "mode")
