@@ -228,3 +228,77 @@ func TestFetchModelsGeminiFallsBackToOpenAIWhenEmpty(t *testing.T) {
 		t.Fatalf("请求路径序列 = %v, 期望 [/v1beta/models /v1/models]", paths)
 	}
 }
+
+// TestFetchModelsAnthropicFallsBackToOpenAIOnError 关键兼容性测试：
+// anyrouter 等中转站对 Anthropic 类型渠道，用 X-Api-Key 请求返回 401 错误 JSON，
+// 当前代码不检查状态码，直接 decode 成空列表，触发 OpenAI 回退，改用 Bearer 认证成功。
+// 这是当前设计的宽松兼容路径，必须锁住防止将来误改。
+func TestFetchModelsAnthropicFallsBackToOpenAIOn401(t *testing.T) {
+	var paths []string
+	var authHeaders []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		authHeaders = append(authHeaders, r.Header.Get("Authorization")+"|"+r.Header.Get("X-Api-Key"))
+
+		if r.Header.Get("X-Api-Key") != "" {
+			// Anthropic 端点：anyrouter 不认 X-Api-Key，返回 401 错误 JSON
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		// OpenAI 回退端点：识别 Bearer，返回模型列表
+		_ = json.NewEncoder(w).Encode(model.OpenAIModelList{
+			Data: []model.OpenAIModel{{ID: "gpt-4o"}, {ID: "claude-3-5-sonnet"}},
+		})
+	}))
+	defer server.Close()
+
+	models, err := FetchModels(context.Background(), testChannel(server.URL, llm.APIFormatAnthropicMessage))
+	if err != nil {
+		t.Fatalf("FetchModels 错误: %v", err)
+	}
+
+	// 验证：先用 X-Api-Key 失败，再用 Bearer 成功
+	if len(paths) != 2 || paths[0] != "/v1/models" || paths[1] != "/v1/models" {
+		t.Fatalf("请求路径序列 = %v, 期望两次 /v1/models", paths)
+	}
+	if authHeaders[0] != "|test-key" {
+		t.Fatalf("第一次请求认证 = %q, 期望 X-Api-Key", authHeaders[0])
+	}
+	if authHeaders[1] != "Bearer test-key|" {
+		t.Fatalf("第二次请求认证 = %q, 期望 Bearer", authHeaders[1])
+	}
+
+	// 验证：回退成功，返回 anyrouter 的模型列表
+	if len(models) != 2 || models[0] != "gpt-4o" || models[1] != "claude-3-5-sonnet" {
+		t.Fatalf("回退结果 = %v, 期望 anyrouter 返回的模型列表", models)
+	}
+}
+
+// TestFetchModelsAnthropicFallsBackToOpenAIWhenEmpty 验证 Anthropic 返回空列表时的回退
+func TestFetchModelsAnthropicFallsBackToOpenAIWhenEmpty(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.Header.Get("X-Api-Key") != "" {
+			// Anthropic 端点返回空列表
+			_ = json.NewEncoder(w).Encode(model.AnthropicModelList{Data: []model.AnthropicModel{}})
+			return
+		}
+		// OpenAI 回退端点
+		_ = json.NewEncoder(w).Encode(model.OpenAIModelList{Data: []model.OpenAIModel{{ID: "fallback"}}})
+	}))
+	defer server.Close()
+
+	models, err := FetchModels(context.Background(), testChannel(server.URL, llm.APIFormatAnthropicMessage))
+	if err != nil {
+		t.Fatalf("FetchModels 错误: %v", err)
+	}
+	if len(models) != 1 || models[0] != "fallback" {
+		t.Fatalf("回退结果 = %v, 期望 [fallback]", models)
+	}
+	if len(paths) != 2 || paths[0] != "/v1/models" || paths[1] != "/v1/models" {
+		t.Fatalf("请求路径序列 = %v, 期望两次 /v1/models", paths)
+	}
+}
