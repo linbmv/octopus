@@ -636,7 +636,19 @@ func (m *relayPipelineMiddleware) OnOutboundRawRequest(ctx context.Context, requ
 		request.Headers = make(http.Header)
 	}
 	m.attempt.applyChannelRequestOptions(request)
+	// 调试：打印实际发往上游的请求体，用于排查模型名透传/改写问题。
+	log.Debugf("outbound raw request to %s: url=%s body=%s",
+		m.attempt.channel.Name, request.URL, truncateBody(request.Body))
 	return request, nil
+}
+
+// truncateBody 截断请求体用于日志，避免超长 body 刷屏。
+func truncateBody(body []byte) string {
+	const max = 500
+	if len(body) <= max {
+		return string(body)
+	}
+	return string(body[:max]) + "...(truncated)"
 }
 
 func (m *relayPipelineMiddleware) OnOutboundRawError(ctx context.Context, err error) {
