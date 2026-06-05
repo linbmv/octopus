@@ -83,21 +83,52 @@ processGroup:
 	return group, nil
 }
 
-// stripModelSuffix 去除模型名的常见后缀
+// stripModelSuffix 去除模型名的常见后缀，使带后缀的请求回退到基础分组。
+// 循环剥离：支持组合后缀（如 "gpt-5.5-thinking-openai-compact" → "gpt-5.5"）。
+// 同时处理 [xxx] 形式的方括号后缀（如 "claude-opus-4-8[1m]" → "claude-opus-4-8"）。
 func stripModelSuffix(name string) string {
+	// 连字符后缀：协议变体 + 能力变体。按长度由长到短排列，确保组合后缀（-openai-compact）
+	// 优先于其子串（-openai、-compact）被整体匹配。
 	suffixes := []string{
 		"-openai-compact",
+		"-anthropic",
 		"-openai",
 		"-compact",
-		"-anthropic",
 		"-gemini",
+		"-thinking",
+		"-reasoning",
+		"-search",
+		"-web",
+		"-1m",
 	}
-	for _, suffix := range suffixes {
-		if len(name) > len(suffix) && name[len(name)-len(suffix):] == suffix {
-			return name[:len(name)-len(suffix)]
+	for {
+		original := name
+		// 先剥方括号后缀，如 [1m]、[thinking]：仅当方括号在末尾且前面还有基础名时剥离。
+		if idx := lastIndexByte(name, '['); idx > 0 && name[len(name)-1] == ']' {
+			name = name[:idx]
+		}
+		for _, suffix := range suffixes {
+			if len(name) > len(suffix) && name[len(name)-len(suffix):] == suffix {
+				name = name[:len(name)-len(suffix)]
+				break
+			}
+		}
+		// 一轮下来没有任何剥离，说明已到基础名，停止。
+		if name == original {
+			break
 		}
 	}
 	return name
+}
+
+// lastIndexByte 返回 b 在 s 中最后出现的下标，不存在返回 -1。
+func lastIndexByte(s string, b byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }
 
 func GroupCreate(group *model.Group, ctx context.Context) error {

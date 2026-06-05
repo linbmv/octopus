@@ -39,6 +39,36 @@ func TestStripModelSuffix(t *testing.T) {
 			expected: "gemini-pro",
 		},
 		{
+			name:     "remove -thinking",
+			input:    "claude-opus-4-8-thinking",
+			expected: "claude-opus-4-8",
+		},
+		{
+			name:     "remove -1m",
+			input:    "claude-opus-4-8-1m",
+			expected: "claude-opus-4-8",
+		},
+		{
+			name:     "remove [1m] bracket suffix",
+			input:    "claude-opus-4-8[1m]",
+			expected: "claude-opus-4-8",
+		},
+		{
+			name:     "remove combined -thinking-openai-compact",
+			input:    "gpt-5.5-thinking-openai-compact",
+			expected: "gpt-5.5",
+		},
+		{
+			name:     "remove combined -thinking[1m]",
+			input:    "claude-opus-4-8-thinking[1m]",
+			expected: "claude-opus-4-8",
+		},
+		{
+			name:     "remove -reasoning",
+			input:    "grok-4.3-reasoning",
+			expected: "grok-4.3",
+		},
+		{
 			name:     "no suffix to remove",
 			input:    "gpt-4-turbo",
 			expected: "gpt-4-turbo",
