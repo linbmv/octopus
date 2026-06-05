@@ -77,9 +77,12 @@ func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key s
 		}
 	case llm.RequestTypeCompact:
 		switch channelType {
-		case llm.APIFormatOpenAIChatCompletion,
-			llm.APIFormatOpenAIResponse,
+		case llm.APIFormatOpenAIChatCompletion:
+			// compact 请求转发给 OpenAI Chat 渠道时，用 /v1/chat/completions 端点（中转站不支持 /v1/responses/compact）
+			return openai.NewOutboundTransformer(baseURL, key)
+		case llm.APIFormatOpenAIResponse,
 			llm.APIFormatOpenAIResponseCompact:
+			// 只有渠道本身支持 responses API 时，才用 /v1/responses/compact 端点
 			return responses.NewOutboundTransformer(baseURL, key)
 		default:
 			return nil, fmt.Errorf("channel type %s is not compatible with %s request", channelType, requestType)
