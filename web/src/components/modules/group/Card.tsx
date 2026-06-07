@@ -97,10 +97,10 @@ export function GroupCard({ group }: { group: Group }) {
             .sort((a, b) => a.priority - b.priority)
             .map((item) => ({
                 id: modelChannelKey(item.channel_id, item.model_name),
-                name: item.model_name,
+                name: item.model_name ?? '',
                 enabled: enabledByKey.get(modelChannelKey(item.channel_id, item.model_name)) ?? true,
-                channel_id: item.channel_id,
-                channel_name: channelNameByKey.get(modelChannelKey(item.channel_id, item.model_name)) ?? `Channel ${item.channel_id}`,
+                channel_id: item.channel_id ?? 0,
+                channel_name: channelNameByKey.get(modelChannelKey(item.channel_id, item.model_name)) ?? `Channel ${item.channel_id ?? 0}`,
                 item_id: item.id,
                 weight: item.weight,
                 disabled: item.disabled ?? false,
