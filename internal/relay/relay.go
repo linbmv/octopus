@@ -381,7 +381,7 @@ func (ra *relayAttempt) forward() (int, error) {
 	}
 
 	// 先按渠道原生类型尝试（Response 渠道 → /v1/responses/compact，Chat 渠道 → /v1/chat/completions）。
-	statusCode, fwdErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest))
+	statusCode, fwdErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest), false)
 	if fwdErr == nil {
 		return statusCode, nil
 	}
@@ -395,9 +395,9 @@ func (ra *relayAttempt) forward() (int, error) {
 			log.Warnf("compact endpoint downgrade: build chat outbound failed: %v", buildErr)
 			return statusCode, fwdErr
 		}
-		log.Infof("compact endpoint downgrade: channel=%s(%d) responses endpoint unsupported (%v), retrying via /v1/chat/completions",
-			ra.channel.Name, ra.channel.ID, fwdErr)
-		return ra.forwardWithAdapter(ctx, httpClient, chatAdapter, compactChatFallbackRequest(ra.internalRequest))
+		log.Infof("compact endpoint downgrade: channel=%s(%d), retrying via /v1/chat/completions", ra.channel.Name, ra.channel.ID)
+		// 第二次尝试使用 Chat 端点，并标记需要 Chat→Compact 响应转换
+		return ra.forwardWithAdapter(ctx, httpClient, chatAdapter, compactChatFallbackRequest(ra.internalRequest), true)
 	}
 
 	return statusCode, fwdErr
@@ -422,11 +422,13 @@ func (ra *relayAttempt) canDowngradeCompactEndpoint(fwdErr error) bool {
 
 // forwardWithAdapter 用指定出站适配器执行一次完整的 pipeline 转发。
 // 抽出此方法是为了支持同一渠道内的端点级降级（responses → chat）复用同一套转发逻辑。
+// needsChatToCompact 标记是否需要将 Chat 响应转换为 Compact 格式（端点降级场景）。
 func (ra *relayAttempt) forwardWithAdapter(
 	ctx context.Context,
 	httpClient *http.Client,
 	outAdapter transformer.Outbound,
 	outboundRequest *llm.Request,
+	needsChatToCompact bool,
 ) (int, error) {
 	// 更新活跃请求状态为等待上游（第一阶段可观测性增强）
 	UpdateState(ra.trackingID, StateWaitingUpstream)
@@ -444,11 +446,19 @@ func (ra *relayAttempt) forwardWithAdapter(
 	}
 
 	relayMiddleware := &relayPipelineMiddleware{attempt: ra}
+
+	// 如果是端点降级场景，插入 Chat→Compact 响应转换中间件
+	var middlewares []pipeline.Middleware
+	if needsChatToCompact {
+		middlewares = append(middlewares, &chatToCompactMiddleware{})
+	}
+	middlewares = append(middlewares, stream.EnsureUsage(), relayMiddleware)
+
 	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(httpClient)).
 		Pipeline(
 			&parsedRequestInbound{Inbound: ra.inAdapter, request: outboundRequest},
 			outAdapter,
-			pipeline.WithMiddlewares(stream.EnsureUsage(), relayMiddleware),
+			pipeline.WithMiddlewares(middlewares...),
 			pipeline.WithEmptyResponseDetection(),
 		).
 		Process(fwdCtx, ra.internalRequest.RawRequest)
@@ -875,4 +885,55 @@ func (in *parsedRequestInbound) TransformRequest(ctx context.Context, request *h
 	// relay 已经为选路解析过请求；pipeline 入口复用该结果，避免每次通道尝试再次解析同一份 body。
 	in.request.RawRequest = request
 	return in.request, nil
+}
+
+// chatToCompactMiddleware 将 Chat 端点的响应转换为 Compact 格式。
+// 用于端点降级场景：/v1/responses/compact 不支持时改用 /v1/chat/completions，
+// 但客户端期望收到 Compact API 响应，因此需要把 Chat 的 Choices 转换成 Compact 结构。
+type chatToCompactMiddleware struct {
+	pipeline.DummyMiddleware
+}
+
+func (c *chatToCompactMiddleware) Name() string {
+	return "chatToCompact"
+}
+
+func (c *chatToCompactMiddleware) OnOutboundLlmResponse(ctx context.Context, response *llm.Response) (*llm.Response, error) {
+	// Chat 端点返回的是 Choices 结构，需要转换为 Compact 结构
+	if response.Compact == nil && len(response.Choices) > 0 {
+		// 从第一个 Choice 提取内容
+		firstChoice := response.Choices[0]
+		output := []llm.Message{}
+		if firstChoice.Message != nil {
+			output = append(output, *firstChoice.Message)
+		}
+
+		// 构造 Compact 响应
+		response.Compact = &llm.CompactResponse{
+			Object: "response.compaction",
+			Output: output,
+		}
+	}
+
+	return response, nil
+}
+
+func (c *chatToCompactMiddleware) OnOutboundLlmStream(ctx context.Context, stream streams.Stream[*llm.Response]) (streams.Stream[*llm.Response], error) {
+	// 流式响应：将 Chat delta 转换为 Compact delta
+	return streams.Map(stream, func(event *llm.Response) *llm.Response {
+		if event.Compact == nil && len(event.Choices) > 0 {
+			firstChoice := event.Choices[0]
+			delta := []llm.Message{}
+			if firstChoice.Delta != nil {
+				delta = append(delta, *firstChoice.Delta)
+			}
+
+			// 构造 Compact event
+			event.Compact = &llm.CompactResponse{
+				Object: "response.compaction.delta",
+				Output: delta,
+			}
+		}
+		return event
+	}), nil
 }
