@@ -128,19 +128,37 @@ func (r *relayRun) run() {
 
 func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 	item := r.iter.Item()
+	return r.resolveGroupItem(item, r.iter.IsSticky(), r.iter.StickyKeyID())
+}
+
+func (r *relayRun) resolveGroupItem(
+	item dbmodel.GroupItem,
+	sticky bool,
+	stickyKeyID int,
+) (*relayAttempt, error) {
 	channel, err := op.ChannelGet(item.ChannelID, r.c.Request.Context())
 	if err != nil {
 		log.Warnf("failed to get channel %d: %v", item.ChannelID, err)
-		r.iter.Skip(item.ChannelID, 0, fmt.Sprintf("channel_%d", item.ChannelID), fmt.Sprintf("channel not found: %v", err))
+		msg := fmt.Sprintf("channel not found: %v", err)
+		r.iter.Skip(item.ChannelID, 0, fmt.Sprintf("channel_%d", item.ChannelID), msg)
 		return nil, err
 	}
+
+	return r.buildRealAttempt(channel, item, sticky, stickyKeyID)
+}
+
+func (r *relayRun) buildRealAttempt(
+	channel *dbmodel.Channel,
+	item dbmodel.GroupItem,
+	sticky bool,
+	stickyKeyID int,
+) (*relayAttempt, error) {
 	if !channel.Enabled {
 		r.iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
 		return nil, nil
 	}
 
 	usedKey := dbmodel.ChannelKey{}
-	stickyKeyID := r.iter.StickyKeyID()
 	if stickyKeyID > 0 {
 		usedKey = channel.GetChannelKeyByID(stickyKeyID)
 	}
@@ -151,7 +169,7 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 		r.iter.Skip(channel.ID, 0, channel.Name, "no available key")
 		return nil, nil
 	}
-	// 清洗一次本次实际使用的 key 备注，供熔断跳过记录、终端日志和 attempt 持久化复用。
+
 	keyRemark := cleanKeyRemark(usedKey.Remark)
 	if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {
 		return nil, nil
@@ -163,17 +181,16 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 		return nil, nil
 	}
 
-	// 每次尝试都把客户端模型改成本次候选的实际上游模型；重试时会被下一候选覆盖。
 	r.internalRequest.Model = item.ModelName
 	r.metrics.ActualModel = item.ModelName
 	r.metrics.ParamOverride = ""
-	// 重置上次尝试的出站摘要，避免重试到非透传渠道时残留上一候选的 raw passthrough 摘要。
 	r.metrics.OutboundRequestSummary = nil
+
 	log.Infof(
 		"request model %s, mode: %d, forwarding to channel: %s model: %s "+
 			"(attempt %d/%d, sticky=%t, channel_id=%d, channel_key_id=%d, sticky_key_id=%d, key_remark=%s)",
 		r.metrics.RequestModel, r.group.Mode, channel.Name, item.ModelName,
-		r.iter.Index()+1, r.iter.Len(), r.iter.IsSticky(),
+		r.iter.Index()+1, r.iter.Len(), sticky,
 		channel.ID, usedKey.ID, stickyKeyID, safeKeyRemark(usedKey.Remark),
 	)
 
@@ -188,7 +205,13 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 
 // run 统一管理一次通道尝试的完整生命周期。
 func (ra *relayAttempt) run() (bool, error) {
-	span := ra.iter.StartAttempt(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, ra.keyRemark)
+	span := ra.iter.StartAttempt(
+		ra.channel.ID,
+		ra.usedKey.ID,
+		ra.channel.Name,
+		ra.keyRemark,
+	)
+	ra.span = span // 保存 span 到 relayAttempt，供 writeStream 记录首 token 时间
 
 	// 开始跟踪活跃请求
 	ra.trackingID = StartTracking(
@@ -200,6 +223,11 @@ func (ra *relayAttempt) run() (bool, error) {
 		ra.iter.Index()+1,
 	)
 	defer StopTracking(ra.trackingID)
+
+	// attempt 开始日志（第一阶段可观测性增强）
+	log.Infof("attempt %d/%d start: channel=%s(%d), key=%d, sticky=%t, model=%s",
+		ra.iter.Index()+1, ra.iter.Len(),
+		ra.channel.Name, ra.channel.ID, ra.usedKey.ID, ra.iter.IsSticky(), ra.metrics.ActualModel)
 
 	upstreamStatusCode, fwdErr := ra.forward()
 	if fwdErr == nil && upstreamStatusCode == 0 {
@@ -218,7 +246,34 @@ func (ra *relayAttempt) run() (bool, error) {
 			RequestSuccess: 1,
 		})
 		balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
-		balancer.SetSticky(ra.metrics.APIKeyID, ra.metrics.RequestModel, ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
+
+		// 慢成功不刷新 sticky（第二阶段健康粘性，默认关闭）
+		shouldSticky := true
+		firstTokenMs := int64(0)
+		healthyTimeout, err := op.SettingGetInt(dbmodel.SettingKeyStickyHealthyFirstTokenTimeout)
+		if err == nil && healthyTimeout > 0 {
+			shouldSticky, firstTokenMs = shouldRefreshSticky(span, healthyTimeout)
+			if !shouldSticky {
+				log.Infof("slow success, skip sticky: channel=%s(%d), first_token=%dms, threshold=%ds",
+					ra.channel.Name, ra.channel.ID, firstTokenMs, healthyTimeout)
+			}
+		}
+
+		if shouldSticky {
+			balancer.SetSticky(ra.metrics.APIKeyID, ra.metrics.RequestModel, ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
+		}
+
+		// attempt 成功日志（第一阶段可观测性增强）
+		if firstTokenMs == 0 {
+			if d, ok := span.FirstTokenDuration(); ok {
+				firstTokenMs = d.Milliseconds()
+			}
+		}
+		log.Infof("attempt %d/%d success: channel=%s(%d), key=%d, duration=%dms, first_token=%dms, sticky_updated=%t",
+			ra.iter.Index()+1, ra.iter.Len(),
+			ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
+			span.Duration().Milliseconds(), firstTokenMs, shouldSticky)
+
 		return false, nil
 	}
 
@@ -230,7 +285,26 @@ func (ra *relayAttempt) run() (bool, error) {
 	})
 	balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 
+	// attempt 失败日志（第一阶段可观测性增强）
+	log.Warnf("attempt %d/%d failed: channel=%s(%d), key=%d, duration=%dms, error=%v",
+		ra.iter.Index()+1, ra.iter.Len(),
+		ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
+		span.Duration().Milliseconds(), fwdErr)
+
 	return ra.c.Writer.Written(), fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
+}
+
+func shouldRefreshSticky(span *balancer.AttemptSpan, healthyTimeoutSec int) (bool, int64) {
+	if healthyTimeoutSec <= 0 || span == nil {
+		return true, 0
+	}
+	firstTokenDuration, ok := span.FirstTokenDuration()
+	if !ok {
+		// 非流式请求没有首 token 语义，保持既有成功即刷新粘性的行为。
+		return true, 0
+	}
+	firstTokenMs := firstTokenDuration.Milliseconds()
+	return firstTokenMs <= int64(healthyTimeoutSec)*1000, firstTokenMs
 }
 
 // parseRequest 解析并验证入站请求
@@ -272,7 +346,7 @@ var errFirstTokenTimeout = errors.New("first token timeout")
 //   - release 在本次尝试结束时调用，停止计时并释放 context 资源。
 //
 // 计时器回调与 stop 通过同一个 settled CAS 互斥决断：谁先成功谁生效，
-// 消除“首事件已到但尚未处理时计时器误触发取消”的竞态（误切通道/截断流）。
+// 消除"首事件已到但尚未处理时计时器误触发取消"的竞态（误切通道/截断流）。
 func newFirstTokenGuard(parent context.Context, timeout time.Duration) (ctx context.Context, stop func(), release func()) {
 	cctx, cancel := context.WithCancelCause(parent)
 	var settled atomic.Bool
@@ -306,9 +380,12 @@ func (ra *relayAttempt) forward() (int, error) {
 		return 0, err
 	}
 
-	// 首字超时覆盖“发出上游请求 → 收到首个 token”全过程，包含 pipeline.Process 内部阻塞等待响应头的阶段。
+	// 更新活跃请求状态为等待上游（第一阶段可观测性增强）
+	UpdateState(ra.trackingID, StateWaitingUpstream)
+
+	// 首字超时覆盖"发出上游请求 → 收到首个 token"全过程，包含 pipeline.Process 内部阻塞等待响应头的阶段。
 	// 出站 HTTP client 没有响应头超时，仅靠 SSE 建立后的计时器无法打断仍卡在 client.Do 等响应头的请求。
-	// 只对客户端流式请求生效：非流式没有“首个 token”语义，整段响应可能合法地长于该阈值。
+	// 只对客户端流式请求生效：非流式没有"首个 token"语义，整段响应可能合法地长于该阈值。
 	fwdCtx := ctx
 	stopFirstTokenGuard := func() {}
 	wantStream := ra.internalRequest.Stream != nil && *ra.internalRequest.Stream
@@ -321,7 +398,7 @@ func (ra *relayAttempt) forward() (int, error) {
 	relayMiddleware := &relayPipelineMiddleware{attempt: ra}
 	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(httpClient)).
 		Pipeline(
-			&parsedRequestInbound{Inbound: ra.inAdapter, request: ra.internalRequest},
+			&parsedRequestInbound{Inbound: ra.inAdapter, request: requestForOutboundPipeline(ra.channel.Type, ra.internalRequest)},
 			ra.outAdapter,
 			pipeline.WithMiddlewares(stream.EnsureUsage(), relayMiddleware),
 			pipeline.WithEmptyResponseDetection(),
@@ -346,7 +423,7 @@ func (ra *relayAttempt) forward() (int, error) {
 	if result.Response == nil {
 		return 0, fmt.Errorf("empty pipeline response")
 	}
-	ra.metrics.InternalResponse = result.Response.Body
+	body := result.Response.Body
 	statusCode := result.Response.StatusCode
 	if statusCode == 0 {
 		statusCode = http.StatusOK
@@ -364,11 +441,12 @@ func (ra *relayAttempt) forward() (int, error) {
 	}
 
 	// 软错误检测：HTTP 200 但内容是错误，触发重试
-	if isSoftError(statusCode, result.Response.Body, contentType) {
+	if isSoftError(statusCode, body, contentType) {
 		return statusCode, fmt.Errorf("soft error detected: upstream returned 200 but content indicates error")
 	}
 
-	ra.c.Data(statusCode, contentType, result.Response.Body)
+	ra.metrics.InternalResponse = body
+	ra.c.Data(statusCode, contentType, body)
 	return statusCode, nil
 }
 
@@ -513,7 +591,7 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 		for clientStream.Next() {
 			event := clientStream.Current()
 			// 收到首个有效事件立刻停掉首字超时计时器：在事件入队前就赢下与计时器的 CAS 竞态，
-			// 消除“事件已到、主循环尚未取走”窗口内计时器误取消 context 导致误切通道/截断流的问题。
+			// 消除"事件已到、主循环尚未取走"窗口内计时器误取消 context 导致误切通道/截断流的问题。
 			if readerFirst && event != nil && len(event.Data) > 0 {
 				stopFirstTokenGuard()
 				readerFirst = false
@@ -576,23 +654,29 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 				continue
 			}
 			// 这里只临时保存 pipeline 已经转换好的客户端格式事件，正常结束后聚合成最终响应体用于日志；不会把分片逐条落库。
-			responseEvents = append(responseEvents, r.event)
+			event := r.event
+			responseEvents = append(responseEvents, event)
 			if firstToken {
-				ra.metrics.FirstTokenTime = time.Now()
+				now := time.Now()
+				ra.metrics.FirstTokenTime = now
+				// 记录首 token 时间到 attempt span（第一阶段可观测性增强）
+				if ra.span != nil {
+					ra.span.RecordFirstToken(now)
+				}
 				firstToken = false
 				// 首字超时计时器已由 reader 协程在事件入队前停掉，这里只记录首 token 时间。
 				// 仍兜底调用一次（幂等）以防 reader 停表路径未覆盖到的边界。
 				stopFirstTokenGuard()
 			}
 
-			ra.c.SSEvent(r.event.Type, r.event.Data)
+			ra.c.SSEvent(event.Type, event.Data)
 			ra.c.Writer.Flush()
 		}
 	}
 }
 
 // cleanKeyRemark 清洗渠道 key 备注用于持久化：去除控制字符、trim、截断到 64 rune。
-// 空备注返回空字符串，便于日志层用 omitempty 省略、前端按“仅显示备注”处理。
+// 空备注返回空字符串，便于日志层用 omitempty 省略、前端按"仅显示备注"处理。
 func cleanKeyRemark(remark string) string {
 	remark = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
@@ -653,6 +737,32 @@ func (m *relayPipelineMiddleware) OnOutboundLlmResponse(ctx context.Context, res
 		m.attempt.metrics.RecordUsage(response.Usage)
 	}
 	return response, nil
+}
+
+func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request) *llm.Request {
+	if request == nil {
+		return nil
+	}
+
+	// 浅拷贝值类型字段
+	attemptRequest := *request
+
+	// 深拷贝引用类型字段，避免多 attempt 重试时互相污染
+	// Stream 是 *bool，需要深拷贝防止多个 attempt 共享同一个 bool 指针
+	if request.Stream != nil {
+		streamCopy := *request.Stream
+		attemptRequest.Stream = &streamCopy
+	}
+
+	// RawRequest 由 parsedRequestInbound.TransformRequest 每次重新赋值，不需要拷贝
+	// 其他值类型字段（Model, RequestType 等）浅拷贝已足够
+
+	// Compact 降级只改当前 attempt 的副本
+	if channelType == llm.APIFormatOpenAIChatCompletion && request.RequestType == llm.RequestTypeCompact {
+		attemptRequest.RequestType = llm.RequestTypeChat
+	}
+
+	return &attemptRequest
 }
 
 // parsedRequestInbound 让 pipeline 复用 relay 在选路前已经解析好的 llm.Request。

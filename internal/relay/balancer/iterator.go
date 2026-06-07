@@ -205,3 +205,106 @@ func (s *AttemptSpan) End(status model.AttemptStatus, msg string) {
 func (s *AttemptSpan) Duration() time.Duration {
 	return time.Since(s.startTime)
 }
+
+// SkipFor 记录指定 item 的跳过（允许为非当前 item 记录 attempt）
+// 用于虚拟渠道：虚拟渠道本身不是真实 attempt，但需要记录重定向决策
+func (it *Iterator) SkipFor(
+	item model.GroupItem,
+	sticky bool,
+	channelID int,
+	channelKeyID int,
+	channelName string,
+	msg string,
+) {
+	it.count++
+	it.attempts = append(it.attempts, model.ChannelAttempt{
+		ChannelID:    channelID,
+		ChannelKeyID: channelKeyID,
+		ChannelName:  channelName,
+		ModelName:    item.ModelName,
+		AttemptNum:   it.count,
+		Status:       model.AttemptSkipped,
+		Sticky:       sticky,
+		Msg:          msg,
+	})
+}
+
+// RedirectFor 记录虚拟渠道重定向到目标分组
+func (it *Iterator) RedirectFor(
+	item model.GroupItem,
+	virtualChannelID int,
+	virtualChannelName string,
+	targetGroupID int,
+	targetGroupName string,
+	depth int,
+	msg string,
+) {
+	it.count++
+	it.attempts = append(it.attempts, model.ChannelAttempt{
+		ChannelID:   virtualChannelID,
+		ChannelName: virtualChannelName,
+		ModelName:   item.ModelName,
+		AttemptNum:  it.count,
+		Status:      model.AttemptRedirect,
+		Msg:         fmt.Sprintf("redirect to group %d(%s), depth=%d: %s", targetGroupID, targetGroupName, depth, msg),
+	})
+}
+
+// SkipCircuitBreakFor 检查熔断状态并记录（允许为指定 item 检查和记录）
+func (it *Iterator) SkipCircuitBreakFor(
+	item model.GroupItem,
+	sticky bool,
+	channelID int,
+	channelKeyID int,
+	channelName string,
+	channelKeyRemark string,
+) bool {
+	tripped, remaining := IsTripped(channelID, channelKeyID, item.ModelName)
+	if !tripped {
+		return false
+	}
+
+	msg := "circuit breaker tripped"
+	if remaining > 0 {
+		msg = fmt.Sprintf("circuit breaker tripped, remaining cooldown: %ds", int(remaining.Seconds()))
+	}
+
+	it.count++
+	it.attempts = append(it.attempts, model.ChannelAttempt{
+		ChannelID:        channelID,
+		ChannelKeyID:     channelKeyID,
+		ChannelKeyRemark: channelKeyRemark,
+		ChannelName:      channelName,
+		ModelName:        item.ModelName,
+		AttemptNum:       it.count,
+		Status:           model.AttemptCircuitBreak,
+		Sticky:           sticky,
+		Msg:              msg,
+	})
+	return true
+}
+
+// StartAttemptFor 开始一次真实转发尝试（允许为指定 item 开始 attempt）
+func (it *Iterator) StartAttemptFor(
+	item model.GroupItem,
+	sticky bool,
+	channelID int,
+	channelKeyID int,
+	channelName string,
+	channelKeyRemark string,
+) *AttemptSpan {
+	it.count++
+	return &AttemptSpan{
+		attempt: model.ChannelAttempt{
+			ChannelID:        channelID,
+			ChannelKeyID:     channelKeyID,
+			ChannelKeyRemark: channelKeyRemark,
+			ChannelName:      channelName,
+			ModelName:        item.ModelName,
+			AttemptNum:       it.count,
+			Sticky:           sticky,
+		},
+		startTime: time.Now(),
+		iter:      it,
+	}
+}

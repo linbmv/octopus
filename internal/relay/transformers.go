@@ -78,7 +78,8 @@ func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key s
 	case llm.RequestTypeCompact:
 		switch channelType {
 		case llm.APIFormatOpenAIChatCompletion:
-			// compact 请求转发给 OpenAI Chat 渠道时，用 /v1/chat/completions 端点（中转站不支持 /v1/responses/compact）
+			// compact 请求转发给 OpenAI Chat 渠道时，用 /v1/chat/completions 端点。
+			// 请求类型降级只在当前 attempt 的 pipeline request 副本中完成，避免污染后续 Response 渠道重试。
 			return openai.NewOutboundTransformer(baseURL, key)
 		case llm.APIFormatOpenAIResponse,
 			llm.APIFormatOpenAIResponseCompact:
