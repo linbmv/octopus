@@ -8,3 +8,9 @@
 - Ran `go mod tidy`.
 - Ran `go test -count=1 ./...`; all Go packages passed.
 - Checked `git diff -- go.mod go.sum`; dependency diff is limited to the axonhub/llm version and checksum.
+
+## 2026-06-07 fork update-source cleanup
+
+- Removed the frontend Settings Info latest-version/update prompt for this forked build.
+- Changed the default frontend repository link from `bestruirui/octopus` to `linbmv/octopus`.
+- Changed backend update release URLs and version metadata to `linbmv/octopus` so direct update API calls do not pull the original upstream release.
