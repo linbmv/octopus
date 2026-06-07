@@ -228,16 +228,53 @@ func lastIndexByte(s string, b byte) int {
 func GroupCreate(group *model.Group, ctx context.Context) error {
 	// 新建分组默认启用：bool 零值为 false，create payload 未带 enabled 时强制为 true，避免误建成禁用。
 	group.Enabled = true
-	for i := range group.Items {
-		group.Items[i].Type = normalizeGroupItemType(group.Items[i].Type)
-		group.Items[i].ModelName = strings.TrimSpace(group.Items[i].ModelName)
-		if err := validateGroupItemFields(group.ID, group.Items[i].Type, group.Items[i].ChannelID, group.Items[i].TargetGroupID, group.Items[i].ModelName); err != nil {
+
+	items := group.Items
+	group.Items = nil
+
+	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		group.Items = items
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	if err := tx.Omit("Items").Create(group).Error; err != nil {
+		tx.Rollback()
+		group.Items = items
+		return err
+	}
+
+	for i := range items {
+		items[i].GroupID = group.ID
+		items[i].Type = normalizeGroupItemType(items[i].Type)
+		items[i].ModelName = strings.TrimSpace(items[i].ModelName)
+		if err := validateGroupItemFields(tx, group.ID, items[i].Type, items[i].ChannelID, items[i].TargetGroupID, items[i].ModelName); err != nil {
+			tx.Rollback()
+			group.Items = items
 			return err
 		}
 	}
-	if err := db.GetDB().WithContext(ctx).Create(group).Error; err != nil {
-		return err
+
+	if len(items) > 0 {
+		if err := tx.Create(&items).Error; err != nil {
+			tx.Rollback()
+			group.Items = items
+			return err
+		}
 	}
+
+	if err := tx.Commit().Error; err != nil {
+		group.Items = items
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	group.Items = items
 	groupCache.Set(group.ID, *group)
 	groupMap.Set(group.Name, *group)
 	return nil
@@ -251,11 +288,22 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 	oldName := oldGroup.Name
 
 	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
+
+	if containsNestedGroupItemAdd(req.ItemsToAdd) {
+		if err := lockGroupRowsForNestingTx(tx); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+	}
 
 	var selectFields []string
 	updates := model.Group{ID: req.ID}
@@ -345,7 +393,7 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 		for i, item := range req.ItemsToAdd {
 			itemType := normalizeGroupItemType(item.Type)
 			modelName := strings.TrimSpace(item.ModelName)
-			if err := validateGroupItemFields(req.ID, itemType, item.ChannelID, item.TargetGroupID, modelName); err != nil {
+			if err := validateGroupItemFields(tx, req.ID, itemType, item.ChannelID, item.TargetGroupID, modelName); err != nil {
 				tx.Rollback()
 				return nil, fmt.Errorf("invalid group item: %w", err)
 			}
@@ -383,17 +431,27 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 }
 
 func GroupDel(id int, ctx context.Context) error {
-	group, ok := groupCache.Get(id)
-	if !ok {
-		return fmt.Errorf("group not found")
-	}
-
 	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
+
+	if err := lockGroupRowsForNestingTx(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	var group model.Group
+	if err := tx.First(&group, id).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("group not found")
+	}
 
 	refs, err := findReferencingGroupItemsTx(tx, id)
 	if err != nil {
@@ -425,18 +483,37 @@ func GroupDel(id int, ctx context.Context) error {
 }
 
 func GroupItemAdd(item *model.GroupItem, ctx context.Context) error {
-	if _, ok := groupCache.Get(item.GroupID); !ok {
+	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	var group model.Group
+	if err := tx.Select("id").First(&group, item.GroupID).Error; err != nil {
+		tx.Rollback()
 		return fmt.Errorf("group not found")
 	}
 
 	item.Type = normalizeGroupItemType(item.Type)
 	item.ModelName = strings.TrimSpace(item.ModelName)
-	if err := validateGroupItemFields(item.GroupID, item.Type, item.ChannelID, item.TargetGroupID, item.ModelName); err != nil {
+	if err := validateGroupItemFields(tx, item.GroupID, item.Type, item.ChannelID, item.TargetGroupID, item.ModelName); err != nil {
+		tx.Rollback()
 		return err
 	}
 
-	if err := db.GetDB().WithContext(ctx).Create(item).Error; err != nil {
+	if err := tx.Create(item).Error; err != nil {
+		tx.Rollback()
 		return err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return groupRefreshCacheByID(item.GroupID, ctx)
@@ -622,7 +699,7 @@ func groupRefreshCacheByIDs(ids []int, ctx context.Context) error {
 	return nil
 }
 
-func validateGroupItemFields(ownerGroupID int, itemType string, channelID, targetGroupID int, modelName string) error {
+func validateGroupItemFields(tx *gorm.DB, ownerGroupID int, itemType string, channelID, targetGroupID int, modelName string) error {
 	itemType = normalizeGroupItemType(itemType)
 	modelName = strings.TrimSpace(modelName)
 
@@ -644,46 +721,46 @@ func validateGroupItemFields(ownerGroupID int, itemType string, channelID, targe
 		if ownerGroupID == targetGroupID {
 			return fmt.Errorf("group cannot reference itself")
 		}
-		if _, ok := groupCache.Get(targetGroupID); !ok {
+
+		if err := lockGroupRowsForNestingTx(tx); err != nil {
+			return err
+		}
+
+		var ownerGroup model.Group
+		if err := tx.Select("id").First(&ownerGroup, ownerGroupID).Error; err != nil {
+			return fmt.Errorf("owner group not found")
+		}
+
+		var targetGroup model.Group
+		if err := tx.Select("id").First(&targetGroup, targetGroupID).Error; err != nil {
 			return fmt.Errorf("target group not found")
 		}
-		if groupPathReaches(targetGroupID, ownerGroupID, map[int]struct{}{}) {
+
+		graph, err := buildGroupGraphFromDB(tx, ownerGroupID, targetGroupID)
+		if err != nil {
+			return err
+		}
+		if detectCycleInGraph(graph, ownerGroupID) {
 			return fmt.Errorf("group nesting creates circular reference")
+		}
+
+		// 检查从所有根节点（无入边的节点）到图中任意节点的最大深度
+		// 这样可以捕获祖先链 + 当前新增边导致的深度超限
+		maxDepthInGraph := 0
+		for node := range graph {
+			// 对每个节点计算其作为起点的最大深度
+			if nodeDepth := calculateMaxDepth(graph, node); nodeDepth > maxDepthInGraph {
+				maxDepthInGraph = nodeDepth
+			}
+		}
+		if maxDepthInGraph > maxGroupNestDepth {
+			return fmt.Errorf("group nesting depth exceeded (max %d, found %d)", maxGroupNestDepth, maxDepthInGraph)
 		}
 	default:
 		return fmt.Errorf("unsupported group item type: %s", itemType)
 	}
 
 	return nil
-}
-
-func groupPathReaches(fromGroupID, targetGroupID int, visited map[int]struct{}) bool {
-	if fromGroupID == targetGroupID {
-		return true
-	}
-	if _, ok := visited[fromGroupID]; ok {
-		return false
-	}
-	visited[fromGroupID] = struct{}{}
-
-	group, ok := groupCache.Get(fromGroupID)
-	if !ok {
-		return false
-	}
-
-	for _, item := range group.Items {
-		if normalizeGroupItemType(item.Type) != model.GroupItemTypeGroup {
-			continue
-		}
-		if item.TargetGroupID <= 0 {
-			continue
-		}
-		if groupPathReaches(item.TargetGroupID, targetGroupID, visited) {
-			return true
-		}
-	}
-
-	return false
 }
 
 func findReferencingGroupItemsTx(tx *gorm.DB, targetGroupID int) ([]string, error) {
@@ -705,4 +782,103 @@ func findReferencingGroupItemsTx(tx *gorm.DB, targetGroupID int) ([]string, erro
 	}
 	sort.Strings(refs)
 	return refs, nil
+}
+
+type groupGraph map[int][]int
+
+func containsNestedGroupItemAdd(items []model.GroupItemAddRequest) bool {
+	for _, item := range items {
+		if normalizeGroupItemType(item.Type) == model.GroupItemTypeGroup {
+			return true
+		}
+	}
+	return false
+}
+
+func lockGroupRowsForNestingTx(tx *gorm.DB) error {
+	if tx == nil {
+		return fmt.Errorf("db transaction is required")
+	}
+	var ids []int
+	if err := tx.Model(&model.Group{}).
+		Select("id").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Order("id ASC").
+		Pluck("id", &ids).Error; err != nil {
+		return fmt.Errorf("failed to lock groups for nesting: %w", err)
+	}
+	return nil
+}
+
+func buildGroupGraphFromDB(tx *gorm.DB, ownerGroupID int, newTargetGroupID int) (groupGraph, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("db transaction is required")
+	}
+	var items []model.GroupItem
+	if err := tx.Model(&model.GroupItem{}).
+		Select("group_id", "target_group_id").
+		Where("type = ? AND target_group_id > 0", model.GroupItemTypeGroup).
+		Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("failed to build group graph: %w", err)
+	}
+	graph := make(groupGraph)
+	for _, item := range items {
+		if item.GroupID <= 0 || item.TargetGroupID <= 0 {
+			continue
+		}
+		graph[item.GroupID] = append(graph[item.GroupID], item.TargetGroupID)
+		if _, ok := graph[item.TargetGroupID]; !ok {
+			graph[item.TargetGroupID] = nil
+		}
+	}
+	if ownerGroupID > 0 && newTargetGroupID > 0 {
+		graph[ownerGroupID] = append(graph[ownerGroupID], newTargetGroupID)
+		if _, ok := graph[newTargetGroupID]; !ok {
+			graph[newTargetGroupID] = nil
+		}
+	}
+	return graph, nil
+}
+
+func detectCycleInGraph(graph groupGraph, startNode int) bool {
+	visiting := map[int]struct{}{}
+	visited := map[int]struct{}{}
+	var visit func(int) bool
+	visit = func(node int) bool {
+		if _, ok := visiting[node]; ok {
+			return true
+		}
+		if _, ok := visited[node]; ok {
+			return false
+		}
+		visiting[node] = struct{}{}
+		for _, next := range graph[node] {
+			if visit(next) {
+				return true
+			}
+		}
+		delete(visiting, node)
+		visited[node] = struct{}{}
+		return false
+	}
+	return visit(startNode)
+}
+
+func calculateMaxDepth(graph groupGraph, startNode int) int {
+	var visit func(node, depth int, path map[int]struct{}) int
+	visit = func(node, depth int, path map[int]struct{}) int {
+		if _, ok := path[node]; ok {
+			return depth
+		}
+		path[node] = struct{}{}
+		maxDepth := depth
+		for _, next := range graph[node] {
+			if childDepth := visit(next, depth+1, path); childDepth > maxDepth {
+				maxDepth = childDepth
+			}
+		}
+		delete(path, node)
+		return maxDepth
+	}
+	return visit(startNode, 0, map[int]struct{}{})
 }
