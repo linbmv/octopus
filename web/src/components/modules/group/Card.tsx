@@ -94,17 +94,23 @@ export function GroupCard({ group }: { group: Group }) {
 
     const displayMembers = useMemo((): SelectedMember[] =>
         [...(group.items || [])]
+            .filter((item) => (item.type ?? 'channel') === 'channel')
             .sort((a, b) => a.priority - b.priority)
-            .map((item) => ({
-                id: modelChannelKey(item.channel_id, item.model_name),
-                name: item.model_name ?? '',
-                enabled: enabledByKey.get(modelChannelKey(item.channel_id, item.model_name)) ?? true,
-                channel_id: item.channel_id ?? 0,
-                channel_name: channelNameByKey.get(modelChannelKey(item.channel_id, item.model_name)) ?? `Channel ${item.channel_id ?? 0}`,
-                item_id: item.id,
-                weight: item.weight,
-                disabled: item.disabled ?? false,
-            })),
+            .map((item) => {
+                const channelID = item.channel_id ?? 0;
+                const modelName = item.model_name ?? '';
+                const key = modelChannelKey(channelID, modelName);
+                return {
+                    id: key,
+                    name: modelName,
+                    enabled: enabledByKey.get(key) ?? true,
+                    channel_id: channelID,
+                    channel_name: channelNameByKey.get(key) ?? `Channel ${channelID}`,
+                    item_id: item.id,
+                    weight: item.weight,
+                    disabled: item.disabled ?? false,
+                };
+            }),
         [group.items, channelNameByKey, enabledByKey]
     );
 
@@ -226,7 +232,9 @@ export function GroupCard({ group }: { group: Group }) {
     const handleSubmitEdit = useCallback((values: GroupEditorValues, onDone?: () => void) => {
         if (!group.id) return;
 
-        const originalItems = [...(group.items || [])].sort((a, b) => a.priority - b.priority);
+        const originalItems = [...(group.items || [])]
+            .filter((item) => (item.type ?? 'channel') === 'channel')
+            .sort((a, b) => a.priority - b.priority);
         const originalById = new Map<number, { priority: number; weight: number }>();
         const originalIds = new Set<number>();
         originalItems.forEach((it) => {

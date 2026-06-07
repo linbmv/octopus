@@ -230,6 +230,10 @@ func GroupCreate(group *model.Group, ctx context.Context) error {
 	group.Enabled = true
 	for i := range group.Items {
 		group.Items[i].Type = normalizeGroupItemType(group.Items[i].Type)
+		group.Items[i].ModelName = strings.TrimSpace(group.Items[i].ModelName)
+		if err := validateGroupItemFields(group.ID, group.Items[i].Type, group.Items[i].ChannelID, group.Items[i].TargetGroupID, group.Items[i].ModelName); err != nil {
+			return err
+		}
 	}
 	if err := db.GetDB().WithContext(ctx).Create(group).Error; err != nil {
 		return err
@@ -340,12 +344,18 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 		newItems := make([]model.GroupItem, len(req.ItemsToAdd))
 		for i, item := range req.ItemsToAdd {
 			itemType := normalizeGroupItemType(item.Type)
+			modelName := strings.TrimSpace(item.ModelName)
+			if err := validateGroupItemFields(req.ID, itemType, item.ChannelID, item.TargetGroupID, modelName); err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("invalid group item: %w", err)
+			}
+
 			newItems[i] = model.GroupItem{
 				GroupID:       req.ID,
 				Type:          itemType,
 				ChannelID:     item.ChannelID,
 				TargetGroupID: item.TargetGroupID,
-				ModelName:     item.ModelName,
+				ModelName:     modelName,
 				Priority:      item.Priority,
 				Weight:        item.Weight,
 			}
@@ -378,17 +388,22 @@ func GroupDel(id int, ctx context.Context) error {
 		return fmt.Errorf("group not found")
 	}
 
-	// 检查是否有其他分组成员引用此分组
-	if refs := findReferencingGroupItems(id); len(refs) > 0 {
-		return fmt.Errorf("cannot delete group: referenced by groups: %v", refs)
-	}
-
 	tx := db.GetDB().WithContext(ctx).Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
 		}
 	}()
+
+	refs, err := findReferencingGroupItemsTx(tx, id)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	if len(refs) > 0 {
+		tx.Rollback()
+		return fmt.Errorf("cannot delete group: referenced by groups: %v", refs)
+	}
 
 	if err := tx.Where("group_id = ?", id).Delete(&model.GroupItem{}).Error; err != nil {
 		tx.Rollback()
@@ -409,28 +424,17 @@ func GroupDel(id int, ctx context.Context) error {
 	return nil
 }
 
-func findReferencingGroupItems(targetGroupID int) []string {
-	refs := make([]string, 0)
-	for _, group := range groupCache.GetAll() {
-		for _, item := range group.Items {
-			if normalizeGroupItemType(item.Type) != model.GroupItemTypeGroup {
-				continue
-			}
-			if item.TargetGroupID == targetGroupID {
-				refs = append(refs, fmt.Sprintf("%s(item:%d)", group.Name, item.ID))
-			}
-		}
-	}
-	sort.Strings(refs)
-	return refs
-}
-
 func GroupItemAdd(item *model.GroupItem, ctx context.Context) error {
 	if _, ok := groupCache.Get(item.GroupID); !ok {
 		return fmt.Errorf("group not found")
 	}
 
 	item.Type = normalizeGroupItemType(item.Type)
+	item.ModelName = strings.TrimSpace(item.ModelName)
+	if err := validateGroupItemFields(item.GroupID, item.Type, item.ChannelID, item.TargetGroupID, item.ModelName); err != nil {
+		return err
+	}
+
 	if err := db.GetDB().WithContext(ctx).Create(item).Error; err != nil {
 		return err
 	}
@@ -616,4 +620,89 @@ func groupRefreshCacheByIDs(ids []int, ctx context.Context) error {
 		groupMap.Set(group.Name, group)
 	}
 	return nil
+}
+
+func validateGroupItemFields(ownerGroupID int, itemType string, channelID, targetGroupID int, modelName string) error {
+	itemType = normalizeGroupItemType(itemType)
+	modelName = strings.TrimSpace(modelName)
+
+	switch itemType {
+	case model.GroupItemTypeChannel:
+		if channelID <= 0 || modelName == "" {
+			return fmt.Errorf("channel group item requires channel_id and model_name")
+		}
+		if targetGroupID != 0 {
+			return fmt.Errorf("channel group item cannot set target_group_id")
+		}
+	case model.GroupItemTypeGroup:
+		if targetGroupID <= 0 {
+			return fmt.Errorf("nested group item requires target_group_id")
+		}
+		if channelID != 0 || modelName != "" {
+			return fmt.Errorf("nested group item cannot set channel_id or model_name")
+		}
+		if ownerGroupID == targetGroupID {
+			return fmt.Errorf("group cannot reference itself")
+		}
+		if _, ok := groupCache.Get(targetGroupID); !ok {
+			return fmt.Errorf("target group not found")
+		}
+		if groupPathReaches(targetGroupID, ownerGroupID, map[int]struct{}{}) {
+			return fmt.Errorf("group nesting creates circular reference")
+		}
+	default:
+		return fmt.Errorf("unsupported group item type: %s", itemType)
+	}
+
+	return nil
+}
+
+func groupPathReaches(fromGroupID, targetGroupID int, visited map[int]struct{}) bool {
+	if fromGroupID == targetGroupID {
+		return true
+	}
+	if _, ok := visited[fromGroupID]; ok {
+		return false
+	}
+	visited[fromGroupID] = struct{}{}
+
+	group, ok := groupCache.Get(fromGroupID)
+	if !ok {
+		return false
+	}
+
+	for _, item := range group.Items {
+		if normalizeGroupItemType(item.Type) != model.GroupItemTypeGroup {
+			continue
+		}
+		if item.TargetGroupID <= 0 {
+			continue
+		}
+		if groupPathReaches(item.TargetGroupID, targetGroupID, visited) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func findReferencingGroupItemsTx(tx *gorm.DB, targetGroupID int) ([]string, error) {
+	var rows []struct {
+		GroupName string `gorm:"column:group_name"`
+		ItemID    int    `gorm:"column:item_id"`
+	}
+	if err := tx.Table("group_items").
+		Select("groups.name AS group_name, group_items.id AS item_id").
+		Joins("JOIN groups ON groups.id = group_items.group_id").
+		Where("group_items.type = ? AND group_items.target_group_id = ?", model.GroupItemTypeGroup, targetGroupID).
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("failed to find referencing group items: %w", err)
+	}
+
+	refs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		refs = append(refs, fmt.Sprintf("%s(item:%d)", row.GroupName, row.ItemID))
+	}
+	sort.Strings(refs)
+	return refs, nil
 }

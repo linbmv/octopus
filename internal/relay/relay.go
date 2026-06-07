@@ -753,6 +753,19 @@ func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request)
 		streamCopy := *request.Stream
 		attemptRequest.Stream = &streamCopy
 	}
+	if request.StreamOptions != nil {
+		streamOptionsCopy := *request.StreamOptions
+		attemptRequest.StreamOptions = &streamOptionsCopy
+	}
+	if request.LogitBias != nil {
+		attemptRequest.LogitBias = maps.Clone(request.LogitBias)
+	}
+	if request.Metadata != nil {
+		attemptRequest.Metadata = maps.Clone(request.Metadata)
+	}
+	if request.Modalities != nil {
+		attemptRequest.Modalities = slices.Clone(request.Modalities)
+	}
 
 	// RawRequest 由 parsedRequestInbound.TransformRequest 每次重新赋值，不需要拷贝
 	// 其他值类型字段（Model, RequestType 等）浅拷贝已足够
