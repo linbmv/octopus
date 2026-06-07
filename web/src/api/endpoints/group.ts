@@ -8,8 +8,10 @@ import { logger } from '@/lib/logger';
 export interface GroupItem {
     id?: number;
     group_id?: number;
-    channel_id: number;
-    model_name: string;
+    type?: 'channel' | 'group';
+    channel_id?: number;
+    target_group_id?: number;
+    model_name?: string;
     priority: number;
     weight: number;
     disabled?: boolean;
@@ -43,8 +45,10 @@ export interface Group {
  * 新增 item 请求
  */
 export interface GroupItemAddRequest {
-    channel_id: number;
-    model_name: string;
+    type?: 'channel' | 'group';
+    channel_id?: number;
+    target_group_id?: number;
+    model_name?: string;
     priority: number;
     weight: number;
 }

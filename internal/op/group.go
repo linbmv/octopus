@@ -3,6 +3,8 @@ package op
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
@@ -13,6 +15,8 @@ import (
 
 var groupCache = cache.New[int, model.Group](16)
 var groupMap = cache.New[string, model.Group](16)
+
+const maxGroupNestDepth = 3
 
 func GroupList(ctx context.Context) ([]model.Group, error) {
 	groups := make([]model.Group, 0, groupCache.Len())
@@ -58,29 +62,119 @@ func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
 	}
 
 processGroup:
-	// 整个分组被临时禁用：返回空候选，让 relay 走“无可用通道”路径，分组本身仍存在于管理列表。
+	return expandEnabledGroup(group)
+}
+
+// GroupGetEnabledByID 根据分组 ID 获取启用的分组，并递归展开嵌套分组成员
+func GroupGetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
+	group, ok := groupCache.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("group not found")
+	}
+	expanded, err := expandEnabledGroup(group)
+	if err != nil {
+		return nil, err
+	}
+	return &expanded, nil
+}
+
+func expandEnabledGroup(group model.Group) (model.Group, error) {
 	if !group.Enabled {
 		group.Items = nil
 		return group, nil
 	}
-	if len(group.Items) == 0 {
-		group.Items = nil
-		return group, nil
+	visited := map[int]struct{}{group.ID: {}}
+	items, err := expandGroupItems(group, 0, visited)
+	if err != nil {
+		return model.Group{}, err
+	}
+	group.Items = items
+	return group, nil
+}
+
+func expandGroupItems(group model.Group, depth int, visited map[int]struct{}) ([]model.GroupItem, error) {
+	if depth > maxGroupNestDepth {
+		return nil, fmt.Errorf("group %d: nesting depth exceeded (max %d)", group.ID, maxGroupNestDepth)
+	}
+	if !group.Enabled || len(group.Items) == 0 {
+		return nil, nil
 	}
 
-	enabledItems := make([]model.GroupItem, 0, len(group.Items))
+	out := make([]model.GroupItem, 0, len(group.Items))
 	for _, item := range group.Items {
 		if item.Disabled {
 			continue
 		}
-		channel, ok := channelCache.Get(item.ChannelID)
-		if !ok || !channel.Enabled {
+
+		itemType := normalizeGroupItemType(item.Type)
+		if itemType == model.GroupItemTypeChannel {
+			channel, ok := channelCache.Get(item.ChannelID)
+			if !ok || !channel.Enabled {
+				continue
+			}
+			out = append(out, item)
 			continue
 		}
-		enabledItems = append(enabledItems, item)
+
+		if itemType != model.GroupItemTypeGroup {
+			continue
+		}
+
+		if item.TargetGroupID <= 0 {
+			continue
+		}
+
+		if _, ok := visited[item.TargetGroupID]; ok {
+			return nil, fmt.Errorf("group %d: circular reference detected (target %d)", group.ID, item.TargetGroupID)
+		}
+
+		targetGroup, ok := groupCache.Get(item.TargetGroupID)
+		if !ok {
+			continue
+		}
+
+		if !targetGroup.Enabled {
+			continue
+		}
+
+		nextVisited := cloneIntSet(visited)
+		nextVisited[item.TargetGroupID] = struct{}{}
+
+		childItems, err := expandGroupItems(targetGroup, depth+1, nextVisited)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, childItems...)
 	}
-	group.Items = enabledItems
-	return group, nil
+
+	return out, nil
+}
+
+func normalizeGroupItemType(itemType string) string {
+	itemType = strings.TrimSpace(itemType)
+	if itemType == "" {
+		return model.GroupItemTypeChannel
+	}
+	return itemType
+}
+
+func cloneIntSet(src map[int]struct{}) map[int]struct{} {
+	dst := make(map[int]struct{}, len(src)+1)
+	for k := range src {
+		dst[k] = struct{}{}
+	}
+	return dst
+}
+
+// filterEnabledGroupItems 已被 expandEnabledGroup 替代，保留用于兼容性
+func filterEnabledGroupItems(group model.Group) model.Group {
+	expanded, err := expandEnabledGroup(group)
+	if err != nil {
+		group.Items = nil
+		return group
+	}
+	return expanded
 }
 
 // stripModelSuffix 去除模型名的常见后缀，使带后缀的请求回退到基础分组。
@@ -134,6 +228,9 @@ func lastIndexByte(s string, b byte) int {
 func GroupCreate(group *model.Group, ctx context.Context) error {
 	// 新建分组默认启用：bool 零值为 false，create payload 未带 enabled 时强制为 true，避免误建成禁用。
 	group.Enabled = true
+	for i := range group.Items {
+		group.Items[i].Type = normalizeGroupItemType(group.Items[i].Type)
+	}
 	if err := db.GetDB().WithContext(ctx).Create(group).Error; err != nil {
 		return err
 	}
@@ -242,12 +339,15 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 	if len(req.ItemsToAdd) > 0 {
 		newItems := make([]model.GroupItem, len(req.ItemsToAdd))
 		for i, item := range req.ItemsToAdd {
+			itemType := normalizeGroupItemType(item.Type)
 			newItems[i] = model.GroupItem{
-				GroupID:   req.ID,
-				ChannelID: item.ChannelID,
-				ModelName: item.ModelName,
-				Priority:  item.Priority,
-				Weight:    item.Weight,
+				GroupID:       req.ID,
+				Type:          itemType,
+				ChannelID:     item.ChannelID,
+				TargetGroupID: item.TargetGroupID,
+				ModelName:     item.ModelName,
+				Priority:      item.Priority,
+				Weight:        item.Weight,
 			}
 		}
 		if err := tx.Create(&newItems).Error; err != nil {
@@ -278,6 +378,11 @@ func GroupDel(id int, ctx context.Context) error {
 		return fmt.Errorf("group not found")
 	}
 
+	// 检查是否有其他分组成员引用此分组
+	if refs := findReferencingGroupItems(id); len(refs) > 0 {
+		return fmt.Errorf("cannot delete group: referenced by groups: %v", refs)
+	}
+
 	tx := db.GetDB().WithContext(ctx).Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -304,11 +409,28 @@ func GroupDel(id int, ctx context.Context) error {
 	return nil
 }
 
+func findReferencingGroupItems(targetGroupID int) []string {
+	refs := make([]string, 0)
+	for _, group := range groupCache.GetAll() {
+		for _, item := range group.Items {
+			if normalizeGroupItemType(item.Type) != model.GroupItemTypeGroup {
+				continue
+			}
+			if item.TargetGroupID == targetGroupID {
+				refs = append(refs, fmt.Sprintf("%s(item:%d)", group.Name, item.ID))
+			}
+		}
+	}
+	sort.Strings(refs)
+	return refs
+}
+
 func GroupItemAdd(item *model.GroupItem, ctx context.Context) error {
 	if _, ok := groupCache.Get(item.GroupID); !ok {
 		return fmt.Errorf("group not found")
 	}
 
+	item.Type = normalizeGroupItemType(item.Type)
 	if err := db.GetDB().WithContext(ctx).Create(item).Error; err != nil {
 		return err
 	}
@@ -354,6 +476,7 @@ func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context
 	for _, it := range uniq {
 		newItems = append(newItems, model.GroupItem{
 			GroupID:   groupID,
+			Type:      model.GroupItemTypeChannel,
 			ChannelID: it.ChannelID,
 			ModelName: it.ModelName,
 			Priority:  nextPriority,
@@ -364,7 +487,13 @@ func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context
 
 	if err := db.GetDB().WithContext(ctx).
 		Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "group_id"}, {Name: "channel_id"}, {Name: "model_name"}},
+			Columns: []clause.Column{
+				{Name: "group_id"},
+				{Name: "type"},
+				{Name: "channel_id"},
+				{Name: "target_group_id"},
+				{Name: "model_name"},
+			},
 			DoNothing: true,
 		}).
 		Create(&newItems).Error; err != nil {

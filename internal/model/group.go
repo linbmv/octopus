@@ -21,13 +21,20 @@ type Group struct {
 	Items             []GroupItem `json:"items,omitempty" gorm:"foreignKey:GroupID"`
 }
 
+const (
+	GroupItemTypeChannel = "channel"
+	GroupItemTypeGroup   = "group"
+)
+
 type GroupItem struct {
-	ID        int    `json:"id" gorm:"primaryKey"`
-	GroupID   int    `json:"group_id" gorm:"not null;index:idx_group_channel_model,unique"` // 创建时不携带此字段,更新时需要
-	ChannelID int    `json:"channel_id" gorm:"not null;index:idx_group_channel_model,unique"`
-	ModelName string `json:"model_name" gorm:"not null;index:idx_group_channel_model,unique"`
-	Priority  int    `json:"priority"`
-	Weight    int    `json:"weight"`
+	ID            int    `json:"id" gorm:"primaryKey"`
+	GroupID       int    `json:"group_id" gorm:"not null;index:idx_group_item_unique,unique"`
+	Type          string `json:"type" gorm:"not null;default:channel;index:idx_group_item_unique,unique"`
+	ChannelID     int    `json:"channel_id" gorm:"index:idx_group_item_unique,unique"`
+	TargetGroupID int    `json:"target_group_id" gorm:"index:idx_group_item_unique,unique"`
+	ModelName     string `json:"model_name" gorm:"index:idx_group_item_unique,unique"`
+	Priority      int    `json:"priority"`
+	Weight        int    `json:"weight"`
 	// Disabled 临时禁用该分组成员（不影响渠道本身）。零值 false 表示启用，存量数据与新建成员默认启用。
 	Disabled bool `json:"disabled" gorm:"not null;default:false"`
 }
@@ -48,10 +55,12 @@ type GroupUpdateRequest struct {
 
 // GroupItemAddRequest 新增 item 请求
 type GroupItemAddRequest struct {
-	ChannelID int    `json:"channel_id" binding:"required"`
-	ModelName string `json:"model_name" binding:"required"`
-	Priority  int    `json:"priority,omitempty"`
-	Weight    int    `json:"weight,omitempty"`
+	Type          string `json:"type,omitempty"`
+	ChannelID     int    `json:"channel_id,omitempty"`
+	TargetGroupID int    `json:"target_group_id,omitempty"`
+	ModelName     string `json:"model_name,omitempty"`
+	Priority      int    `json:"priority,omitempty"`
+	Weight        int    `json:"weight,omitempty"`
 }
 
 // GroupItemUpdateRequest 更新 item 请求
