@@ -244,7 +244,7 @@ export function GroupEditor({
     onSubmit,
     onCancel,
 }: {
-    initial?: Partial<GroupEditorValues>;
+    initial?: Partial<GroupEditorValues> & { id?: number };
     submitText: string;
     submittingText: string;
     isSubmitting: boolean;
@@ -254,6 +254,8 @@ export function GroupEditor({
     const t = useTranslations('group');
     const { data: modelChannels = [] } = useModelChannelList();
     const { data: allGroups = [] } = useGroupList();
+
+    const currentGroupId = initial?.id;
 
     const [groupName, setGroupName] = useState(initial?.name ?? '');
     const [matchRegex, setMatchRegex] = useState(initial?.match_regex ?? '');
@@ -333,13 +335,15 @@ export function GroupEditor({
     }, []);
 
     const handleAddGroup = useCallback((group: Group) => {
-        const key = `group-${group.id}`;
+        if (!group.id) return; // 类型守卫
+        const groupId = group.id; // 类型收窄
+        const key = `group-${groupId}`;
         setSelectedMembers((prev) => {
             if (prev.some((m) => m.id === key)) return prev;
             return [...prev, {
                 type: 'group' as const,
                 id: key,
-                target_group_id: group.id!,
+                target_group_id: groupId,
                 target_group_name: group.name,
                 weight: 1,
             }];
@@ -490,7 +494,7 @@ export function GroupEditor({
                             <GroupPickerSection
                                 groups={allGroups}
                                 selectedMembers={selectedMembers}
-                                currentGroupName={groupName}
+                                currentGroupId={currentGroupId}
                                 onAdd={handleAddGroup}
                             />
                             <SortSection

@@ -10,12 +10,12 @@ import type { SelectedMember } from './ItemList';
 export function GroupPickerSection({
     groups,
     selectedMembers,
-    currentGroupName,
+    currentGroupId,
     onAdd,
 }: {
     groups: Group[];
     selectedMembers: SelectedMember[];
-    currentGroupName: string;
+    currentGroupId?: number;
     onAdd: (group: Group) => void;
 }) {
     const [searchKeyword, setSearchKeyword] = useState('');
@@ -33,13 +33,15 @@ export function GroupPickerSection({
 
     const filteredGroups = useMemo(() => {
         return groups.filter(g => {
+            // 过滤无效分组
+            if (!g.id) return false;
             // 过滤当前分组（避免自引用）
-            if (g.name === currentGroupName) return false;
+            if (currentGroupId && g.id === currentGroupId) return false;
             // 搜索过滤
             if (normalizedSearch && !g.name.toLowerCase().includes(normalizedSearch)) return false;
             return true;
         });
-    }, [groups, currentGroupName, normalizedSearch]);
+    }, [groups, currentGroupId, normalizedSearch]);
 
     return (
         <div className="rounded-xl border border-border/50 bg-muted/30 flex flex-col min-h-0">
@@ -62,7 +64,9 @@ export function GroupPickerSection({
             <div className="flex-1 min-h-0 overflow-y-auto p-2">
                 <div className="flex flex-col gap-1.5">
                     {filteredGroups.map((group) => {
-                        const isSelected = selectedGroupIds.has(group.id!);
+                        // filteredGroups 已过滤掉无 id 的分组，这里 group.id 必定存在
+                        const groupId = group.id!; // 安全断言：已在 filter 中检查
+                        const isSelected = selectedGroupIds.has(groupId);
                         const memberCount = group.items?.length ?? 0;
 
                         return (

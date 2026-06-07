@@ -81,7 +81,6 @@ function MemberItem({
 
     // 类型守卫
     const isChannelMember = member.type === 'channel';
-    const isGroupMember = member.type === 'group';
 
     // Channel 成员的属性
     const { Avatar: ModelAvatar } = isChannelMember ? getModelIcon(member.name) : { Avatar: Layers };

@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { Trash2, X, Pencil, Power } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { type Group, useDeleteGroup, useUpdateGroup } from '@/api/endpoints/group';
+import { type Group, useDeleteGroup, useUpdateGroup, useGroupList } from '@/api/endpoints/group';
 import { useModelChannelList } from '@/api/endpoints/model';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
@@ -50,6 +50,7 @@ function EditDialogContent({ group, displayMembers, isSubmitting, onSubmit }: Ed
                 <GroupEditor
                     key={`edit-group-${group.id}`}
                     initial={{
+                        id: group.id,
                         name: group.name,
                         match_regex: group.match_regex ?? '',
                         mode: group.mode,
@@ -73,6 +74,7 @@ export function GroupCard({ group }: { group: Group }) {
     const updateGroup = useUpdateGroup();
     const deleteGroup = useDeleteGroup();
     const { data: modelChannels = [] } = useModelChannelList();
+    const { data: allGroups = [] } = useGroupList();
 
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [members, setMembers] = useState<SelectedMember[]>([]);
@@ -91,6 +93,13 @@ export function GroupCard({ group }: { group: Group }) {
         });
         return map;
     }, [modelChannels]);
+    const groupNameById = useMemo(() => {
+        const map = new Map<number, string>();
+        allGroups.forEach((g) => {
+            if (g.id) map.set(g.id, g.name);
+        });
+        return map;
+    }, [allGroups]);
 
     const displayMembers = useMemo((): SelectedMember[] =>
         [...(group.items || [])]
@@ -100,11 +109,12 @@ export function GroupCard({ group }: { group: Group }) {
 
                 if (itemType === 'group') {
                     // Group 成员
+                    const groupId = item.target_group_id!;
                     return {
                         type: 'group',
-                        id: `group-${item.target_group_id}`,
-                        target_group_id: item.target_group_id!,
-                        target_group_name: `Group ${item.target_group_id}`, // 简化显示
+                        id: `group-${groupId}`,
+                        target_group_id: groupId,
+                        target_group_name: groupNameById.get(groupId) || `Group ${groupId}`,
                         item_id: item.id,
                         weight: item.weight,
                         disabled: item.disabled ?? false,
@@ -127,7 +137,7 @@ export function GroupCard({ group }: { group: Group }) {
                     };
                 }
             }),
-        [group.items, channelNameByKey, enabledByKey]
+        [group.items, channelNameByKey, enabledByKey, groupNameById]
     );
 
     /* eslint-disable react-hooks/set-state-in-effect */
