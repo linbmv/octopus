@@ -380,6 +380,54 @@ func (ra *relayAttempt) forward() (int, error) {
 		return 0, err
 	}
 
+	// 先按渠道原生类型尝试（Response 渠道 → /v1/responses/compact，Chat 渠道 → /v1/chat/completions）。
+	statusCode, fwdErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest))
+	if fwdErr == nil {
+		return statusCode, nil
+	}
+
+	// Response 渠道的 Compact 端点级降级：上游不支持 /v1/responses/compact 时，
+	// 在同一渠道、同一 key 上改用 /v1/chat/completions 重试，而不是直接故障转移到其它渠道。
+	// 严格收口：仅 Compact 请求 + Response 类型渠道 + 端点不支持错误 + 客户端尚未收到任何数据。
+	if ra.canDowngradeCompactEndpoint(fwdErr) {
+		chatAdapter, buildErr := newOutbound(llm.APIFormatOpenAIChatCompletion, ra.internalRequest, ra.channel.GetBaseUrl(), ra.usedKey.ChannelKey)
+		if buildErr != nil {
+			log.Warnf("compact endpoint downgrade: build chat outbound failed: %v", buildErr)
+			return statusCode, fwdErr
+		}
+		log.Infof("compact endpoint downgrade: channel=%s(%d) responses endpoint unsupported (%v), retrying via /v1/chat/completions",
+			ra.channel.Name, ra.channel.ID, fwdErr)
+		return ra.forwardWithAdapter(ctx, httpClient, chatAdapter, compactChatFallbackRequest(ra.internalRequest))
+	}
+
+	return statusCode, fwdErr
+}
+
+// canDowngradeCompactEndpoint 判断当前失败是否满足"同渠道 Compact 端点降级"的全部条件。
+func (ra *relayAttempt) canDowngradeCompactEndpoint(fwdErr error) bool {
+	if ra.internalRequest.RequestType != llm.RequestTypeCompact {
+		return false
+	}
+	switch ra.channel.Type {
+	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
+	default:
+		return false
+	}
+	// 客户端已开始接收响应（流式已写出）时不能重发，否则会产生重复输出。
+	if ra.c.Writer.Written() {
+		return false
+	}
+	return isEndpointUnsupportedError(fwdErr)
+}
+
+// forwardWithAdapter 用指定出站适配器执行一次完整的 pipeline 转发。
+// 抽出此方法是为了支持同一渠道内的端点级降级（responses → chat）复用同一套转发逻辑。
+func (ra *relayAttempt) forwardWithAdapter(
+	ctx context.Context,
+	httpClient *http.Client,
+	outAdapter transformer.Outbound,
+	outboundRequest *llm.Request,
+) (int, error) {
 	// 更新活跃请求状态为等待上游（第一阶段可观测性增强）
 	UpdateState(ra.trackingID, StateWaitingUpstream)
 
@@ -398,8 +446,8 @@ func (ra *relayAttempt) forward() (int, error) {
 	relayMiddleware := &relayPipelineMiddleware{attempt: ra}
 	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(httpClient)).
 		Pipeline(
-			&parsedRequestInbound{Inbound: ra.inAdapter, request: requestForOutboundPipeline(ra.channel.Type, ra.internalRequest)},
-			ra.outAdapter,
+			&parsedRequestInbound{Inbound: ra.inAdapter, request: outboundRequest},
+			outAdapter,
 			pipeline.WithMiddlewares(stream.EnsureUsage(), relayMiddleware),
 			pipeline.WithEmptyResponseDetection(),
 		).
@@ -739,16 +787,16 @@ func (m *relayPipelineMiddleware) OnOutboundLlmResponse(ctx context.Context, res
 	return response, nil
 }
 
-func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request) *llm.Request {
+// cloneRequestForAttempt 为单次通道尝试构造请求副本：浅拷贝值类型字段，
+// 并深拷贝会被 transformer/middleware 原地修改的引用类型字段，避免多 attempt 互相污染。
+// RawRequest 由 parsedRequestInbound.TransformRequest 每次重新赋值，不在此处拷贝。
+func cloneRequestForAttempt(request *llm.Request) *llm.Request {
 	if request == nil {
 		return nil
 	}
 
-	// 浅拷贝值类型字段
 	attemptRequest := *request
 
-	// 深拷贝引用类型字段，避免多 attempt 重试时互相污染
-	// Stream 是 *bool，需要深拷贝防止多个 attempt 共享同一个 bool 指针
 	if request.Stream != nil {
 		streamCopy := *request.Stream
 		attemptRequest.Stream = &streamCopy
@@ -767,15 +815,50 @@ func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request)
 		attemptRequest.Modalities = slices.Clone(request.Modalities)
 	}
 
-	// RawRequest 由 parsedRequestInbound.TransformRequest 每次重新赋值，不需要拷贝
-	// 其他值类型字段（Model, RequestType 等）浅拷贝已足够
+	return &attemptRequest
+}
 
-	// Compact 降级只改当前 attempt 的副本
-	if channelType == llm.APIFormatOpenAIChatCompletion && request.RequestType == llm.RequestTypeCompact {
-		attemptRequest.RequestType = llm.RequestTypeChat
+// requestForOutboundPipeline 返回当前通道尝试要交给 pipeline 的请求副本。
+// OpenAI Chat 渠道承接 Compact 请求时，必须降级为 Chat 并把 Compact.Input 搬到 Messages，
+// 否则 axonhub 的 openai outbound 会因 Messages 为空而报 "messages are required"。
+func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request) *llm.Request {
+	if request == nil {
+		return nil
 	}
 
-	return &attemptRequest
+	if channelType == llm.APIFormatOpenAIChatCompletion && request.RequestType == llm.RequestTypeCompact {
+		return compactChatFallbackRequest(request)
+	}
+
+	return cloneRequestForAttempt(request)
+}
+
+// compactChatFallbackRequest 把 Compact 请求降级成可由 OpenAI Chat 端点处理的副本：
+//   - RequestType 改为 Chat（绕过 openai outbound 对 Compact 的拒绝）；
+//   - 把 Compact.Input 搬到 Messages（axonhub Compact inbound 把消息放在 Compact.Input，Messages 恒为空）；
+//   - Compact.Instructions 非空时，作为 system 消息插入到最前，保留系统指令。
+//
+// 全程基于副本和切片拷贝，不修改原始 request，保证多 attempt 重试安全。
+func compactChatFallbackRequest(request *llm.Request) *llm.Request {
+	attemptRequest := cloneRequestForAttempt(request)
+	attemptRequest.RequestType = llm.RequestTypeChat
+
+	if request.Compact == nil {
+		return attemptRequest
+	}
+
+	messages := make([]llm.Message, 0, len(request.Compact.Input)+1)
+	if instructions := strings.TrimSpace(request.Compact.Instructions); instructions != "" {
+		systemContent := request.Compact.Instructions
+		messages = append(messages, llm.Message{
+			Role:    "system",
+			Content: llm.MessageContent{Content: &systemContent},
+		})
+	}
+	messages = append(messages, request.Compact.Input...)
+	attemptRequest.Messages = messages
+
+	return attemptRequest
 }
 
 // parsedRequestInbound 让 pipeline 复用 relay 在选路前已经解析好的 llm.Request。

@@ -201,6 +201,96 @@ func TestRequestForOutboundPipelineKeepsCompactForResponseChannel(t *testing.T) 
 	}
 }
 
+// strPtr 返回字符串内容指针，便于构造 MessageContent。
+func compactInputMessage(role, text string) llm.Message {
+	content := text
+	return llm.Message{Role: role, Content: llm.MessageContent{Content: &content}}
+}
+
+func TestCompactChatFallbackRequestFillsMessages(t *testing.T) {
+	req := &llm.Request{
+		Model:       "gpt-5.5",
+		RequestType: llm.RequestTypeCompact,
+		Compact: &llm.CompactRequest{
+			Instructions: "you are a summarizer",
+			Input: []llm.Message{
+				compactInputMessage("user", "hello"),
+				compactInputMessage("assistant", "hi"),
+			},
+		},
+	}
+
+	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
+	if got == nil {
+		t.Fatal("requestForOutboundPipeline returned nil")
+	}
+	if got.RequestType != llm.RequestTypeChat {
+		t.Fatalf("RequestType = %q, 期望降级为 Chat", got.RequestType)
+	}
+	// Instructions(1) + Input(2) = 3 条消息
+	if len(got.Messages) != 3 {
+		t.Fatalf("Messages 长度 = %d, 期望 3（system + 2 条 input）", len(got.Messages))
+	}
+	if got.Messages[0].Role != "system" {
+		t.Fatalf("首条消息 role = %q, 期望 system", got.Messages[0].Role)
+	}
+	if got.Messages[0].Content.Content == nil || *got.Messages[0].Content.Content != "you are a summarizer" {
+		t.Fatalf("system 消息内容未正确搬运 Instructions")
+	}
+	if got.Messages[1].Role != "user" || got.Messages[2].Role != "assistant" {
+		t.Fatalf("Input 消息顺序/角色未保持: %q, %q", got.Messages[1].Role, got.Messages[2].Role)
+	}
+
+	// 原始请求不能被污染。
+	if req.RequestType != llm.RequestTypeCompact {
+		t.Fatalf("原始 RequestType 被污染为 %q", req.RequestType)
+	}
+	if len(req.Messages) != 0 {
+		t.Fatalf("原始 Messages 被污染，长度 = %d，期望 0", len(req.Messages))
+	}
+	if len(req.Compact.Input) != 2 {
+		t.Fatalf("原始 Compact.Input 被污染，长度 = %d，期望 2", len(req.Compact.Input))
+	}
+}
+
+func TestCompactChatFallbackRequestNoInstructions(t *testing.T) {
+	req := &llm.Request{
+		Model:       "gpt-5.5",
+		RequestType: llm.RequestTypeCompact,
+		Compact: &llm.CompactRequest{
+			Input: []llm.Message{compactInputMessage("user", "hello")},
+		},
+	}
+
+	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
+	if len(got.Messages) != 1 {
+		t.Fatalf("Messages 长度 = %d, 期望 1（无 Instructions）", len(got.Messages))
+	}
+	if got.Messages[0].Role != "user" {
+		t.Fatalf("首条消息 role = %q, 期望 user（无 system 头）", got.Messages[0].Role)
+	}
+}
+
+func TestCompactChatFallbackRequestNilCompact(t *testing.T) {
+	req := &llm.Request{
+		Model:       "gpt-5.5",
+		RequestType: llm.RequestTypeCompact,
+		Compact:     nil,
+	}
+
+	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
+	if got == nil {
+		t.Fatal("requestForOutboundPipeline returned nil")
+	}
+	if got.RequestType != llm.RequestTypeChat {
+		t.Fatalf("RequestType = %q, 期望 Chat", got.RequestType)
+	}
+	// Compact 为 nil 时不应 panic，Messages 保持原样（空）。
+	if len(got.Messages) != 0 {
+		t.Fatalf("Compact 为 nil 时 Messages 应为空，got %d", len(got.Messages))
+	}
+}
+
 func TestRequestForOutboundPipelineDeepCopiesStreamPointer(t *testing.T) {
 	streamTrue := true
 	req := &llm.Request{

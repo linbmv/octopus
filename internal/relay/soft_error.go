@@ -3,7 +3,11 @@ package relay
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
+
+	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/httpclient"
 )
 
 // isSoftError 检测响应是否为"软错误"（HTTP 200 但内容是错误）
@@ -115,6 +119,50 @@ func isPlainTextSoftError(body []byte) bool {
 
 	for _, keyword := range errorKeywords {
 		if strings.Contains(bodyLower, keyword) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isEndpointUnsupportedError 判断上游错误是否表示"端点不存在/不支持"。
+// 仅这类错误允许在同一渠道内把 Compact 从 /v1/responses/compact 降级到 /v1/chat/completions；
+// 鉴权(401/403)、限流(429)、超时、5xx 等不在此列，避免把真实故障掩盖成降级成功。
+func isEndpointUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// 优先按 HTTP 状态码判定（ResponseError 和 httpclient.Error 都有 StatusCode）。
+	// 404 Not Found / 405 Method Not Allowed / 501 Not Implemented 视为端点不支持。
+	var responseErr *llm.ResponseError
+	var upstreamErr *httpclient.Error
+	if errors.As(err, &responseErr) && responseErr != nil {
+		switch responseErr.StatusCode {
+		case 404, 405, 501:
+			return true
+		}
+	} else if errors.As(err, &upstreamErr) && upstreamErr != nil {
+		switch upstreamErr.StatusCode {
+		case 404, 405, 501:
+			return true
+		}
+	}
+
+	// 文本兜底：部分中转站用非标准状态码 + 文本描述端点不存在。
+	// 仅匹配明确的端点不存在语义，避免误判（如 "429 rate limit on /responses/compact" 不应降级）。
+	msg := strings.ToLower(err.Error())
+	endpointMarkers := []string{
+		"invalid url",
+		"no such endpoint",
+		"unknown endpoint",
+		"route not found",
+		"cannot post",
+		"unsupported endpoint",
+	}
+	for _, marker := range endpointMarkers {
+		if strings.Contains(msg, marker) {
 			return true
 		}
 	}
