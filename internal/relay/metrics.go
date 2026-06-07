@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"time"
 
@@ -142,8 +143,30 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 		m.Stats.InputCost, m.Stats.OutputCost, m.Stats.InputCost+m.Stats.OutputCost, len(attempts),
 	)
 
+	// 输出 attempts 摘要（第一阶段可观测性增强）
+	if len(attempts) > 0 {
+		log.Infof("  attempts summary:")
+		for _, a := range attempts {
+			ftMsg := ""
+			if a.FirstTokenTime > 0 {
+				ftMsg = fmt.Sprintf(", first_token=%s", formatMillis(a.FirstTokenTime))
+			}
+			log.Infof("    #%d: channel=%s(%d), key=%d, status=%s, duration=%s, sticky=%t%s, msg=%s",
+				a.AttemptNum, a.ChannelName, a.ChannelID, a.ChannelKeyID, a.Status,
+				formatMillis(a.Duration), a.Sticky, ftMsg, a.Msg)
+		}
+	}
+
 	// 客户端断开或请求上下文取消后仍要保存最终审计日志，因此持久化阶段主动脱离请求取消信号。
 	m.saveLog(context.WithoutCancel(ctx), err, duration, attempts, channelID, channelName)
+}
+
+// formatMillis 格式化毫秒数为可读字符串
+func formatMillis(ms int) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.2fs", float64(ms)/1000.0)
 }
 
 func finalAttempt(attempts []model.ChannelAttempt) (int, string, int, model.AttemptStatus) {

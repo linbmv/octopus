@@ -163,10 +163,26 @@ func (it *Iterator) Attempts() []model.ChannelAttempt {
 
 // AttemptSpan 管理单次通道尝试的生命周期（计时、状态、结果）
 type AttemptSpan struct {
-	attempt   model.ChannelAttempt
-	startTime time.Time
-	iter      *Iterator
-	ended     bool
+	attempt        model.ChannelAttempt
+	startTime      time.Time
+	iter           *Iterator
+	ended          bool
+	firstTokenTime *time.Time // 首token时间，用于记录到 attempt
+}
+
+// RecordFirstToken 记录首 token 时间（用于计算首token用时和判断健康粘性）
+func (s *AttemptSpan) RecordFirstToken(t time.Time) {
+	if s.firstTokenTime == nil {
+		s.firstTokenTime = &t
+	}
+}
+
+// FirstTokenDuration 返回当前 attempt 从开始到首 token 的耗时。
+func (s *AttemptSpan) FirstTokenDuration() (time.Duration, bool) {
+	if s.firstTokenTime == nil {
+		return 0, false
+	}
+	return s.firstTokenTime.Sub(s.startTime), true
 }
 
 // End 结束尝试：设置状态，自动计算耗时，追加到 Iterator
@@ -178,6 +194,10 @@ func (s *AttemptSpan) End(status model.AttemptStatus, msg string) {
 	s.attempt.Status = status
 	s.attempt.Duration = int(time.Since(s.startTime).Milliseconds())
 	s.attempt.Msg = msg
+	// 记录首 token 用时（仅流式成功时有值）
+	if s.firstTokenTime != nil {
+		s.attempt.FirstTokenTime = int(s.firstTokenTime.Sub(s.startTime).Milliseconds())
+	}
 	s.iter.attempts = append(s.iter.attempts, s.attempt)
 }
 

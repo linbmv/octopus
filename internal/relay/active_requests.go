@@ -11,9 +11,10 @@ import (
 type ActiveRequestState string
 
 const (
-	StateForwarding ActiveRequestState = "forwarding" // 正在转发
-	StateStreaming  ActiveRequestState = "streaming"  // 流式传输中
-	StateDone       ActiveRequestState = "done"       // 已完成
+	StateForwarding      ActiveRequestState = "forwarding"       // 正在转发
+	StateWaitingUpstream ActiveRequestState = "waiting_upstream" // 等待上游响应
+	StateStreaming       ActiveRequestState = "streaming"        // 流式传输中
+	StateDone            ActiveRequestState = "done"             // 已完成
 )
 
 // ActiveRequest 活跃请求信息

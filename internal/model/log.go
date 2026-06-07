@@ -22,6 +22,7 @@ type ChannelAttempt struct {
 	Duration         int           `json:"duration"`
 	Sticky           bool          `json:"sticky,omitempty"`
 	Msg              string        `json:"msg,omitempty"`
+	FirstTokenTime   int           `json:"first_token_time,omitempty"` // 首token用时(ms)，仅成功且流式时有值
 }
 
 type RelayLog struct {

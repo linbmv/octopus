@@ -25,6 +25,7 @@ type relayAttempt struct {
 	outAdapter transformer.Outbound
 	channel    *dbmodel.Channel
 	usedKey    dbmodel.ChannelKey
-	keyRemark  string // 清洗后的本次 key 备注，用于 attempt 日志记录
-	trackingID string // 活跃请求跟踪 ID
+	keyRemark  string                // 清洗后的本次 key 备注，用于 attempt 日志记录
+	trackingID string                // 活跃请求跟踪 ID
+	span       *balancer.AttemptSpan // attempt 追踪 span，用于记录首 token 时间
 }

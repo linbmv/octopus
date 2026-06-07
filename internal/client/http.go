@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -17,6 +18,7 @@ var (
 	systemDirectClient *http.Client
 	systemProxyClient  *http.Client
 	systemProxyURL     string
+	customProxyClients = make(map[string]*http.Client)
 	clientLock         sync.RWMutex
 )
 
@@ -78,13 +80,34 @@ func GetHTTPClientSystemProxy(useProxy bool) (*http.Client, error) {
 	return systemDirectClient, nil
 }
 
-// GetHTTPClientCustomProxy returns a NEW http.Client every time (no reuse).
+// GetHTTPClientCustomProxy 返回按代理地址复用的 http.Client。
 // proxyURL supports: http, https, socks, socks5
 func GetHTTPClientCustomProxy(proxyURL string) (*http.Client, error) {
+	proxyURL = strings.TrimSpace(proxyURL)
 	if proxyURL == "" {
 		return nil, fmt.Errorf("proxy url is empty")
 	}
-	return newHTTPClientCustomProxy(proxyURL)
+
+	clientLock.RLock()
+	if client, ok := customProxyClients[proxyURL]; ok {
+		clientLock.RUnlock()
+		return client, nil
+	}
+	clientLock.RUnlock()
+
+	clientLock.Lock()
+	defer clientLock.Unlock()
+
+	// 双重检查，避免并发首次创建时重复构造 Transport。
+	if client, ok := customProxyClients[proxyURL]; ok {
+		return client, nil
+	}
+	client, err := newHTTPClientCustomProxy(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	customProxyClients[proxyURL] = client
+	return client, nil
 }
 
 func clonedDefaultTransport() (*http.Transport, error) {
