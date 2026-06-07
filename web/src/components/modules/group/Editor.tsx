@@ -5,6 +5,7 @@ import { Check, ChevronDownIcon, Plus, Search, Sparkles, Trash2 } from 'lucide-r
 import { useTranslations } from 'next-intl';
 import * as AccordionPrimitive from '@radix-ui/react-accordion';
 import { useModelChannelList, type LLMChannel } from '@/api/endpoints/model';
+import { useGroupList, type Group } from '@/api/endpoints/group';
 import { Button } from '@/components/ui/button';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -15,6 +16,7 @@ import type { GroupMode } from '@/api/endpoints/group';
 import type { SelectedMember } from './ItemList';
 import { MemberList } from './ItemList';
 import { matchesGroupName, memberKey, normalizeKey, MODE_LABELS } from './utils';
+import { GroupPickerSection } from './GroupPickerSection';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/animate-ui/components/animate/tooltip';
 import { HelpCircle } from 'lucide-react';
 
@@ -251,6 +253,7 @@ export function GroupEditor({
 }) {
     const t = useTranslations('group');
     const { data: modelChannels = [] } = useModelChannelList();
+    const { data: allGroups = [] } = useGroupList();
 
     const [groupName, setGroupName] = useState(initial?.name ?? '');
     const [matchRegex, setMatchRegex] = useState(initial?.match_regex ?? '');
@@ -291,7 +294,7 @@ export function GroupEditor({
         const key = memberKey(channel);
         setSelectedMembers((prev) => {
             if (prev.some((m) => m.id === key)) return prev;
-            return [...prev, { ...channel, id: key, weight: 1 }];
+            return [...prev, { ...channel, type: 'channel' as const, id: key, weight: 1 }];
         });
     }, []);
 
@@ -307,7 +310,7 @@ export function GroupEditor({
             const existing = new Set(prev.map((m) => m.id));
             const toAdd = matchedModelChannels
                 .filter((mc) => !existing.has(memberKey(mc)))
-                .map((mc) => ({ ...mc, id: memberKey(mc), weight: 1 }));
+                .map((mc) => ({ ...mc, type: 'channel' as const, id: memberKey(mc), weight: 1 }));
             return toAdd.length ? [...prev, ...toAdd] : prev;
         });
     }, [matchedModelChannels]);
@@ -327,6 +330,20 @@ export function GroupEditor({
     const handleClearMembers = useCallback(() => {
         setSelectedMembers([]);
         setRemovingIds(new Set());
+    }, []);
+
+    const handleAddGroup = useCallback((group: Group) => {
+        const key = `group-${group.id}`;
+        setSelectedMembers((prev) => {
+            if (prev.some((m) => m.id === key)) return prev;
+            return [...prev, {
+                type: 'group' as const,
+                id: key,
+                target_group_id: group.id!,
+                target_group_name: group.name,
+                weight: 1,
+            }];
+        });
     }, []);
 
     const isValid = groupKey.length > 0 && selectedMembers.length > 0 && !regexError;
@@ -462,13 +479,19 @@ export function GroupEditor({
                     </div>
 
                     <div className="flex-1 min-h-0">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full min-h-0">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 h-full min-h-0">
                             <ModelPickerSection
                                 modelChannels={modelChannels}
                                 selectedMembers={selectedMembers}
                                 onAdd={handleAddMember}
                                 onAutoAdd={handleAutoAdd}
                                 autoAddDisabled={autoAddDisabled}
+                            />
+                            <GroupPickerSection
+                                groups={allGroups}
+                                selectedMembers={selectedMembers}
+                                currentGroupName={groupName}
+                                onAdd={handleAddGroup}
                             />
                             <SortSection
                                 members={selectedMembers}

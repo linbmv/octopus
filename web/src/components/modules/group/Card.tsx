@@ -94,22 +94,38 @@ export function GroupCard({ group }: { group: Group }) {
 
     const displayMembers = useMemo((): SelectedMember[] =>
         [...(group.items || [])]
-            .filter((item) => (item.type ?? 'channel') === 'channel')
             .sort((a, b) => a.priority - b.priority)
-            .map((item) => {
-                const channelID = item.channel_id ?? 0;
-                const modelName = item.model_name ?? '';
-                const key = modelChannelKey(channelID, modelName);
-                return {
-                    id: key,
-                    name: modelName,
-                    enabled: enabledByKey.get(key) ?? true,
-                    channel_id: channelID,
-                    channel_name: channelNameByKey.get(key) ?? `Channel ${channelID}`,
-                    item_id: item.id,
-                    weight: item.weight,
-                    disabled: item.disabled ?? false,
-                };
+            .map((item): SelectedMember => {
+                const itemType = item.type ?? 'channel';
+
+                if (itemType === 'group') {
+                    // Group 成员
+                    return {
+                        type: 'group',
+                        id: `group-${item.target_group_id}`,
+                        target_group_id: item.target_group_id!,
+                        target_group_name: `Group ${item.target_group_id}`, // 简化显示
+                        item_id: item.id,
+                        weight: item.weight,
+                        disabled: item.disabled ?? false,
+                    };
+                } else {
+                    // Channel 成员
+                    const channelID = item.channel_id ?? 0;
+                    const modelName = item.model_name ?? '';
+                    const key = modelChannelKey(channelID, modelName);
+                    return {
+                        type: 'channel',
+                        id: key,
+                        name: modelName,
+                        enabled: enabledByKey.get(key) ?? true,
+                        channel_id: channelID,
+                        channel_name: channelNameByKey.get(key) ?? `Channel ${channelID}`,
+                        item_id: item.id,
+                        weight: item.weight,
+                        disabled: item.disabled ?? false,
+                    };
+                }
             }),
         [group.items, channelNameByKey, enabledByKey]
     );
@@ -233,7 +249,6 @@ export function GroupCard({ group }: { group: Group }) {
         if (!group.id) return;
 
         const originalItems = [...(group.items || [])]
-            .filter((item) => (item.type ?? 'channel') === 'channel')
             .sort((a, b) => a.priority - b.priority);
         const originalById = new Map<number, { priority: number; weight: number }>();
         const originalIds = new Set<number>();
@@ -252,12 +267,24 @@ export function GroupCard({ group }: { group: Group }) {
         const items_to_add = values.members
             .map((m, idx) => ({ m, priority: idx + 1 }))
             .filter(({ m }) => typeof m.item_id !== 'number')
-            .map(({ m, priority }) => ({
-                channel_id: m.channel_id,
-                model_name: m.name,
-                priority,
-                weight: m.weight ?? 1,
-            }));
+            .map(({ m, priority }) => {
+                if (m.type === 'group') {
+                    return {
+                        type: 'group' as const,
+                        target_group_id: m.target_group_id,
+                        priority,
+                        weight: m.weight ?? 1,
+                    };
+                } else {
+                    return {
+                        type: 'channel' as const,
+                        channel_id: m.channel_id,
+                        model_name: m.name,
+                        priority,
+                        weight: m.weight ?? 1,
+                    };
+                }
+            });
 
         const items_to_update = values.members
             .map((m, idx) => ({ m, priority: idx + 1 }))

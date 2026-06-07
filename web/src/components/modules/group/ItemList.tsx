@@ -16,12 +16,28 @@ import type { LLMChannel } from '@/api/endpoints/model';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/animate-ui/components/animate/tooltip';
 import { useTranslations } from 'next-intl';
 
-export interface SelectedMember extends LLMChannel {
+// Channel 成员类型
+export interface SelectedChannelMember extends LLMChannel {
+    type: 'channel';
     id: string;
     item_id?: number;
     weight?: number;
     disabled?: boolean;
 }
+
+// Group 成员类型
+export interface SelectedGroupMember {
+    type: 'group';
+    id: string;
+    target_group_id: number;
+    target_group_name: string;
+    item_id?: number;
+    weight?: number;
+    disabled?: boolean;
+}
+
+// 联合类型
+export type SelectedMember = SelectedChannelMember | SelectedGroupMember;
 
 function reorderList<T>(list: T[], startIndex: number, endIndex: number): T[] {
     const result = [...list];
@@ -60,12 +76,17 @@ function MemberItem({
     layoutScope?: string;
     dnd: MemberItemDnd;
 }) {
-    const { Avatar: ModelAvatar } = getModelIcon(member.name);
     const t = useTranslations('group');
     const [confirmDelete, setConfirmDelete] = useState(false);
-    // 渠道本身被禁用，或成员被临时禁用，都视为不可用。成员级禁用可在此切换，渠道级禁用只能在渠道页处理。
+
+    // 类型守卫
+    const isChannelMember = member.type === 'channel';
+    const isGroupMember = member.type === 'group';
+
+    // Channel 成员的属性
+    const { Avatar: ModelAvatar } = isChannelMember ? getModelIcon(member.name) : { Avatar: Layers };
     const memberDisabled = member.disabled === true;
-    const channelDisabled = member.enabled === false;
+    const channelDisabled = isChannelMember ? member.enabled === false : false;
     const isDisabled = memberDisabled || channelDisabled;
 
     return (
@@ -159,11 +180,15 @@ function MemberItem({
                             'text-sm font-medium truncate leading-tight',
                             isDisabled && 'text-muted-foreground'
                         )}>
-                            {member.name}
+                            {isChannelMember ? member.name : member.target_group_name}
                         </TooltipTrigger>
-                        <TooltipContent key={member.name}>{member.name}</TooltipContent>
+                        <TooltipContent key={member.id}>
+                            {isChannelMember ? member.name : member.target_group_name}
+                        </TooltipContent>
                     </Tooltip>
-                    <span className="text-[10px] text-muted-foreground truncate leading-tight">{member.channel_name}</span>
+                    <span className="text-[10px] text-muted-foreground truncate leading-tight">
+                        {isChannelMember ? member.channel_name : '(分组)'}
+                    </span>
                 </div>
 
                 {showWeight && (
