@@ -387,11 +387,11 @@ func (ra *relayAttempt) forward() (int, error) {
 		return statusCode, nil
 	}
 
-	// Response 渠道的 Compact 端点级降级：上游不支持 /v1/responses/compact 时，
-	// 先在同一渠道、同一 key 上改用普通 /v1/responses 重试；若 /responses 也不支持，
-	// 再降到 /v1/chat/completions。这样兼容 Responses-only 中转站，避免直接打到不支持的 Chat 端点。
-	// 严格收口：仅 Compact 请求 + Response 类型渠道 + 端点不支持错误 + 客户端尚未收到任何数据。
-	if ra.canDowngradeCompactEndpoint(fwdErr) {
+	// Response 渠道的 Compact 降级：官方 /v1/responses/compact 不支持或在中转站上超时/5xx/断流时，
+	// 先在同一渠道、同一 key 上改用普通 /v1/responses 做手动压缩；若 /responses 也不兼容，
+	// 再降到 /v1/chat/completions。鉴权、限流等真实拒绝不会降级。
+	// 严格收口：仅 Compact 请求 + Response 类型渠道 + 客户端尚未收到任何数据。
+	if ra.canFallbackOfficialCompactToManual(fwdErr) {
 		responsesFallbackRequest := compactResponsesFallbackRequest(ra.internalRequest)
 		log.Infof("compact endpoint downgrade: channel=%s(%d), retrying via /v1/responses", ra.channel.Name, ra.channel.ID)
 		statusCode, responsesErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, responsesFallbackRequest, true)
@@ -432,6 +432,22 @@ func (ra *relayAttempt) canDowngradeCompactEndpoint(fwdErr error) bool {
 	return isEndpointUnsupportedError(fwdErr)
 }
 
+// canFallbackOfficialCompactToManual 判断官方 /responses/compact 失败后是否允许同渠道改用手动压缩。
+func (ra *relayAttempt) canFallbackOfficialCompactToManual(fwdErr error) bool {
+	if ra.internalRequest.RequestType != llm.RequestTypeCompact {
+		return false
+	}
+	switch ra.channel.Type {
+	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
+	default:
+		return false
+	}
+	if ra.c.Writer.Written() {
+		return false
+	}
+	return isEndpointUnsupportedError(fwdErr) || isCompactManualFallbackError(fwdErr)
+}
+
 // canDowngradeCompactResponsesFallback 判断普通 /responses fallback 失败后是否还能继续降到 Chat。
 func (ra *relayAttempt) canDowngradeCompactResponsesFallback(fwdErr error) bool {
 	if ra.canDowngradeCompactEndpoint(fwdErr) {
@@ -448,7 +464,7 @@ func (ra *relayAttempt) canDowngradeCompactResponsesFallback(fwdErr error) bool 
 	if ra.c.Writer.Written() {
 		return false
 	}
-	return isCompactResponsesFallbackIncompatibleError(fwdErr)
+	return isCompactResponsesFallbackIncompatibleError(fwdErr) || isCompactManualFallbackError(fwdErr)
 }
 
 func needsChatToCompactResponse(channelType llm.APIFormat, request *llm.Request) bool {

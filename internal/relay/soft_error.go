@@ -192,3 +192,45 @@ func isCompactResponsesFallbackIncompatibleError(err error) bool {
 		strings.Contains(msg, "invalid_responses_request") &&
 		strings.Contains(msg, "invalid codex request")
 }
+
+// isCompactManualFallbackError 判断 Compact 官方/Responses 手动路径是否遇到可改用另一种手动压缩的临时错误。
+// 鉴权、限流、客户端取消等不在此列，避免重复发送无意义请求。
+func isCompactManualFallbackError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var responseErr *llm.ResponseError
+	var upstreamErr *httpclient.Error
+	if errors.As(err, &responseErr) && responseErr != nil {
+		return isCompactManualFallbackStatus(responseErr.StatusCode)
+	}
+	if errors.As(err, &upstreamErr) && upstreamErr != nil {
+		return isCompactManualFallbackStatus(upstreamErr.StatusCode)
+	}
+
+	msg := strings.ToLower(err.Error())
+	retryableMarkers := []string{
+		"bad gateway",
+		"gateway timeout",
+		"service unavailable",
+		"stream disconnected before completion",
+		"connection reset by peer",
+		"unexpected eof",
+	}
+	for _, marker := range retryableMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCompactManualFallbackStatus(statusCode int) bool {
+	switch statusCode {
+	case 408, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
