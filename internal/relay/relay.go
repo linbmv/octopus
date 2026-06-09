@@ -381,7 +381,8 @@ func (ra *relayAttempt) forward() (int, error) {
 	}
 
 	// 先按渠道原生类型尝试（Response 渠道 → /v1/responses/compact，Chat 渠道 → /v1/chat/completions）。
-	statusCode, fwdErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest), false)
+	// Chat 渠道承接 Compact 时，请求会降级为 Chat，但客户端仍期望 Compact 响应。
+	statusCode, fwdErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest), needsChatToCompactResponse(ra.channel.Type, ra.internalRequest))
 	if fwdErr == nil {
 		return statusCode, nil
 	}
@@ -418,6 +419,10 @@ func (ra *relayAttempt) canDowngradeCompactEndpoint(fwdErr error) bool {
 		return false
 	}
 	return isEndpointUnsupportedError(fwdErr)
+}
+
+func needsChatToCompactResponse(channelType llm.APIFormat, request *llm.Request) bool {
+	return channelType == llm.APIFormatOpenAIChatCompletion && request != nil && request.RequestType == llm.RequestTypeCompact
 }
 
 // forwardWithAdapter 用指定出站适配器执行一次完整的 pipeline 转发。
@@ -852,6 +857,12 @@ func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request)
 func compactChatFallbackRequest(request *llm.Request) *llm.Request {
 	attemptRequest := cloneRequestForAttempt(request)
 	attemptRequest.RequestType = llm.RequestTypeChat
+	attemptRequest.APIFormat = llm.APIFormatOpenAIChatCompletion
+	attemptRequest.Tools = sanitizeToolsForChatFallback(request.Tools)
+	attemptRequest.ToolChoice = sanitizeToolChoiceForChatFallback(request.ToolChoice, attemptRequest.Tools)
+	if len(attemptRequest.Tools) == 0 {
+		attemptRequest.ParallelToolCalls = nil
+	}
 
 	if request.Compact == nil {
 		return attemptRequest
@@ -866,9 +877,87 @@ func compactChatFallbackRequest(request *llm.Request) *llm.Request {
 		})
 	}
 	messages = append(messages, request.Compact.Input...)
-	attemptRequest.Messages = messages
+	attemptRequest.Messages = sanitizeMessagesForChatFallback(messages)
 
 	return attemptRequest
+}
+
+func sanitizeToolsForChatFallback(tools []llm.Tool) []llm.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+
+	sanitized := make([]llm.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Type != llm.ToolTypeFunction || strings.TrimSpace(tool.Function.Name) == "" {
+			continue
+		}
+		sanitized = append(sanitized, tool)
+	}
+	return sanitized
+}
+
+func sanitizeToolChoiceForChatFallback(choice *llm.ToolChoice, tools []llm.Tool) *llm.ToolChoice {
+	if choice == nil {
+		return nil
+	}
+
+	if choice.NamedToolChoice == nil {
+		if len(tools) == 0 {
+			return nil
+		}
+		if choice.ToolChoice != nil {
+			switch *choice.ToolChoice {
+			case "auto", "none", "required":
+				return choice
+			default:
+				return nil
+			}
+		}
+		return choice
+	}
+
+	if choice.NamedToolChoice.Type != llm.ToolTypeFunction || strings.TrimSpace(choice.NamedToolChoice.Function.Name) == "" {
+		return nil
+	}
+	for _, tool := range tools {
+		if tool.Function.Name == choice.NamedToolChoice.Function.Name {
+			return choice
+		}
+	}
+	return nil
+}
+
+func sanitizeMessagesForChatFallback(messages []llm.Message) []llm.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	sanitized := make([]llm.Message, 0, len(messages))
+	for _, message := range messages {
+		message.ToolCalls = sanitizeToolCallsForChatFallback(message.ToolCalls)
+		sanitized = append(sanitized, message)
+	}
+	return sanitized
+}
+
+func sanitizeToolCallsForChatFallback(toolCalls []llm.ToolCall) []llm.ToolCall {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	sanitized := make([]llm.ToolCall, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		if toolCall.Type != "" && toolCall.Type != llm.ToolTypeFunction {
+			continue
+		}
+		if strings.TrimSpace(toolCall.Function.Name) == "" {
+			continue
+		}
+		toolCall.Type = llm.ToolTypeFunction
+		sanitized = append(sanitized, toolCall)
+	}
+	return sanitized
 }
 
 // parsedRequestInbound 让 pipeline 复用 relay 在选路前已经解析好的 llm.Request。
@@ -899,6 +988,9 @@ func (c *chatToCompactMiddleware) Name() string {
 }
 
 func (c *chatToCompactMiddleware) OnOutboundLlmResponse(ctx context.Context, response *llm.Response) (*llm.Response, error) {
+	if response == nil {
+		return response, nil
+	}
 	// Chat 端点返回的是 Choices 结构，需要转换为 Compact 结构
 	if response.Compact == nil && len(response.Choices) > 0 {
 		// 从第一个 Choice 提取内容
@@ -910,10 +1002,22 @@ func (c *chatToCompactMiddleware) OnOutboundLlmResponse(ctx context.Context, res
 
 		// 构造 Compact 响应
 		response.Compact = &llm.CompactResponse{
-			Object: "response.compaction",
-			Output: output,
+			ID:        response.ID,
+			CreatedAt: response.Created,
+			Object:    "response.compaction",
+			Output:    output,
 		}
 	}
+	if response.Compact == nil {
+		response.Compact = &llm.CompactResponse{
+			ID:        response.ID,
+			CreatedAt: response.Created,
+			Object:    "response.compaction",
+			Output:    []llm.Message{},
+		}
+	}
+	response.RequestType = llm.RequestTypeCompact
+	response.APIFormat = llm.APIFormatOpenAIResponseCompact
 
 	return response, nil
 }

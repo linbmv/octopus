@@ -201,7 +201,26 @@ func TestRequestForOutboundPipelineKeepsCompactForResponseChannel(t *testing.T) 
 	}
 }
 
+func TestNeedsChatToCompactResponse(t *testing.T) {
+	if !needsChatToCompactResponse(llm.APIFormatOpenAIChatCompletion, &llm.Request{RequestType: llm.RequestTypeCompact}) {
+		t.Fatal("OpenAI Chat Compact 请求应启用 Chat→Compact 响应转换")
+	}
+	if needsChatToCompactResponse(llm.APIFormatOpenAIResponse, &llm.Request{RequestType: llm.RequestTypeCompact}) {
+		t.Fatal("OpenAI Response Compact 原生路径不应启用 Chat→Compact 响应转换")
+	}
+	if needsChatToCompactResponse(llm.APIFormatOpenAIChatCompletion, &llm.Request{RequestType: llm.RequestTypeChat}) {
+		t.Fatal("普通 Chat 请求不应启用 Chat→Compact 响应转换")
+	}
+	if needsChatToCompactResponse(llm.APIFormatOpenAIChatCompletion, nil) {
+		t.Fatal("nil 请求不应启用 Chat→Compact 响应转换")
+	}
+}
+
 // strPtr 返回字符串内容指针，便于构造 MessageContent。
+func strPtr(value string) *string {
+	return &value
+}
+
 func compactInputMessage(role, text string) llm.Message {
 	content := text
 	return llm.Message{Role: role, Content: llm.MessageContent{Content: &content}}
@@ -288,6 +307,94 @@ func TestCompactChatFallbackRequestNilCompact(t *testing.T) {
 	// Compact 为 nil 时不应 panic，Messages 保持原样（空）。
 	if len(got.Messages) != 0 {
 		t.Fatalf("Compact 为 nil 时 Messages 应为空，got %d", len(got.Messages))
+	}
+}
+
+func TestCompactChatFallbackRequestSanitizesResponseOnlyTools(t *testing.T) {
+	forcedCustom := &llm.ToolChoice{
+		NamedToolChoice: &llm.NamedToolChoice{
+			Type:     llm.ToolTypeResponsesCustomTool,
+			Function: llm.ToolFunction{Name: "apply_patch"},
+		},
+	}
+	parallel := true
+	req := &llm.Request{
+		Model:             "gpt-5.5",
+		RequestType:       llm.RequestTypeCompact,
+		ParallelToolCalls: &parallel,
+		ToolChoice:        forcedCustom,
+		Tools: []llm.Tool{
+			{Type: llm.ToolTypeResponsesCustomTool, ResponseCustomTool: &llm.ResponseCustomTool{Name: "apply_patch"}},
+			{Type: llm.ToolTypeFunction, Function: llm.Function{Name: ""}},
+			{Type: llm.ToolTypeFunction, Function: llm.Function{Name: "read_file"}},
+		},
+		Compact: &llm.CompactRequest{
+			Input: []llm.Message{
+				{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{ID: "custom", Type: llm.ToolTypeResponsesCustomTool, ResponseCustomToolCall: &llm.ResponseCustomToolCall{Name: "apply_patch"}},
+						{ID: "empty", Type: llm.ToolTypeFunction, Function: llm.FunctionCall{Name: ""}},
+						{ID: "fn", Type: llm.ToolTypeFunction, Function: llm.FunctionCall{Name: "read_file", Arguments: "{}"}},
+					},
+				},
+			},
+		},
+	}
+
+	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
+	if got == nil {
+		t.Fatal("requestForOutboundPipeline returned nil")
+	}
+	if got.APIFormat != llm.APIFormatOpenAIChatCompletion {
+		t.Fatalf("APIFormat = %q, 期望 OpenAI Chat", got.APIFormat)
+	}
+	if got.ParallelToolCalls == nil || *got.ParallelToolCalls != true {
+		t.Fatal("保留可发送 function tool 时不应清空 ParallelToolCalls")
+	}
+	if len(got.Tools) != 1 || got.Tools[0].Function.Name != "read_file" {
+		t.Fatalf("Tools 未正确清理: %#v", got.Tools)
+	}
+	if got.ToolChoice != nil {
+		t.Fatalf("指向 Responses custom tool 的 ToolChoice 应被清理: %#v", got.ToolChoice)
+	}
+	if len(got.Messages) != 1 || len(got.Messages[0].ToolCalls) != 1 {
+		t.Fatalf("ToolCalls 未正确清理: %#v", got.Messages)
+	}
+	if got.Messages[0].ToolCalls[0].Function.Name != "read_file" {
+		t.Fatalf("保留的 ToolCall = %#v, 期望 read_file", got.Messages[0].ToolCalls[0])
+	}
+
+	if len(req.Tools) != 3 {
+		t.Fatalf("原始 Tools 被污染，长度 = %d", len(req.Tools))
+	}
+	if len(req.Compact.Input[0].ToolCalls) != 3 {
+		t.Fatalf("原始 Compact.Input ToolCalls 被污染，长度 = %d", len(req.Compact.Input[0].ToolCalls))
+	}
+}
+
+func TestCompactChatFallbackRequestClearsParallelToolCallsWhenNoChatTools(t *testing.T) {
+	parallel := true
+	req := &llm.Request{
+		Model:             "gpt-5.5",
+		RequestType:       llm.RequestTypeCompact,
+		ParallelToolCalls: &parallel,
+		ToolChoice:        &llm.ToolChoice{ToolChoice: strPtr("required")},
+		Tools: []llm.Tool{
+			{Type: llm.ToolTypeResponsesCustomTool, ResponseCustomTool: &llm.ResponseCustomTool{Name: "apply_patch"}},
+		},
+		Compact: &llm.CompactRequest{Input: []llm.Message{compactInputMessage("user", "hello")}},
+	}
+
+	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
+	if len(got.Tools) != 0 {
+		t.Fatalf("不可发送工具应全部清理，got %#v", got.Tools)
+	}
+	if got.ToolChoice != nil {
+		t.Fatalf("没有可发送工具时 ToolChoice 应被清理，got %#v", got.ToolChoice)
+	}
+	if got.ParallelToolCalls != nil {
+		t.Fatalf("没有可发送工具时 ParallelToolCalls 应被清理，got %#v", got.ParallelToolCalls)
 	}
 }
 
