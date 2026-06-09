@@ -62,7 +62,7 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 	}
 
 	apiKeyID := c.GetInt("api_key_id")
-	iter := balancer.NewIterator(group, apiKeyID, internalRequest.Model)
+	iter := newRelayIterator(group, apiKeyID, internalRequest, c.Request.Context())
 	if iter.Len() == 0 {
 		err := errors.New("no available channel")
 		resp.Error(c, http.StatusServiceUnavailable, err.Error())
@@ -83,6 +83,55 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 		iter:  iter,
 		group: group,
 	}, nil
+}
+
+func newRelayIterator(group dbmodel.Group, apiKeyID int, request *llm.Request, ctx context.Context) *balancer.Iterator {
+	if request == nil || request.RequestType != llm.RequestTypeCompact {
+		requestModel := ""
+		if request != nil {
+			requestModel = request.Model
+		}
+		return balancer.NewIterator(group, apiKeyID, requestModel)
+	}
+	ranks := compactCandidateRanks(group, ctx)
+	return balancer.NewIteratorWithCandidateRanks(group, apiKeyID, request.Model, ranks)
+}
+
+func compactCandidateRanks(group dbmodel.Group, ctx context.Context) map[int]int {
+	ranks := make(map[int]int, len(group.Items))
+	for _, item := range group.Items {
+		if item.ID == 0 || item.ChannelID == 0 {
+			continue
+		}
+		channel, err := op.ChannelGet(item.ChannelID, ctx)
+		if err != nil {
+			continue
+		}
+		ranks[item.ID] = compactGroupItemRank(item, channel)
+	}
+	return ranks
+}
+
+func compactGroupItemRank(item dbmodel.GroupItem, channel *dbmodel.Channel) int {
+	switch item.CompactStrategy {
+	case dbmodel.CompactStrategyOfficial:
+		return 0
+	case dbmodel.CompactStrategyResponsesManual:
+		return 1
+	case dbmodel.CompactStrategyChatManual:
+		return 2
+	}
+	if channel == nil {
+		return 5
+	}
+	switch channel.Type {
+	case llm.APIFormatOpenAIChatCompletion,
+		llm.APIFormatOpenAIResponse,
+		llm.APIFormatOpenAIResponseCompact:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func (r *relayRun) run() {
@@ -198,6 +247,7 @@ func (r *relayRun) buildRealAttempt(
 		relayRun:   r,
 		outAdapter: outAdapter,
 		channel:    channel,
+		groupItem:  item,
 		usedKey:    usedKey,
 		keyRemark:  keyRemark,
 	}, nil
@@ -380,39 +430,89 @@ func (ra *relayAttempt) forward() (int, error) {
 		return 0, err
 	}
 
-	// 先按渠道原生类型尝试（Response 渠道 → /v1/responses/compact，Chat 渠道 → /v1/chat/completions）。
-	// Chat 渠道承接 Compact 时，请求会降级为 Chat，但客户端仍期望 Compact 响应。
-	statusCode, fwdErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest), needsChatToCompactResponse(ra.channel.Type, ra.internalRequest))
-	if fwdErr == nil {
-		return statusCode, nil
+	if isCompactOpenAIChannel(ra.channel.Type, ra.internalRequest) {
+		return ra.forwardCompact(ctx, httpClient)
 	}
 
-	// Response 渠道的 Compact 降级：官方 /v1/responses/compact 不支持或在中转站上超时/5xx/断流时，
-	// 先在同一渠道、同一 key 上改用普通 /v1/responses 做手动压缩；若 /responses 也不兼容，
-	// 再降到 /v1/chat/completions。鉴权、限流等真实拒绝不会降级。
-	// 严格收口：仅 Compact 请求 + Response 类型渠道 + 客户端尚未收到任何数据。
-	if ra.canFallbackOfficialCompactToManual(fwdErr) {
-		responsesFallbackRequest := compactResponsesFallbackRequest(ra.internalRequest)
-		log.Infof("compact endpoint downgrade: channel=%s(%d), retrying via /v1/responses", ra.channel.Name, ra.channel.ID)
-		statusCode, responsesErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, responsesFallbackRequest, true)
-		if responsesErr == nil {
+	return ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest), needsChatToCompactResponse(ra.channel.Type, ra.internalRequest))
+}
+
+func isCompactOpenAIChannel(channelType llm.APIFormat, request *llm.Request) bool {
+	if request == nil || request.RequestType != llm.RequestTypeCompact {
+		return false
+	}
+	switch channelType {
+	case llm.APIFormatOpenAIChatCompletion,
+		llm.APIFormatOpenAIResponse,
+		llm.APIFormatOpenAIResponseCompact:
+		return true
+	default:
+		return false
+	}
+}
+
+func (ra *relayAttempt) forwardCompact(ctx context.Context, httpClient *http.Client) (int, error) {
+	cached, hasCached := ra.cachedCompactStrategy()
+	strategies := compactStrategyOrder(ra.channel.Type, cached, hasCached)
+	if len(strategies) == 0 {
+		return 0, fmt.Errorf("channel type %s is not compatible with %s request", ra.channel.Type, llm.RequestTypeCompact)
+	}
+
+	var lastStatusCode int
+	var lastErr error
+	for _, strategy := range strategies {
+		outAdapter, outboundRequest, needsChatToCompact, err := ra.compactAttempt(strategy)
+		if err != nil {
+			return lastStatusCode, err
+		}
+
+		log.Infof("compact route: channel=%s(%d), strategy=%s", ra.channel.Name, ra.channel.ID, strategy)
+		statusCode, fwdErr := ra.forwardWithAdapter(ctx, httpClient, outAdapter, outboundRequest, needsChatToCompact)
+		if fwdErr == nil {
+			ra.rememberCompactStrategy(ctx, strategy)
 			return statusCode, nil
 		}
-		if !ra.canDowngradeCompactResponsesFallback(responsesErr) {
-			return statusCode, responsesErr
-		}
 
-		chatAdapter, buildErr := newOutbound(llm.APIFormatOpenAIChatCompletion, ra.internalRequest, ra.channel.GetBaseUrl(), ra.usedKey.ChannelKey)
-		if buildErr != nil {
-			log.Warnf("compact endpoint downgrade: build chat outbound failed: %v", buildErr)
-			return statusCode, responsesErr
+		lastStatusCode = statusCode
+		lastErr = fwdErr
+		if !ra.canTryNextCompactStrategy(strategy, fwdErr) {
+			return statusCode, fwdErr
 		}
-		log.Infof("compact endpoint downgrade: channel=%s(%d), retrying via /v1/chat/completions", ra.channel.Name, ra.channel.ID)
-		// 最后尝试使用 Chat 端点，并标记需要 Chat→Compact 响应转换。
-		return ra.forwardWithAdapter(ctx, httpClient, chatAdapter, compactChatFallbackRequest(ra.internalRequest), true)
 	}
 
-	return statusCode, fwdErr
+	return lastStatusCode, lastErr
+}
+
+func (ra *relayAttempt) compactAttempt(strategy compactStrategy) (transformer.Outbound, *llm.Request, bool, error) {
+	switch strategy {
+	case compactStrategyOfficial:
+		return ra.outAdapter, compactOfficialRequest(ra.internalRequest), false, nil
+	case compactStrategyResponsesManual:
+		return ra.outAdapter, compactResponsesFallbackRequest(ra.internalRequest), true, nil
+	case compactStrategyChatManual:
+		if ra.channel.Type == llm.APIFormatOpenAIChatCompletion {
+			return ra.outAdapter, compactChatFallbackRequest(ra.internalRequest), true, nil
+		}
+		chatAdapter, err := newOutbound(llm.APIFormatOpenAIChatCompletion, ra.internalRequest, ra.channel.GetBaseUrl(), ra.usedKey.ChannelKey)
+		if err != nil {
+			log.Warnf("compact endpoint downgrade: build chat outbound failed: %v", err)
+			return nil, nil, false, err
+		}
+		return chatAdapter, compactChatFallbackRequest(ra.internalRequest), true, nil
+	default:
+		return nil, nil, false, fmt.Errorf("unknown compact strategy: %s", strategy)
+	}
+}
+
+func (ra *relayAttempt) canTryNextCompactStrategy(strategy compactStrategy, fwdErr error) bool {
+	switch strategy {
+	case compactStrategyOfficial:
+		return ra.canFallbackOfficialCompactToManual(fwdErr)
+	case compactStrategyResponsesManual:
+		return ra.canDowngradeCompactResponsesFallback(fwdErr)
+	default:
+		return false
+	}
 }
 
 // canDowngradeCompactEndpoint 判断当前失败是否满足"同渠道 Compact 端点降级"的全部条件。
@@ -445,7 +545,9 @@ func (ra *relayAttempt) canFallbackOfficialCompactToManual(fwdErr error) bool {
 	if ra.c.Writer.Written() {
 		return false
 	}
-	return isEndpointUnsupportedError(fwdErr) || isCompactManualFallbackError(fwdErr)
+	return isEndpointUnsupportedError(fwdErr) ||
+		isCompactResponsesFallbackIncompatibleError(fwdErr) ||
+		isCompactManualFallbackError(fwdErr)
 }
 
 // canDowngradeCompactResponsesFallback 判断普通 /responses fallback 失败后是否还能继续降到 Chat。
@@ -894,6 +996,14 @@ func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request)
 	return cloneRequestForAttempt(request)
 }
 
+// compactOfficialRequest 构造官方 /v1/responses/compact 尝试使用的请求副本。
+func compactOfficialRequest(request *llm.Request) *llm.Request {
+	attemptRequest := cloneRequestForAttempt(request)
+	attemptRequest.RequestType = llm.RequestTypeCompact
+	attemptRequest.APIFormat = llm.APIFormatOpenAIResponseCompact
+	return attemptRequest
+}
+
 // compactResponsesFallbackRequest 把 Compact 请求降级成可由普通 OpenAI Responses 端点处理的副本。
 func compactResponsesFallbackRequest(request *llm.Request) *llm.Request {
 	attemptRequest := compactConversationFallbackRequest(request)
@@ -1120,7 +1230,7 @@ func (in *parsedRequestInbound) TransformRequest(ctx context.Context, request *h
 }
 
 // chatToCompactMiddleware 将 Chat 形态的响应转换为 Compact 格式。
-// 用于端点降级场景：/v1/responses/compact 不支持时改用 /v1/responses 或 /v1/chat/completions，
+// 用于手动压缩路径：/v1/responses 或 /v1/chat/completions 返回 Choices，
 // 但客户端期望收到 Compact API 响应，因此需要把 Choices 转换成 Compact 结构。
 type chatToCompactMiddleware struct {
 	pipeline.DummyMiddleware

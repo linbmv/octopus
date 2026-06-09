@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 type GroupMode int
 
 const (
@@ -37,6 +39,10 @@ type GroupItem struct {
 	Weight        int    `json:"weight"`
 	// Disabled 临时禁用该分组成员（不影响渠道本身）。零值 false 表示启用，存量数据与新建成员默认启用。
 	Disabled bool `json:"disabled" gorm:"not null;default:false"`
+
+	CompactStrategy          CompactStrategy `json:"-" gorm:"type:varchar(32);default:''"`
+	CompactStrategyUpdatedAt *time.Time      `json:"-"`
+	CompactProbeError        string          `json:"-" gorm:"type:text"`
 }
 
 // GroupUpdateRequest 分组更新请求 - 仅包含变更的数据

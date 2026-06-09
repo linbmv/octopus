@@ -302,3 +302,69 @@ func TestFetchModelsAnthropicFallsBackToOpenAIWhenEmpty(t *testing.T) {
 		t.Fatalf("请求路径序列 = %v, 期望两次 /v1/models", paths)
 	}
 }
+
+func TestProbeCompactStrategyFallsBackToResponsesManual(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Fatalf("Authorization = %q, 期望 Bearer test-key", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/responses/compact":
+			http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
+		case "/v1/responses":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "resp_1"})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	result := ProbeCompactStrategy(context.Background(), testChannel(server.URL, llm.APIFormatOpenAIResponse), "gpt-4o")
+	if result.Strategy != model.CompactStrategyResponsesManual {
+		t.Fatalf("Strategy = %q, 期望 %q, error=%s", result.Strategy, model.CompactStrategyResponsesManual, result.Error)
+	}
+	want := []string{"/v1/responses/compact", "/v1/responses"}
+	if len(paths) != len(want) {
+		t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
+		}
+	}
+}
+
+func TestProbeCompactStrategyFallsBackToChatManual(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/responses/compact":
+			http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
+		case "/v1/responses":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid codex request (request id: x)","code":"invalid_responses_request","type":"new_api_error"}}`))
+		case "/v1/chat/completions":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "chatcmpl_1"})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	result := ProbeCompactStrategy(context.Background(), testChannel(server.URL, llm.APIFormatOpenAIResponse), "gpt-4o")
+	if result.Strategy != model.CompactStrategyChatManual {
+		t.Fatalf("Strategy = %q, 期望 %q, error=%s", result.Strategy, model.CompactStrategyChatManual, result.Error)
+	}
+	want := []string{"/v1/responses/compact", "/v1/responses", "/v1/chat/completions"}
+	if len(paths) != len(want) {
+		t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
+		}
+	}
+}

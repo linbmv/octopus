@@ -195,7 +195,21 @@ func TestRequestForOutboundPipelineKeepsCompactForResponseChannel(t *testing.T) 
 		t.Fatal("requestForOutboundPipeline returned nil")
 	}
 	if got.RequestType != llm.RequestTypeCompact {
-		t.Fatalf("OpenAI Response 请求副本 RequestType = %q，期望保持 Compact", got.RequestType)
+		t.Fatalf("OpenAI Response Compact 请求副本 RequestType = %q，期望保持 Compact", got.RequestType)
+	}
+	if req.RequestType != llm.RequestTypeCompact {
+		t.Fatalf("原始请求被污染为 %q，期望保持 Compact", req.RequestType)
+	}
+}
+
+func TestRequestForOutboundPipelineKeepsCompactForResponseCompactChannel(t *testing.T) {
+	req := &llm.Request{RequestType: llm.RequestTypeCompact, Model: "gpt-5.5"}
+	got := requestForOutboundPipeline(llm.APIFormatOpenAIResponseCompact, req)
+	if got == nil {
+		t.Fatal("requestForOutboundPipeline returned nil")
+	}
+	if got.RequestType != llm.RequestTypeCompact {
+		t.Fatalf("OpenAI Response Compact 请求副本 RequestType = %q，期望保持 Compact", got.RequestType)
 	}
 	if req.RequestType != llm.RequestTypeCompact {
 		t.Fatalf("原始请求被污染为 %q，期望保持 Compact", req.RequestType)
@@ -207,7 +221,10 @@ func TestNeedsChatToCompactResponse(t *testing.T) {
 		t.Fatal("OpenAI Chat Compact 请求应启用 Chat→Compact 响应转换")
 	}
 	if needsChatToCompactResponse(llm.APIFormatOpenAIResponse, &llm.Request{RequestType: llm.RequestTypeCompact}) {
-		t.Fatal("OpenAI Response Compact 原生路径不应启用 Chat→Compact 响应转换")
+		t.Fatal("OpenAI Response 官方 Compact 路径不应启用 Chat→Compact 响应转换")
+	}
+	if needsChatToCompactResponse(llm.APIFormatOpenAIResponseCompact, &llm.Request{RequestType: llm.RequestTypeCompact}) {
+		t.Fatal("OpenAI Response Compact 官方路径不应启用 Chat→Compact 响应转换")
 	}
 	if needsChatToCompactResponse(llm.APIFormatOpenAIChatCompletion, &llm.Request{RequestType: llm.RequestTypeChat}) {
 		t.Fatal("普通 Chat 请求不应启用 Chat→Compact 响应转换")

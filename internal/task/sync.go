@@ -40,13 +40,14 @@ func SyncModelsTask() {
 			log.Warnf("failed to fetch models for channel %s: %v", channel.Name, err)
 			continue
 		}
+		newModels := xstrings.TrimCompact(fetchModels)
+
 		// 如果获取到空列表且渠道原本有模型，跳过更新以防误删（可能是 API key 权限不足或临时故障）
 		if len(fetchModels) == 0 && channel.Model != "" {
 			log.Warnf("channel %s fetched empty model list but has existing models, skipping sync to prevent data loss", channel.Name)
 			continue
 		}
 		oldModels := xstrings.SplitTrimCompact(",", channel.Model)
-		newModels := xstrings.TrimCompact(fetchModels)
 		for _, m := range newModels {
 			m = strings.TrimSpace(m)
 			if m == "" {
@@ -69,6 +70,7 @@ func SyncModelsTask() {
 				log.Errorf("failed to update channel %s: %v", channel.Name, err)
 				continue
 			}
+			channel.Model = fetchModelStr
 		}
 		// 批量删除消失的模型对应的 GroupItem
 		if len(deletedModels) > 0 {
@@ -87,6 +89,8 @@ func SyncModelsTask() {
 			helper.ChannelAutoGroup(&channel, ctx)
 		}
 	}
+	syncCompactGroupStrategies(ctx)
+
 	llmPrice, err := op.LLMList(ctx)
 	if err != nil {
 		log.Errorf("failed to list models price: %v", err)
@@ -113,4 +117,59 @@ func SyncModelsTask() {
 
 func GetLastSyncModelsTime() time.Time {
 	return lastSyncModelsTime
+}
+
+func syncCompactGroupStrategies(ctx context.Context) {
+	groups, err := op.GroupList(ctx)
+	if err != nil {
+		log.Warnf("failed to list groups for compact strategy probe: %v", err)
+		return
+	}
+
+	for _, group := range groups {
+		if !shouldProbeCompactGroup(group.Name) {
+			continue
+		}
+		expanded, err := op.GroupGetEnabledByID(group.ID, ctx)
+		if err != nil {
+			log.Warnf("failed to get compact probe group %s(%d): %v", group.Name, group.ID, err)
+			continue
+		}
+		for _, item := range expanded.Items {
+			syncGroupItemCompactStrategy(ctx, group.Name, item)
+		}
+	}
+}
+
+func syncGroupItemCompactStrategy(ctx context.Context, groupName string, item model.GroupItem) {
+	if item.ID == 0 || item.ChannelID == 0 || strings.TrimSpace(item.ModelName) == "" {
+		return
+	}
+	channel, err := op.ChannelGet(item.ChannelID, ctx)
+	if err != nil {
+		log.Warnf("failed to get compact probe channel %d for group %s: %v", item.ChannelID, groupName, err)
+		return
+	}
+	result := helper.ProbeCompactStrategy(ctx, *channel, item.ModelName)
+	if err := op.GroupItemCompactStrategyUpdate(item.ID, item.GroupID, result.Strategy, result.Error, time.Now(), ctx); err != nil {
+		log.Warnf("failed to update compact strategy for group %s item %d: %v", groupName, item.ID, err)
+		return
+	}
+	if result.Strategy != "" {
+		log.Infof("group %s item %d compact strategy detected: %s", groupName, item.ID, result.Strategy)
+		return
+	}
+	if result.Error == "" {
+		return
+	}
+	if strings.HasPrefix(result.Error, "compact probe skipped:") {
+		log.Debugf("group %s item %d compact strategy probe skipped: %s", groupName, item.ID, result.Error)
+		return
+	}
+	log.Warnf("group %s item %d compact strategy probe failed: %s", groupName, item.ID, result.Error)
+}
+
+func shouldProbeCompactGroup(groupName string) bool {
+	name := strings.ToLower(strings.TrimSpace(groupName))
+	return strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "chatgpt")
 }

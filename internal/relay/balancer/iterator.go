@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -24,8 +25,15 @@ type Iterator struct {
 // NewIterator 创建负载均衡迭代器
 // 自动处理：策略排序 + 粘性通道提前
 func NewIterator(group model.Group, apiKeyID int, requestModel string) *Iterator {
+	return NewIteratorWithCandidateRanks(group, apiKeyID, requestModel, nil)
+}
+
+// NewIteratorWithCandidateRanks 创建带候选能力分层的迭代器。
+// ranks 仅作为第一层排序键；同一 rank 内仍保留原分组策略产生的顺序。
+func NewIteratorWithCandidateRanks(group model.Group, apiKeyID int, requestModel string, ranks map[int]int) *Iterator {
 	b := GetBalancer(group.Mode)
 	candidates := b.Candidates(group.Items)
+	applyCandidateRanks(candidates, ranks)
 
 	stickyIdx := -1
 	stickyKeyID := 0
@@ -39,6 +47,9 @@ func NewIterator(group model.Group, apiKeyID int, requestModel string) *Iterator
 					continue
 				}
 				if sticky.ModelName != "" && sticky.ModelName != item.ModelName {
+					continue
+				}
+				if len(candidates) > 0 && rankOfCandidate(item, ranks) != rankOfCandidate(candidates[0], ranks) {
 					continue
 				}
 				if i > 0 {
@@ -61,6 +72,25 @@ func NewIterator(group model.Group, apiKeyID int, requestModel string) *Iterator
 		stickyKeyID: stickyKeyID,
 		modelName:   requestModel,
 	}
+}
+
+func applyCandidateRanks(candidates []model.GroupItem, ranks map[int]int) {
+	if len(candidates) <= 1 || len(ranks) == 0 {
+		return
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return rankOfCandidate(candidates[i], ranks) < rankOfCandidate(candidates[j], ranks)
+	})
+}
+
+func rankOfCandidate(item model.GroupItem, ranks map[int]int) int {
+	if len(ranks) == 0 {
+		return 0
+	}
+	if rank, ok := ranks[item.ID]; ok {
+		return rank
+	}
+	return 1 << 30
 }
 
 // Next 移动到下一个候选，返回 false 表示遍历完成
