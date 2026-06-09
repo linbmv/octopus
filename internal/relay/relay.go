@@ -863,6 +863,17 @@ func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request)
 func compactResponsesFallbackRequest(request *llm.Request) *llm.Request {
 	attemptRequest := compactConversationFallbackRequest(request)
 	attemptRequest.APIFormat = llm.APIFormatOpenAIResponse
+	arrayInputs := true
+	store := false
+	attemptRequest.TransformOptions.ArrayInputs = &arrayInputs
+	attemptRequest.Store = &store
+	attemptRequest.MaxCompletionTokens = nil
+	attemptRequest.MaxTokens = nil
+	attemptRequest.Metadata = nil
+	if request != nil && request.Compact != nil && strings.TrimSpace(request.Compact.PromptCacheKey) != "" {
+		promptCacheKey := request.Compact.PromptCacheKey
+		attemptRequest.PromptCacheKey = &promptCacheKey
+	}
 	return attemptRequest
 }
 

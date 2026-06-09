@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -277,8 +278,9 @@ func TestCompactResponsesFallbackRequestUsesStandardResponsesShape(t *testing.T)
 		Model:       "gpt-5.5",
 		RequestType: llm.RequestTypeCompact,
 		Compact: &llm.CompactRequest{
-			Instructions: "summarize",
-			Input:        []llm.Message{compactInputMessage("user", "hello")},
+			Instructions:   "summarize",
+			PromptCacheKey: "cache-key",
+			Input:          []llm.Message{compactInputMessage("user", "hello")},
 		},
 	}
 
@@ -291,6 +293,15 @@ func TestCompactResponsesFallbackRequestUsesStandardResponsesShape(t *testing.T)
 	}
 	if got.APIFormat != llm.APIFormatOpenAIResponse {
 		t.Fatalf("APIFormat = %q, 期望 OpenAI Responses", got.APIFormat)
+	}
+	if got.Store == nil || *got.Store {
+		t.Fatalf("Store = %#v, 期望 false", got.Store)
+	}
+	if got.TransformOptions.ArrayInputs == nil || !*got.TransformOptions.ArrayInputs {
+		t.Fatalf("ArrayInputs = %#v, 期望 true", got.TransformOptions.ArrayInputs)
+	}
+	if got.PromptCacheKey == nil || *got.PromptCacheKey != "cache-key" {
+		t.Fatalf("PromptCacheKey = %#v, 期望 cache-key", got.PromptCacheKey)
 	}
 	if len(got.Messages) != 2 {
 		t.Fatalf("Messages 长度 = %d, 期望 2（system + input）", len(got.Messages))
@@ -306,6 +317,57 @@ func TestCompactResponsesFallbackRequestUsesStandardResponsesShape(t *testing.T)
 	}
 	if len(req.Messages) != 0 {
 		t.Fatalf("原始 Messages 被污染，长度 = %d，期望 0", len(req.Messages))
+	}
+}
+
+func TestCompactResponsesFallbackRequestBuildsCodexCompatibleResponsesBody(t *testing.T) {
+	req := &llm.Request{
+		Model:       "gpt-5.5",
+		RequestType: llm.RequestTypeCompact,
+		Compact: &llm.CompactRequest{
+			Instructions:   "summarize",
+			PromptCacheKey: "cache-key",
+			Input:          []llm.Message{compactInputMessage("user", "hello")},
+		},
+	}
+	fallback := compactResponsesFallbackRequest(req)
+	outbound, err := newOutbound(llm.APIFormatOpenAIResponse, fallback, testBaseURL, testAPIKey)
+	if err != nil {
+		t.Fatalf("newOutbound returned error: %v", err)
+	}
+	httpReq, err := outbound.TransformRequest(context.Background(), fallback)
+	if err != nil {
+		t.Fatalf("TransformRequest returned error: %v", err)
+	}
+	if httpReq.URL != testBaseURL+"/responses" {
+		t.Fatalf("URL = %q, 期望普通 /responses", httpReq.URL)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(httpReq.Body, &body); err != nil {
+		t.Fatalf("body 不是合法 JSON: %v", err)
+	}
+	input, ok := body["input"].([]any)
+	if !ok {
+		t.Fatalf("input = %#v, 期望数组而不是字符串", body["input"])
+	}
+	if len(input) != 1 {
+		t.Fatalf("input 长度 = %d, 期望 1", len(input))
+	}
+	if body["instructions"] != "summarize" {
+		t.Fatalf("instructions = %#v, 期望 summarize", body["instructions"])
+	}
+	if body["store"] != false {
+		t.Fatalf("store = %#v, 期望 false", body["store"])
+	}
+	if body["prompt_cache_key"] != "cache-key" {
+		t.Fatalf("prompt_cache_key = %#v, 期望 cache-key", body["prompt_cache_key"])
+	}
+	if _, ok := body["max_tokens"]; ok {
+		t.Fatal("Codex-compatible Responses fallback 不应发送 max_tokens")
+	}
+	if _, ok := body["max_completion_tokens"]; ok {
+		t.Fatal("Codex-compatible Responses fallback 不应发送 max_completion_tokens")
 	}
 }
 
