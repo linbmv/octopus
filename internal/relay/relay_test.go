@@ -26,42 +26,6 @@ func newTestAttempt(channel *dbmodel.Channel) *relayAttempt {
 	}
 }
 
-func TestShouldMarkCompactProbeGroup(t *testing.T) {
-	tests := []struct {
-		name    string
-		inbound llm.APIFormat
-		request *llm.Request
-		want    bool
-	}{
-		{
-			name:    "compact request always marks",
-			inbound: llm.APIFormatOpenAIResponseCompact,
-			request: &llm.Request{RequestType: llm.RequestTypeCompact},
-			want:    true,
-		},
-		{
-			name:    "responses request marks",
-			inbound: llm.APIFormatOpenAIResponse,
-			request: &llm.Request{RequestType: llm.RequestTypeChat},
-			want:    true,
-		},
-		{
-			name:    "chat completions request does not premark",
-			inbound: llm.APIFormatOpenAIChatCompletion,
-			request: &llm.Request{RequestType: llm.RequestTypeChat},
-			want:    false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldMarkCompactProbeGroup(tt.inbound, tt.request); got != tt.want {
-				t.Fatalf("shouldMarkCompactProbeGroup() = %t, want %t", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestApplyChannelRequestOptionsOverridesJSONBody(t *testing.T) {
 	override := `{"temperature":0.5,"top_p":0.9}`
 	ra := newTestAttempt(&dbmodel.Channel{ParamOverride: &override})

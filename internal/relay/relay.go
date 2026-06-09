@@ -18,7 +18,6 @@ import (
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/resp"
-	"github.com/bestruirui/octopus/internal/task"
 	"github.com/bestruirui/octopus/internal/utils/jsonpatch"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
@@ -61,17 +60,6 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 		resp.Error(c, http.StatusNotFound, "model not found")
 		return nil, err
 	}
-	if shouldMarkCompactProbeGroup(inboundType, internalRequest) {
-		marked, err := op.GroupCompactProbeEnable(group.ID, c.Request.Context())
-		if err != nil {
-			log.Warnf("failed to mark compact probe group %s(%d): %v", group.Name, group.ID, err)
-		} else {
-			group.CompactProbeEnabled = true
-			if marked {
-				task.ProbeCompactGroupStrategiesAsync(group.ID)
-			}
-		}
-	}
 
 	apiKeyID := c.GetInt("api_key_id")
 	iter := newRelayIterator(group, apiKeyID, internalRequest, c.Request.Context())
@@ -95,16 +83,6 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 		iter:  iter,
 		group: group,
 	}, nil
-}
-
-func shouldMarkCompactProbeGroup(inboundType llm.APIFormat, request *llm.Request) bool {
-	if request == nil {
-		return false
-	}
-	if request.RequestType == llm.RequestTypeCompact {
-		return true
-	}
-	return inboundType == llm.APIFormatOpenAIResponse
 }
 
 func newRelayIterator(group dbmodel.Group, apiKeyID int, request *llm.Request, ctx context.Context) *balancer.Iterator {

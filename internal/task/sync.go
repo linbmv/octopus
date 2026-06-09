@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/helper"
@@ -15,7 +14,6 @@ import (
 )
 
 var lastSyncModelsTime = time.Now()
-var compactProbeGroupInFlight sync.Map
 
 // SyncModelsTask 同步模型任务
 func SyncModelsTask() {
@@ -121,21 +119,6 @@ func GetLastSyncModelsTime() time.Time {
 	return lastSyncModelsTime
 }
 
-func ProbeCompactGroupStrategiesAsync(groupID int) {
-	if groupID == 0 {
-		return
-	}
-	if _, loaded := compactProbeGroupInFlight.LoadOrStore(groupID, struct{}{}); loaded {
-		return
-	}
-	go func() {
-		defer compactProbeGroupInFlight.Delete(groupID)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		probeCompactGroupStrategies(ctx, groupID)
-	}()
-}
-
 func syncCompactGroupStrategies(ctx context.Context) {
 	groups, err := op.GroupList(ctx)
 	if err != nil {
@@ -144,7 +127,7 @@ func syncCompactGroupStrategies(ctx context.Context) {
 	}
 
 	for _, group := range groups {
-		if !group.CompactProbeEnabled {
+		if !group.Enabled {
 			continue
 		}
 		probeCompactGroupStrategies(ctx, group.ID)
@@ -154,7 +137,7 @@ func syncCompactGroupStrategies(ctx context.Context) {
 func probeCompactGroupStrategies(ctx context.Context, groupID int) {
 	expanded, err := op.GroupGetEnabledByID(groupID, ctx)
 	if err != nil {
-		log.Warnf("failed to get compact probe group %d: %v", groupID, err)
+		log.Debugf("failed to get compact probe group %d: %v", groupID, err)
 		return
 	}
 	for _, item := range expanded.Items {
@@ -168,7 +151,7 @@ func syncGroupItemCompactStrategy(ctx context.Context, groupName string, item mo
 	}
 	channel, err := op.ChannelGet(item.ChannelID, ctx)
 	if err != nil {
-		log.Warnf("failed to get compact probe channel %d for group %s: %v", item.ChannelID, groupName, err)
+		log.Debugf("failed to get compact probe channel %d for group %s: %v", item.ChannelID, groupName, err)
 		return
 	}
 	result := helper.ProbeCompactStrategy(ctx, *channel, item.ModelName)
@@ -187,5 +170,5 @@ func syncGroupItemCompactStrategy(ctx context.Context, groupName string, item mo
 		log.Debugf("group %s item %d compact strategy probe skipped: %s", groupName, item.ID, result.Error)
 		return
 	}
-	log.Warnf("group %s item %d compact strategy probe failed: %s", groupName, item.ID, result.Error)
+	log.Debugf("group %s item %d compact strategy probe failed: %s", groupName, item.ID, result.Error)
 }
