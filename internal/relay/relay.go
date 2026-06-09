@@ -852,17 +852,16 @@ func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request)
 //   - RequestType 改为 Chat（绕过 openai outbound 对 Compact 的拒绝）；
 //   - 把 Compact.Input 搬到 Messages（axonhub Compact inbound 把消息放在 Compact.Input，Messages 恒为空）；
 //   - Compact.Instructions 非空时，作为 system 消息插入到最前，保留系统指令。
+//   - 工具调用历史转成普通 transcript 文本，不按 Chat Completions 工具协议发送。
 //
 // 全程基于副本和切片拷贝，不修改原始 request，保证多 attempt 重试安全。
 func compactChatFallbackRequest(request *llm.Request) *llm.Request {
 	attemptRequest := cloneRequestForAttempt(request)
 	attemptRequest.RequestType = llm.RequestTypeChat
 	attemptRequest.APIFormat = llm.APIFormatOpenAIChatCompletion
-	attemptRequest.Tools = sanitizeToolsForChatFallback(request.Tools)
-	attemptRequest.ToolChoice = sanitizeToolChoiceForChatFallback(request.ToolChoice, attemptRequest.Tools)
-	if len(attemptRequest.Tools) == 0 {
-		attemptRequest.ParallelToolCalls = nil
-	}
+	attemptRequest.Tools = nil
+	attemptRequest.ToolChoice = nil
+	attemptRequest.ParallelToolCalls = nil
 
 	if request.Compact == nil {
 		return attemptRequest
@@ -877,87 +876,161 @@ func compactChatFallbackRequest(request *llm.Request) *llm.Request {
 		})
 	}
 	messages = append(messages, request.Compact.Input...)
-	attemptRequest.Messages = sanitizeMessagesForChatFallback(messages)
+	attemptRequest.Messages = transcriptMessagesForChatFallback(messages)
 
 	return attemptRequest
 }
 
-func sanitizeToolsForChatFallback(tools []llm.Tool) []llm.Tool {
-	if len(tools) == 0 {
-		return nil
-	}
-
-	sanitized := make([]llm.Tool, 0, len(tools))
-	for _, tool := range tools {
-		if tool.Type != llm.ToolTypeFunction || strings.TrimSpace(tool.Function.Name) == "" {
-			continue
-		}
-		sanitized = append(sanitized, tool)
-	}
-	return sanitized
-}
-
-func sanitizeToolChoiceForChatFallback(choice *llm.ToolChoice, tools []llm.Tool) *llm.ToolChoice {
-	if choice == nil {
-		return nil
-	}
-
-	if choice.NamedToolChoice == nil {
-		if len(tools) == 0 {
-			return nil
-		}
-		if choice.ToolChoice != nil {
-			switch *choice.ToolChoice {
-			case "auto", "none", "required":
-				return choice
-			default:
-				return nil
-			}
-		}
-		return choice
-	}
-
-	if choice.NamedToolChoice.Type != llm.ToolTypeFunction || strings.TrimSpace(choice.NamedToolChoice.Function.Name) == "" {
-		return nil
-	}
-	for _, tool := range tools {
-		if tool.Function.Name == choice.NamedToolChoice.Function.Name {
-			return choice
-		}
-	}
-	return nil
-}
-
-func sanitizeMessagesForChatFallback(messages []llm.Message) []llm.Message {
+func transcriptMessagesForChatFallback(messages []llm.Message) []llm.Message {
 	if len(messages) == 0 {
 		return nil
 	}
 
-	sanitized := make([]llm.Message, 0, len(messages))
+	transcript := make([]llm.Message, 0, len(messages))
 	for _, message := range messages {
-		message.ToolCalls = sanitizeToolCallsForChatFallback(message.ToolCalls)
-		sanitized = append(sanitized, message)
+		text := transcriptTextForChatFallback(message)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		message.Role = transcriptRoleForChatFallback(message)
+		message.Content = llm.MessageContent{Content: &text}
+		message.MessageIndex = nil
+		message.ToolCallID = nil
+		message.ToolCallName = nil
+		message.ToolCallIsError = nil
+		message.ToolCalls = nil
+		message.ReasoningContent = nil
+		message.Reasoning = nil
+		message.CacheControl = nil
+		transcript = append(transcript, message)
 	}
-	return sanitized
+	return transcript
 }
 
-func sanitizeToolCallsForChatFallback(toolCalls []llm.ToolCall) []llm.ToolCall {
-	if len(toolCalls) == 0 {
-		return nil
+func transcriptRoleForChatFallback(message llm.Message) string {
+	switch message.Role {
+	case "assistant", "system", "user":
+		return message.Role
+	case "developer":
+		return "system"
+	default:
+		return "user"
+	}
+}
+
+func transcriptTextForChatFallback(message llm.Message) string {
+	content := messageContentTextForChatFallback(message.Content)
+	if message.Role == "tool" || message.ToolCallID != nil || message.ToolCallName != nil {
+		return toolResultTextForChatFallback(message, content)
 	}
 
-	sanitized := make([]llm.ToolCall, 0, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		if toolCall.Type != "" && toolCall.Type != llm.ToolTypeFunction {
-			continue
-		}
-		if strings.TrimSpace(toolCall.Function.Name) == "" {
-			continue
-		}
-		toolCall.Type = llm.ToolTypeFunction
-		sanitized = append(sanitized, toolCall)
+	parts := make([]string, 0, len(message.ToolCalls)+2)
+	if strings.TrimSpace(content) != "" {
+		parts = append(parts, content)
 	}
-	return sanitized
+	if message.ReasoningContent != nil && strings.TrimSpace(*message.ReasoningContent) != "" {
+		parts = append(parts, "[reasoning]\n"+*message.ReasoningContent)
+	} else if message.Reasoning != nil && strings.TrimSpace(*message.Reasoning) != "" {
+		parts = append(parts, "[reasoning]\n"+*message.Reasoning)
+	}
+	for _, toolCall := range message.ToolCalls {
+		if text := toolCallTextForChatFallback(toolCall); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func toolResultTextForChatFallback(message llm.Message, content string) string {
+	details := make([]string, 0, 3)
+	if message.ToolCallName != nil && strings.TrimSpace(*message.ToolCallName) != "" {
+		details = append(details, "name="+*message.ToolCallName)
+	}
+	if message.ToolCallID != nil && strings.TrimSpace(*message.ToolCallID) != "" {
+		details = append(details, "id="+*message.ToolCallID)
+	}
+	if message.ToolCallIsError != nil && *message.ToolCallIsError {
+		details = append(details, "error=true")
+	}
+
+	header := "[tool result]"
+	if len(details) > 0 {
+		header = "[tool result " + strings.Join(details, " ") + "]"
+	}
+	if strings.TrimSpace(content) == "" {
+		return header
+	}
+	return header + "\n" + content
+}
+
+func toolCallTextForChatFallback(toolCall llm.ToolCall) string {
+	name := strings.TrimSpace(toolCall.Function.Name)
+	input := toolCall.Function.Arguments
+	if toolCall.ResponseCustomToolCall != nil {
+		if strings.TrimSpace(toolCall.ResponseCustomToolCall.Name) != "" {
+			name = strings.TrimSpace(toolCall.ResponseCustomToolCall.Name)
+		}
+		input = toolCall.ResponseCustomToolCall.Input
+	}
+	if name == "" && strings.TrimSpace(toolCall.ID) == "" && strings.TrimSpace(input) == "" {
+		return ""
+	}
+
+	details := make([]string, 0, 2)
+	if name != "" {
+		details = append(details, "name="+name)
+	}
+	if strings.TrimSpace(toolCall.ID) != "" {
+		details = append(details, "id="+toolCall.ID)
+	}
+	header := "[tool call]"
+	if len(details) > 0 {
+		header = "[tool call " + strings.Join(details, " ") + "]"
+	}
+	if strings.TrimSpace(input) == "" {
+		return header
+	}
+	return header + "\n" + input
+}
+
+func messageContentTextForChatFallback(content llm.MessageContent) string {
+	if content.Content != nil {
+		return *content.Content
+	}
+	if len(content.MultipleContent) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(content.MultipleContent))
+	for _, part := range content.MultipleContent {
+		switch part.Type {
+		case "text":
+			if part.Text != nil && strings.TrimSpace(*part.Text) != "" {
+				parts = append(parts, *part.Text)
+			}
+		case "image_url":
+			if part.ImageURL != nil && strings.TrimSpace(part.ImageURL.URL) != "" {
+				parts = append(parts, "[image_url] "+part.ImageURL.URL)
+			}
+		case "video_url":
+			if part.VideoURL != nil && strings.TrimSpace(part.VideoURL.URL) != "" {
+				parts = append(parts, "[video_url] "+part.VideoURL.URL)
+			}
+		case "input_audio":
+			if part.InputAudio != nil {
+				parts = append(parts, "[input_audio] format="+part.InputAudio.Format)
+			}
+		case "compaction", "compaction_summary":
+			if part.Compact != nil && strings.TrimSpace(part.Compact.EncryptedContent) != "" {
+				parts = append(parts, "["+part.Type+"] "+part.Compact.EncryptedContent)
+			}
+		default:
+			if strings.TrimSpace(part.Type) != "" {
+				parts = append(parts, "["+part.Type+"]")
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // parsedRequestInbound 让 pipeline 复用 relay 在选路前已经解析好的 llm.Request。

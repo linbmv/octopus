@@ -310,7 +310,7 @@ func TestCompactChatFallbackRequestNilCompact(t *testing.T) {
 	}
 }
 
-func TestCompactChatFallbackRequestSanitizesResponseOnlyTools(t *testing.T) {
+func TestCompactChatFallbackRequestTranscriptsToolHistory(t *testing.T) {
 	forcedCustom := &llm.ToolChoice{
 		NamedToolChoice: &llm.NamedToolChoice{
 			Type:     llm.ToolTypeResponsesCustomTool,
@@ -333,7 +333,7 @@ func TestCompactChatFallbackRequestSanitizesResponseOnlyTools(t *testing.T) {
 				{
 					Role: "assistant",
 					ToolCalls: []llm.ToolCall{
-						{ID: "custom", Type: llm.ToolTypeResponsesCustomTool, ResponseCustomToolCall: &llm.ResponseCustomToolCall{Name: "apply_patch"}},
+						{ID: "custom", Type: llm.ToolTypeResponsesCustomTool, ResponseCustomToolCall: &llm.ResponseCustomToolCall{Name: "apply_patch", Input: "*** Begin Patch\n"}},
 						{ID: "empty", Type: llm.ToolTypeFunction, Function: llm.FunctionCall{Name: ""}},
 						{ID: "fn", Type: llm.ToolTypeFunction, Function: llm.FunctionCall{Name: "read_file", Arguments: "{}"}},
 					},
@@ -349,20 +349,30 @@ func TestCompactChatFallbackRequestSanitizesResponseOnlyTools(t *testing.T) {
 	if got.APIFormat != llm.APIFormatOpenAIChatCompletion {
 		t.Fatalf("APIFormat = %q, 期望 OpenAI Chat", got.APIFormat)
 	}
-	if got.ParallelToolCalls == nil || *got.ParallelToolCalls != true {
-		t.Fatal("保留可发送 function tool 时不应清空 ParallelToolCalls")
+	if got.ParallelToolCalls != nil {
+		t.Fatalf("Compact Chat fallback 不应发送 ParallelToolCalls，got %#v", got.ParallelToolCalls)
 	}
-	if len(got.Tools) != 1 || got.Tools[0].Function.Name != "read_file" {
-		t.Fatalf("Tools 未正确清理: %#v", got.Tools)
+	if len(got.Tools) != 0 {
+		t.Fatalf("Compact Chat fallback 不应发送工具定义: %#v", got.Tools)
 	}
 	if got.ToolChoice != nil {
-		t.Fatalf("指向 Responses custom tool 的 ToolChoice 应被清理: %#v", got.ToolChoice)
+		t.Fatalf("Compact Chat fallback 不应发送 ToolChoice: %#v", got.ToolChoice)
 	}
-	if len(got.Messages) != 1 || len(got.Messages[0].ToolCalls) != 1 {
-		t.Fatalf("ToolCalls 未正确清理: %#v", got.Messages)
+	if len(got.Messages) != 1 {
+		t.Fatalf("Messages 长度 = %d, 期望 1", len(got.Messages))
 	}
-	if got.Messages[0].ToolCalls[0].Function.Name != "read_file" {
-		t.Fatalf("保留的 ToolCall = %#v, 期望 read_file", got.Messages[0].ToolCalls[0])
+	if len(got.Messages[0].ToolCalls) != 0 {
+		t.Fatalf("真实 ToolCalls 应转成文本而不是继续发送: %#v", got.Messages[0].ToolCalls)
+	}
+	if got.Messages[0].Content.Content == nil {
+		t.Fatal("工具调用 transcript 应写入普通文本 content")
+	}
+	content := *got.Messages[0].Content.Content
+	if !strings.Contains(content, "[tool call name=apply_patch id=custom]") || !strings.Contains(content, "*** Begin Patch") {
+		t.Fatalf("Responses custom tool call 未进入 transcript: %q", content)
+	}
+	if !strings.Contains(content, "[tool call name=read_file id=fn]") || !strings.Contains(content, "{}") {
+		t.Fatalf("function tool call 未进入 transcript: %q", content)
 	}
 
 	if len(req.Tools) != 3 {
@@ -370,6 +380,40 @@ func TestCompactChatFallbackRequestSanitizesResponseOnlyTools(t *testing.T) {
 	}
 	if len(req.Compact.Input[0].ToolCalls) != 3 {
 		t.Fatalf("原始 Compact.Input ToolCalls 被污染，长度 = %d", len(req.Compact.Input[0].ToolCalls))
+	}
+}
+
+func TestCompactChatFallbackRequestConvertsToolResultsToUserText(t *testing.T) {
+	callID := "call_123"
+	toolName := "read_file"
+	req := &llm.Request{
+		Model:       "gpt-5.5",
+		RequestType: llm.RequestTypeCompact,
+		Compact: &llm.CompactRequest{
+			Input: []llm.Message{
+				{
+					Role:         "tool",
+					ToolCallID:   &callID,
+					ToolCallName: &toolName,
+					Content:      llm.MessageContent{Content: strPtr(`{"ok":true}`)},
+				},
+			},
+		},
+	}
+
+	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
+	if len(got.Messages) != 1 {
+		t.Fatalf("Messages 长度 = %d, 期望 1", len(got.Messages))
+	}
+	msg := got.Messages[0]
+	if msg.Role != "user" {
+		t.Fatalf("tool 结果应转为普通 user 文本，got role=%q", msg.Role)
+	}
+	if msg.ToolCallID != nil || msg.ToolCallName != nil || len(msg.ToolCalls) != 0 {
+		t.Fatalf("tool 协议字段应被清空: %#v", msg)
+	}
+	if msg.Content.Content == nil || !strings.Contains(*msg.Content.Content, "[tool result name=read_file id=call_123]") {
+		t.Fatalf("tool 结果 transcript 不正确: %#v", msg.Content.Content)
 	}
 }
 
