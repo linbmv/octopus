@@ -21,6 +21,8 @@ type Group struct {
 	FirstTokenTimeOut int         `json:"first_token_time_out"` // 单个渠道首个Token响应超时时间(秒)
 	SessionKeepTime   int         `json:"session_keep_time"`    // 会话保持时间(秒) 0 为禁用
 	Items             []GroupItem `json:"items,omitempty" gorm:"foreignKey:GroupID"`
+	// CompactProbeEnabled 标记该分组曾被 OpenAI Responses/Compact 请求命中，供后台任务定期预探测。
+	CompactProbeEnabled bool `json:"-" gorm:"not null;default:false"`
 }
 
 const (

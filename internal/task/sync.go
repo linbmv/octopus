@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/helper"
@@ -14,6 +15,7 @@ import (
 )
 
 var lastSyncModelsTime = time.Now()
+var compactProbeGroupInFlight sync.Map
 
 // SyncModelsTask 同步模型任务
 func SyncModelsTask() {
@@ -119,6 +121,21 @@ func GetLastSyncModelsTime() time.Time {
 	return lastSyncModelsTime
 }
 
+func ProbeCompactGroupStrategiesAsync(groupID int) {
+	if groupID == 0 {
+		return
+	}
+	if _, loaded := compactProbeGroupInFlight.LoadOrStore(groupID, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer compactProbeGroupInFlight.Delete(groupID)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		probeCompactGroupStrategies(ctx, groupID)
+	}()
+}
+
 func syncCompactGroupStrategies(ctx context.Context) {
 	groups, err := op.GroupList(ctx)
 	if err != nil {
@@ -127,17 +144,21 @@ func syncCompactGroupStrategies(ctx context.Context) {
 	}
 
 	for _, group := range groups {
-		if !shouldProbeCompactGroup(group.Name) {
+		if !group.CompactProbeEnabled {
 			continue
 		}
-		expanded, err := op.GroupGetEnabledByID(group.ID, ctx)
-		if err != nil {
-			log.Warnf("failed to get compact probe group %s(%d): %v", group.Name, group.ID, err)
-			continue
-		}
-		for _, item := range expanded.Items {
-			syncGroupItemCompactStrategy(ctx, group.Name, item)
-		}
+		probeCompactGroupStrategies(ctx, group.ID)
+	}
+}
+
+func probeCompactGroupStrategies(ctx context.Context, groupID int) {
+	expanded, err := op.GroupGetEnabledByID(groupID, ctx)
+	if err != nil {
+		log.Warnf("failed to get compact probe group %d: %v", groupID, err)
+		return
+	}
+	for _, item := range expanded.Items {
+		syncGroupItemCompactStrategy(ctx, expanded.Name, item)
 	}
 }
 
@@ -167,9 +188,4 @@ func syncGroupItemCompactStrategy(ctx context.Context, groupName string, item mo
 		return
 	}
 	log.Warnf("group %s item %d compact strategy probe failed: %s", groupName, item.ID, result.Error)
-}
-
-func shouldProbeCompactGroup(groupName string) bool {
-	name := strings.ToLower(strings.TrimSpace(groupName))
-	return strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "chatgpt")
 }

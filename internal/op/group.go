@@ -79,6 +79,25 @@ func GroupGetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
 	return &expanded, nil
 }
 
+func GroupCompactProbeEnable(id int, ctx context.Context) (bool, error) {
+	if id == 0 {
+		return false, fmt.Errorf("invalid group")
+	}
+	if group, ok := groupCache.Get(id); ok && group.CompactProbeEnabled {
+		return false, nil
+	}
+	if err := db.GetDB().WithContext(ctx).
+		Model(&model.Group{}).
+		Where("id = ?", id).
+		Update("compact_probe_enabled", true).Error; err != nil {
+		return false, fmt.Errorf("failed to enable compact probe for group: %w", err)
+	}
+	if err := groupRefreshCacheByID(id, ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func expandEnabledGroup(group model.Group) (model.Group, error) {
 	if !group.Enabled {
 		group.Items = nil
