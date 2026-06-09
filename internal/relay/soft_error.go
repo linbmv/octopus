@@ -169,3 +169,26 @@ func isEndpointUnsupportedError(err error) bool {
 
 	return false
 }
+
+// isCompactResponsesFallbackIncompatibleError 判断普通 /responses fallback 是否被 Codex 类中转按请求体形态拒绝。
+// 仅用于 Compact 已从 /responses/compact 降到 /responses 之后，再继续尝试 Chat fallback。
+func isCompactResponsesFallbackIncompatibleError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var responseErr *llm.ResponseError
+	if errors.As(err, &responseErr) && responseErr != nil {
+		if responseErr.StatusCode != 400 {
+			return false
+		}
+		code := strings.ToLower(responseErr.Detail.Code)
+		msg := strings.ToLower(responseErr.Detail.Message)
+		return code == "invalid_responses_request" && strings.Contains(msg, "invalid codex request")
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "bad request") &&
+		strings.Contains(msg, "invalid_responses_request") &&
+		strings.Contains(msg, "invalid codex request")
+}

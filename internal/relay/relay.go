@@ -398,7 +398,7 @@ func (ra *relayAttempt) forward() (int, error) {
 		if responsesErr == nil {
 			return statusCode, nil
 		}
-		if !ra.canDowngradeCompactEndpoint(responsesErr) {
+		if !ra.canDowngradeCompactResponsesFallback(responsesErr) {
 			return statusCode, responsesErr
 		}
 
@@ -430,6 +430,25 @@ func (ra *relayAttempt) canDowngradeCompactEndpoint(fwdErr error) bool {
 		return false
 	}
 	return isEndpointUnsupportedError(fwdErr)
+}
+
+// canDowngradeCompactResponsesFallback 判断普通 /responses fallback 失败后是否还能继续降到 Chat。
+func (ra *relayAttempt) canDowngradeCompactResponsesFallback(fwdErr error) bool {
+	if ra.canDowngradeCompactEndpoint(fwdErr) {
+		return true
+	}
+	if ra.internalRequest.RequestType != llm.RequestTypeCompact {
+		return false
+	}
+	switch ra.channel.Type {
+	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
+	default:
+		return false
+	}
+	if ra.c.Writer.Written() {
+		return false
+	}
+	return isCompactResponsesFallbackIncompatibleError(fwdErr)
 }
 
 func needsChatToCompactResponse(channelType llm.APIFormat, request *llm.Request) bool {

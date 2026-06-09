@@ -75,6 +75,63 @@ func TestIsEndpointUnsupportedErrorNil(t *testing.T) {
 	}
 }
 
+func TestIsCompactResponsesFallbackIncompatibleError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "anyrouter codex response error",
+			err: &llm.ResponseError{
+				StatusCode: http.StatusBadRequest,
+				Detail: llm.ErrorDetail{
+					Message: "invalid codex request (request id: 20260609212616676063062AdJaB1KR)",
+					Code:    "invalid_responses_request",
+					Type:    "new_api_error",
+				},
+			},
+			want: true,
+		},
+		{
+			name: "anyrouter codex text",
+			err:  errors.New("Request failed: Bad Request, error: invalid codex request (request id: x), code: invalid_responses_request, type: new_api_error"),
+			want: true,
+		},
+		{
+			name: "generic bad request",
+			err: &llm.ResponseError{
+				StatusCode: http.StatusBadRequest,
+				Detail: llm.ErrorDetail{
+					Message: "invalid request",
+					Code:    "invalid_request",
+				},
+			},
+			want: false,
+		},
+		{
+			name: "unauthorized invalid codex text",
+			err: &llm.ResponseError{
+				StatusCode: http.StatusUnauthorized,
+				Detail: llm.ErrorDetail{
+					Message: "invalid codex request",
+					Code:    "invalid_responses_request",
+				},
+			},
+			want: false,
+		},
+		{name: "nil", err: nil, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isCompactResponsesFallbackIncompatibleError(tc.err); got != tc.want {
+				t.Fatalf("isCompactResponsesFallbackIncompatibleError(%v) = %v, 期望 %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCompactEndpointDowngradeTriesResponsesBeforeChat(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -160,6 +217,101 @@ func TestCompactEndpointDowngradeTriesResponsesBeforeChat(t *testing.T) {
 	}
 
 	want := []string{"/v1/responses/compact", "/v1/responses"}
+	if len(paths) != len(want) {
+		t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
+		}
+	}
+}
+
+func TestCompactEndpointDowngradeTriesChatAfterInvalidCodexResponsesFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var paths []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/v1/responses/compact":
+			http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
+		case "/v1/responses":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid codex request (request id: x)","code":"invalid_responses_request","type":"new_api_error"}}`))
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{
+				"id": "chatcmpl_1",
+				"object": "chat.completion",
+				"created": 1,
+				"model": "gpt-5.5",
+				"choices": [
+					{
+						"index": 0,
+						"message": {"role": "assistant", "content": "ok"},
+						"finish_reason": "stop"
+					}
+				]
+			}`))
+		default:
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	channel := &dbmodel.Channel{
+		ID:       1,
+		Name:     "anyrouter-codex",
+		Type:     llm.APIFormatOpenAIResponse,
+		BaseUrls: []dbmodel.BaseUrl{{URL: upstream.URL + "/v1"}},
+	}
+	internalRequest := &llm.Request{
+		Model:       "gpt-5.5",
+		APIFormat:   llm.APIFormatOpenAIResponseCompact,
+		RequestType: llm.RequestTypeCompact,
+		RawRequest: &httpclient.Request{
+			Method:  http.MethodPost,
+			Path:    "/v1/responses/compact",
+			Headers: http.Header{"Content-Type": {"application/json"}},
+			Body:    []byte(`{"model":"gpt-5.5","input":[{"role":"user","content":"hello"}]}`),
+		},
+		Compact: &llm.CompactRequest{
+			Input: []llm.Message{compactInputMessage("user", "hello")},
+		},
+	}
+
+	outAdapter, err := newOutbound(channel.Type, internalRequest, channel.GetBaseUrl(), "test-key")
+	if err != nil {
+		t.Fatalf("newOutbound returned error: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+
+	ra := &relayAttempt{
+		relayRun: &relayRun{
+			c:               ginCtx,
+			inAdapter:       newInbound(llm.APIFormatOpenAIResponseCompact),
+			internalRequest: internalRequest,
+			metrics:         &RelayMetrics{ActualModel: internalRequest.Model},
+		},
+		outAdapter: outAdapter,
+		channel:    channel,
+		usedKey:    dbmodel.ChannelKey{ID: 1, ChannelKey: "test-key"},
+	}
+
+	statusCode, err := ra.forward()
+	if err != nil {
+		t.Fatalf("forward returned error: %v", err)
+	}
+	if statusCode != http.StatusOK {
+		t.Fatalf("statusCode = %d, 期望 200", statusCode)
+	}
+
+	want := []string{"/v1/responses/compact", "/v1/responses", "/v1/chat/completions"}
 	if len(paths) != len(want) {
 		t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
 	}
