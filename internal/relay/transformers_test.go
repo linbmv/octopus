@@ -272,6 +272,43 @@ func TestCompactChatFallbackRequestFillsMessages(t *testing.T) {
 	}
 }
 
+func TestCompactResponsesFallbackRequestUsesStandardResponsesShape(t *testing.T) {
+	req := &llm.Request{
+		Model:       "gpt-5.5",
+		RequestType: llm.RequestTypeCompact,
+		Compact: &llm.CompactRequest{
+			Instructions: "summarize",
+			Input:        []llm.Message{compactInputMessage("user", "hello")},
+		},
+	}
+
+	got := compactResponsesFallbackRequest(req)
+	if got == nil {
+		t.Fatal("compactResponsesFallbackRequest returned nil")
+	}
+	if got.RequestType != llm.RequestTypeChat {
+		t.Fatalf("RequestType = %q, 期望降级为 Chat", got.RequestType)
+	}
+	if got.APIFormat != llm.APIFormatOpenAIResponse {
+		t.Fatalf("APIFormat = %q, 期望 OpenAI Responses", got.APIFormat)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("Messages 长度 = %d, 期望 2（system + input）", len(got.Messages))
+	}
+	if got.Messages[0].Role != "system" || got.Messages[0].Content.Content == nil || *got.Messages[0].Content.Content != "summarize" {
+		t.Fatalf("Instructions 未正确搬运到 system 消息: %#v", got.Messages[0])
+	}
+	if got.Messages[1].Role != "user" || got.Messages[1].Content.Content == nil || *got.Messages[1].Content.Content != "hello" {
+		t.Fatalf("Compact.Input 未正确搬运到 Messages: %#v", got.Messages[1])
+	}
+	if req.RequestType != llm.RequestTypeCompact {
+		t.Fatalf("原始 RequestType 被污染为 %q", req.RequestType)
+	}
+	if len(req.Messages) != 0 {
+		t.Fatalf("原始 Messages 被污染，长度 = %d，期望 0", len(req.Messages))
+	}
+}
+
 func TestCompactChatFallbackRequestNoInstructions(t *testing.T) {
 	req := &llm.Request{
 		Model:       "gpt-5.5",

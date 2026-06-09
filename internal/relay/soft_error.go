@@ -127,7 +127,7 @@ func isPlainTextSoftError(body []byte) bool {
 }
 
 // isEndpointUnsupportedError 判断上游错误是否表示"端点不存在/不支持"。
-// 仅这类错误允许在同一渠道内把 Compact 从 /v1/responses/compact 降级到 /v1/chat/completions；
+// 仅这类错误允许在同一渠道内把 Compact 从 /v1/responses/compact 降级到 /v1/responses，再按需降级到 /v1/chat/completions；
 // 鉴权(401/403)、限流(429)、超时、5xx 等不在此列，避免把真实故障掩盖成降级成功。
 func isEndpointUnsupportedError(err error) bool {
 	if err == nil {

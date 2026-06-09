@@ -388,16 +388,27 @@ func (ra *relayAttempt) forward() (int, error) {
 	}
 
 	// Response 渠道的 Compact 端点级降级：上游不支持 /v1/responses/compact 时，
-	// 在同一渠道、同一 key 上改用 /v1/chat/completions 重试，而不是直接故障转移到其它渠道。
+	// 先在同一渠道、同一 key 上改用普通 /v1/responses 重试；若 /responses 也不支持，
+	// 再降到 /v1/chat/completions。这样兼容 Responses-only 中转站，避免直接打到不支持的 Chat 端点。
 	// 严格收口：仅 Compact 请求 + Response 类型渠道 + 端点不支持错误 + 客户端尚未收到任何数据。
 	if ra.canDowngradeCompactEndpoint(fwdErr) {
+		responsesFallbackRequest := compactResponsesFallbackRequest(ra.internalRequest)
+		log.Infof("compact endpoint downgrade: channel=%s(%d), retrying via /v1/responses", ra.channel.Name, ra.channel.ID)
+		statusCode, responsesErr := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, responsesFallbackRequest, true)
+		if responsesErr == nil {
+			return statusCode, nil
+		}
+		if !ra.canDowngradeCompactEndpoint(responsesErr) {
+			return statusCode, responsesErr
+		}
+
 		chatAdapter, buildErr := newOutbound(llm.APIFormatOpenAIChatCompletion, ra.internalRequest, ra.channel.GetBaseUrl(), ra.usedKey.ChannelKey)
 		if buildErr != nil {
 			log.Warnf("compact endpoint downgrade: build chat outbound failed: %v", buildErr)
-			return statusCode, fwdErr
+			return statusCode, responsesErr
 		}
 		log.Infof("compact endpoint downgrade: channel=%s(%d), retrying via /v1/chat/completions", ra.channel.Name, ra.channel.ID)
-		// 第二次尝试使用 Chat 端点，并标记需要 Chat→Compact 响应转换
+		// 最后尝试使用 Chat 端点，并标记需要 Chat→Compact 响应转换。
 		return ra.forwardWithAdapter(ctx, httpClient, chatAdapter, compactChatFallbackRequest(ra.internalRequest), true)
 	}
 
@@ -426,8 +437,8 @@ func needsChatToCompactResponse(channelType llm.APIFormat, request *llm.Request)
 }
 
 // forwardWithAdapter 用指定出站适配器执行一次完整的 pipeline 转发。
-// 抽出此方法是为了支持同一渠道内的端点级降级（responses → chat）复用同一套转发逻辑。
-// needsChatToCompact 标记是否需要将 Chat 响应转换为 Compact 格式（端点降级场景）。
+// 抽出此方法是为了支持同一渠道内的端点级降级（responses/compact → responses → chat）复用同一套转发逻辑。
+// needsChatToCompact 标记是否需要将 Chat 形态响应转换为 Compact 格式（端点降级场景）。
 func (ra *relayAttempt) forwardWithAdapter(
 	ctx context.Context,
 	httpClient *http.Client,
@@ -452,7 +463,7 @@ func (ra *relayAttempt) forwardWithAdapter(
 
 	relayMiddleware := &relayPipelineMiddleware{attempt: ra}
 
-	// 如果是端点降级场景，插入 Chat→Compact 响应转换中间件
+	// 如果是端点降级场景，插入 Chat 形态响应 → Compact 响应转换中间件。
 	var middlewares []pipeline.Middleware
 	if needsChatToCompact {
 		middlewares = append(middlewares, &chatToCompactMiddleware{})
@@ -848,17 +859,30 @@ func requestForOutboundPipeline(channelType llm.APIFormat, request *llm.Request)
 	return cloneRequestForAttempt(request)
 }
 
-// compactChatFallbackRequest 把 Compact 请求降级成可由 OpenAI Chat 端点处理的副本：
+// compactResponsesFallbackRequest 把 Compact 请求降级成可由普通 OpenAI Responses 端点处理的副本。
+func compactResponsesFallbackRequest(request *llm.Request) *llm.Request {
+	attemptRequest := compactConversationFallbackRequest(request)
+	attemptRequest.APIFormat = llm.APIFormatOpenAIResponse
+	return attemptRequest
+}
+
+// compactChatFallbackRequest 把 Compact 请求降级成可由 OpenAI Chat 端点处理的副本。
+func compactChatFallbackRequest(request *llm.Request) *llm.Request {
+	attemptRequest := compactConversationFallbackRequest(request)
+	attemptRequest.APIFormat = llm.APIFormatOpenAIChatCompletion
+	return attemptRequest
+}
+
+// compactConversationFallbackRequest 把 Compact 请求降级成普通对话请求副本：
 //   - RequestType 改为 Chat（绕过 openai outbound 对 Compact 的拒绝）；
 //   - 把 Compact.Input 搬到 Messages（axonhub Compact inbound 把消息放在 Compact.Input，Messages 恒为空）；
 //   - Compact.Instructions 非空时，作为 system 消息插入到最前，保留系统指令。
 //   - 工具调用历史转成普通 transcript 文本，不按 Chat Completions 工具协议发送。
 //
 // 全程基于副本和切片拷贝，不修改原始 request，保证多 attempt 重试安全。
-func compactChatFallbackRequest(request *llm.Request) *llm.Request {
+func compactConversationFallbackRequest(request *llm.Request) *llm.Request {
 	attemptRequest := cloneRequestForAttempt(request)
 	attemptRequest.RequestType = llm.RequestTypeChat
-	attemptRequest.APIFormat = llm.APIFormatOpenAIChatCompletion
 	attemptRequest.Tools = nil
 	attemptRequest.ToolChoice = nil
 	attemptRequest.ParallelToolCalls = nil
@@ -1049,9 +1073,9 @@ func (in *parsedRequestInbound) TransformRequest(ctx context.Context, request *h
 	return in.request, nil
 }
 
-// chatToCompactMiddleware 将 Chat 端点的响应转换为 Compact 格式。
-// 用于端点降级场景：/v1/responses/compact 不支持时改用 /v1/chat/completions，
-// 但客户端期望收到 Compact API 响应，因此需要把 Chat 的 Choices 转换成 Compact 结构。
+// chatToCompactMiddleware 将 Chat 形态的响应转换为 Compact 格式。
+// 用于端点降级场景：/v1/responses/compact 不支持时改用 /v1/responses 或 /v1/chat/completions，
+// 但客户端期望收到 Compact API 响应，因此需要把 Choices 转换成 Compact 结构。
 type chatToCompactMiddleware struct {
 	pipeline.DummyMiddleware
 }

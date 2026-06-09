@@ -84,7 +84,7 @@ func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key s
 		case llm.APIFormatOpenAIResponse,
 			llm.APIFormatOpenAIResponseCompact:
 			// Response 渠道：优先用官方 /v1/responses/compact；若上游不支持该端点，
-			// 由 relayAttempt.forward 在同一渠道内降级到 /v1/chat/completions 重试。
+			// 由 relayAttempt.forward 在同一渠道内先降级到 /v1/responses，再按需降级到 /v1/chat/completions。
 			return responses.NewOutboundTransformer(baseURL, key)
 		default:
 			// 仅 OpenAI Chat/Response 类型承接 Compact；其它协议渠道跳过，交给故障转移。
