@@ -943,6 +943,16 @@ func (m *relayPipelineMiddleware) OnOutboundRawRequest(ctx context.Context, requ
 		request.Headers = make(http.Header)
 	}
 	m.attempt.applyChannelRequestOptions(request)
+
+	// Cross-format fallback: strip Codex/Responses-specific fields when falling back
+	// from Responses to OpenAI Chat (e.g., nested gpt-5.5 group items under opus group).
+	if m.attempt.needsCrossFormatCleaning() {
+		if err := m.attempt.stripCodexFieldsFromRequestBody(request); err != nil {
+			log.Warnf("failed to strip Codex fields for cross-format fallback: %v", err)
+			// Non-fatal: let the request proceed; upstream will reject if fields remain.
+		}
+	}
+
 	return request, nil
 }
 
@@ -952,6 +962,46 @@ func (m *relayPipelineMiddleware) OnOutboundRawError(ctx context.Context, err er
 		// pipeline 会把上游错误转换成统一错误返回；这里在转换前记录原始 HTTP 状态码，用于渠道 key 的后续调度决策。
 		m.upstreamStatusCode = upstreamErr.StatusCode
 	}
+}
+
+// needsCrossFormatCleaning detects when inbound is Codex/Responses format but
+// outbound channel is OpenAI Chat, requiring Codex-specific field removal.
+func (ra *relayAttempt) needsCrossFormatCleaning() bool {
+	if ra.internalRequest == nil || ra.channel == nil {
+		return false
+	}
+	inboundFormat := ra.internalRequest.APIFormat
+	outboundFormat := ra.channel.Type
+	// Strip Codex fields when: inbound is Responses (Codex) but outbound is OpenAI Chat.
+	return (inboundFormat == llm.APIFormatOpenAIResponse || inboundFormat == llm.APIFormatOpenAIResponseCompact) &&
+		outboundFormat == llm.APIFormatOpenAIChatCompletion
+}
+
+// stripCodexFieldsFromRequestBody removes Codex/Responses-specific fields that
+// OpenAI Chat endpoints reject (e.g., reasoning_effort). Modifies request.Body in place.
+func (ra *relayAttempt) stripCodexFieldsFromRequestBody(request *httpclient.Request) error {
+	if !strings.Contains(strings.ToLower(request.ContentType+" "+request.Headers.Get("Content-Type")), "application/json") {
+		return nil // Not JSON, cannot clean.
+	}
+
+	var bodyMap map[string]any
+	if err := json.Unmarshal(request.Body, &bodyMap); err != nil {
+		return fmt.Errorf("unmarshal request body: %w", err)
+	}
+
+	// Remove Codex-specific fields known to cause "invalid codex request" errors.
+	codexFields := []string{"reasoning_effort"}
+	for _, field := range codexFields {
+		delete(bodyMap, field)
+	}
+
+	cleaned, err := json.Marshal(bodyMap)
+	if err != nil {
+		return fmt.Errorf("marshal cleaned body: %w", err)
+	}
+
+	request.Body = cleaned
+	return nil
 }
 
 func (m *relayPipelineMiddleware) OnOutboundLlmResponse(ctx context.Context, response *llm.Response) (*llm.Response, error) {
