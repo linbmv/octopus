@@ -17,6 +17,7 @@ const (
 	compactStrategyOfficial        compactStrategy = compactStrategy(dbmodel.CompactStrategyOfficial)
 	compactStrategyResponsesManual compactStrategy = compactStrategy(dbmodel.CompactStrategyResponsesManual)
 	compactStrategyChatManual      compactStrategy = compactStrategy(dbmodel.CompactStrategyChatManual)
+	compactStrategyIncompatible    compactStrategy = compactStrategy(dbmodel.CompactStrategyIncompatible)
 )
 
 type compactStrategyCacheKey struct {
@@ -28,7 +29,14 @@ type compactStrategyCacheKey struct {
 	ModelName   string
 }
 
-var compactStrategyCache sync.Map // map[compactStrategyCacheKey]compactStrategy
+const compactStrategyCacheTTL = time.Hour
+
+type compactStrategyCacheEntry struct {
+	strategy compactStrategy
+	storedAt time.Time
+}
+
+var compactStrategyCache sync.Map // map[compactStrategyCacheKey]compactStrategyCacheEntry
 
 func compactStrategyKey(channel *dbmodel.Channel, key dbmodel.ChannelKey) compactStrategyCacheKey {
 	cacheKey := compactStrategyCacheKey{KeyID: key.ID}
@@ -48,11 +56,29 @@ func compactStrategyKeyForItem(channel *dbmodel.Channel, item dbmodel.GroupItem,
 	return cacheKey
 }
 
+// cachedCompactStrategy resolves the compact strategy for the current attempt
+// from a two-layer cache:
+//  1. an in-memory sync.Map keyed by (group item + channel + key + model),
+//     populated by live requests via rememberCompactStrategy and bounded by
+//     compactStrategyCacheTTL so a stale entry cannot permanently shadow a
+//     newer probe result;
+//  2. the DB-persisted groupItem.CompactStrategy, refreshed by the 24h
+//     background probe, used as the fallback when the in-memory entry is
+//     missing or expired.
+//
+// An empty strategy (never probed / unknown) reports hasCached=false so the
+// caller runs the full fallback chain.
 func (ra *relayAttempt) cachedCompactStrategy() (compactStrategy, bool) {
-	value, ok := compactStrategyCache.Load(compactStrategyKeyForItem(ra.channel, ra.groupItem, ra.usedKey))
+	cacheKey := compactStrategyKeyForItem(ra.channel, ra.groupItem, ra.usedKey)
+	value, ok := compactStrategyCache.Load(cacheKey)
 	if ok {
-		strategy, ok := value.(compactStrategy)
-		return strategy, ok
+		entry, ok := value.(compactStrategyCacheEntry)
+		if ok {
+			if time.Since(entry.storedAt) <= compactStrategyCacheTTL {
+				return entry.strategy, entry.strategy != ""
+			}
+		}
+		compactStrategyCache.Delete(cacheKey)
 	}
 	if ra.groupItem.CompactStrategy == "" {
 		return "", false
@@ -64,7 +90,10 @@ func (ra *relayAttempt) rememberCompactStrategy(ctx context.Context, strategy co
 	if strategy == "" {
 		return
 	}
-	compactStrategyCache.Store(compactStrategyKeyForItem(ra.channel, ra.groupItem, ra.usedKey), strategy)
+	compactStrategyCache.Store(compactStrategyKeyForItem(ra.channel, ra.groupItem, ra.usedKey), compactStrategyCacheEntry{
+		strategy: strategy,
+		storedAt: time.Now(),
+	})
 
 	persistedStrategy := dbmodel.CompactStrategy(strategy)
 	if ra.groupItem.ID == 0 || ra.groupItem.GroupID == 0 || ra.groupItem.CompactStrategy == persistedStrategy {
@@ -78,39 +107,33 @@ func (ra *relayAttempt) rememberCompactStrategy(ctx context.Context, strategy co
 }
 
 func compactStrategyOrder(channelType llm.APIFormat, cached compactStrategy, hasCached bool) []compactStrategy {
-	if channelType == llm.APIFormatOpenAIChatCompletion {
-		return []compactStrategy{compactStrategyChatManual}
-	}
-
-	switch channelType {
-	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
-	default:
+	// Canonical full order lives in model.CompactStrategyOrder; relay only applies
+	// request-time truncation when it has a usable cached strategy.
+	base := compactStrategySlice(dbmodel.CompactStrategyOrder(channelType))
+	if len(base) == 0 {
 		return nil
 	}
 
-	if hasCached {
-		switch cached {
-		case compactStrategyOfficial:
-			return []compactStrategy{
-				compactStrategyOfficial,
-				compactStrategyResponsesManual,
-				compactStrategyChatManual,
+	if hasCached && cached != compactStrategyIncompatible {
+		for idx, strategy := range base {
+			if strategy == cached {
+				return base[idx:]
 			}
-		case compactStrategyResponsesManual:
-			return []compactStrategy{
-				compactStrategyResponsesManual,
-				compactStrategyChatManual,
-			}
-		case compactStrategyChatManual:
-			return []compactStrategy{compactStrategyChatManual}
 		}
 	}
 
-	return []compactStrategy{
-		compactStrategyOfficial,
-		compactStrategyResponsesManual,
-		compactStrategyChatManual,
+	return base
+}
+
+func compactStrategySlice(strategies []dbmodel.CompactStrategy) []compactStrategy {
+	if len(strategies) == 0 {
+		return nil
 	}
+	out := make([]compactStrategy, 0, len(strategies))
+	for _, strategy := range strategies {
+		out = append(out, compactStrategy(strategy))
+	}
+	return out
 }
 
 func resetCompactStrategyCacheForTest() {

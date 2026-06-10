@@ -103,6 +103,16 @@ func compactCandidateRanks(group dbmodel.Group, ctx context.Context) map[int]int
 		if item.ID == 0 || item.ChannelID == 0 {
 			continue
 		}
+		switch item.CompactStrategy {
+		case dbmodel.CompactStrategyOfficial,
+			dbmodel.CompactStrategyResponsesManual,
+			dbmodel.CompactStrategyChatManual,
+			dbmodel.CompactStrategyIncompatible:
+			ranks[item.ID] = compactGroupItemRank(item, nil)
+			continue
+		}
+		// Unknown strategies still need channel.Type to distinguish OpenAI-compatible
+		// candidates, but op.ChannelGet is a pure in-memory cache lookup.
 		channel, err := op.ChannelGet(item.ChannelID, ctx)
 		if err != nil {
 			continue
@@ -120,6 +130,8 @@ func compactGroupItemRank(item dbmodel.GroupItem, channel *dbmodel.Channel) int 
 		return 1
 	case dbmodel.CompactStrategyChatManual:
 		return 2
+	case dbmodel.CompactStrategyIncompatible:
+		return 6
 	}
 	if channel == nil {
 		return 5

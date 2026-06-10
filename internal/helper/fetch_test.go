@@ -368,3 +368,29 @@ func TestProbeCompactStrategyFallsBackToChatManual(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeCompactStrategyMarksIncompatibleWhenAllStrategiesAreDefinitivelyUnsupported(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	result := ProbeCompactStrategy(context.Background(), testChannel(server.URL, llm.APIFormatOpenAIResponse), "gpt-4o")
+	if result.Strategy != model.CompactStrategyIncompatible {
+		t.Fatalf("Strategy = %q, 期望 %q, error=%s", result.Strategy, model.CompactStrategyIncompatible, result.Error)
+	}
+	if result.Error == "" {
+		t.Fatal("incompatible 结果应保留错误信息")
+	}
+	want := []string{"/v1/responses/compact", "/v1/responses", "/v1/chat/completions"}
+	if len(paths) != len(want) {
+		t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
+		}
+	}
+}

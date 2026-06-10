@@ -44,12 +44,16 @@ func ProbeCompactStrategy(ctx context.Context, channel model.Channel, probeModel
 	}
 
 	var lastErr error
+	allDefinitive := true
 	for _, strategy := range strategies {
 		err := doCompactProbe(ctx, client, channel, key.ChannelKey, probeModel, strategy)
 		if err == nil {
 			return CompactProbeResult{Strategy: strategy}
 		}
 		lastErr = err
+		if !isCompactProbeDefinitiveIncompatibility(err) {
+			allDefinitive = false
+		}
 		if !canTryNextCompactProbeStrategy(strategy, err) {
 			break
 		}
@@ -58,22 +62,14 @@ func ProbeCompactStrategy(ctx context.Context, channel model.Channel, probeModel
 	if lastErr == nil {
 		return CompactProbeResult{Error: "compact probe failed"}
 	}
+	if allDefinitive && isCompactProbeDefinitiveIncompatibility(lastErr) {
+		return CompactProbeResult{Strategy: model.CompactStrategyIncompatible, Error: lastErr.Error()}
+	}
 	return CompactProbeResult{Error: lastErr.Error()}
 }
 
 func compactProbeStrategyOrder(channelType llm.APIFormat) []model.CompactStrategy {
-	switch channelType {
-	case llm.APIFormatOpenAIChatCompletion:
-		return []model.CompactStrategy{model.CompactStrategyChatManual}
-	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
-		return []model.CompactStrategy{
-			model.CompactStrategyOfficial,
-			model.CompactStrategyResponsesManual,
-			model.CompactStrategyChatManual,
-		}
-	default:
-		return nil
-	}
+	return model.CompactStrategyOrder(channelType)
 }
 
 func doCompactProbe(ctx context.Context, client *http.Client, channel model.Channel, key, probeModel string, strategy model.CompactStrategy) error {
@@ -117,23 +113,26 @@ func compactProbeRequest(strategy model.CompactStrategy, probeModel string) (str
 	switch strategy {
 	case model.CompactStrategyOfficial:
 		body, err := json.Marshal(map[string]any{
-			"model":        probeModel,
-			"input":        compactProbeResponsesInput("hello"),
-			"instructions": "Summarize the conversation in one short sentence.",
+			"model":             probeModel,
+			"input":             compactProbeResponsesInput("hello"),
+			"instructions":      "Summarize the conversation in one short sentence.",
+			"max_output_tokens": 16,
 		})
 		return "/responses/compact", body, err
 	case model.CompactStrategyResponsesManual:
 		body, err := json.Marshal(map[string]any{
-			"model": probeModel,
-			"input": compactProbeResponsesInput("Reply with ok."),
-			"store": false,
+			"model":             probeModel,
+			"input":             compactProbeResponsesInput("Reply with ok."),
+			"store":             false,
+			"max_output_tokens": 16,
 		})
 		return "/responses", body, err
 	case model.CompactStrategyChatManual:
 		body, err := json.Marshal(map[string]any{
-			"model":    probeModel,
-			"messages": []map[string]string{{"role": "user", "content": "Reply with ok."}},
-			"stream":   false,
+			"model":      probeModel,
+			"messages":   []map[string]string{{"role": "user", "content": "Reply with ok."}},
+			"stream":     false,
+			"max_tokens": 16,
 		})
 		return "/chat/completions", body, err
 	default:
@@ -198,6 +197,10 @@ func canTryNextCompactProbeStrategy(strategy model.CompactStrategy, err error) b
 	default:
 		return false
 	}
+}
+
+func isCompactProbeDefinitiveIncompatibility(err error) bool {
+	return isCompactProbeEndpointUnsupported(err) || isCompactProbeResponsesIncompatible(err)
 }
 
 func isCompactProbeEndpointUnsupported(err error) bool {

@@ -596,6 +596,13 @@ func GroupItemUpdate(item *model.GroupItem, ctx context.Context) error {
 }
 
 func GroupItemCompactStrategyUpdate(itemID, groupID int, strategy model.CompactStrategy, probeError string, updatedAt time.Time, ctx context.Context) error {
+	if err := GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID, strategy, probeError, updatedAt, ctx); err != nil {
+		return err
+	}
+	return groupRefreshCacheByID(groupID, ctx)
+}
+
+func GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID int, strategy model.CompactStrategy, probeError string, updatedAt time.Time, ctx context.Context) error {
 	if itemID == 0 || groupID == 0 {
 		return fmt.Errorf("invalid group item")
 	}
@@ -610,7 +617,11 @@ func GroupItemCompactStrategyUpdate(itemID, groupID int, strategy model.CompactS
 	if err := db.GetDB().WithContext(ctx).Model(&model.GroupItem{}).Where("id = ?", itemID).Updates(updates).Error; err != nil {
 		return fmt.Errorf("failed to update group item compact strategy: %w", err)
 	}
-	return groupRefreshCacheByID(groupID, ctx)
+	return nil
+}
+
+func GroupRefreshCacheByID(id int, ctx context.Context) error {
+	return groupRefreshCacheByID(id, ctx)
 }
 
 func GroupItemDel(id int, ctx context.Context) error {

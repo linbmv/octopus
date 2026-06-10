@@ -11,6 +11,7 @@ import (
 	"time"
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
@@ -175,6 +176,64 @@ func TestMiddlewareName(t *testing.T) {
 	m := &relayPipelineMiddleware{}
 	if m.Name() != "octopus_relay" {
 		t.Fatalf("Name() = %q, 期望 octopus_relay", m.Name())
+	}
+}
+
+func TestCompactGroupItemRankPlacesIncompatibleLast(t *testing.T) {
+	channel := &dbmodel.Channel{Type: llm.APIFormatOpenAIResponse}
+	usable := dbmodel.GroupItem{CompactStrategy: dbmodel.CompactStrategyChatManual}
+	unknown := dbmodel.GroupItem{}
+	incompatible := dbmodel.GroupItem{CompactStrategy: dbmodel.CompactStrategyIncompatible}
+
+	if got, want := compactGroupItemRank(usable, nil), 2; got != want {
+		t.Fatalf("chat_manual rank = %d, want %d", got, want)
+	}
+	if got, want := compactGroupItemRank(unknown, channel), 3; got != want {
+		t.Fatalf("unknown OpenAI rank = %d, want %d", got, want)
+	}
+	if got := compactGroupItemRank(incompatible, nil); got <= compactGroupItemRank(unknown, nil) || got <= compactGroupItemRank(usable, nil) {
+		t.Fatalf("incompatible rank = %d, want lower priority than unknown/useful ranks", got)
+	}
+}
+
+func TestCompactCandidateOrderingPlacesIncompatibleAfterUsable(t *testing.T) {
+	group := dbmodel.Group{
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, ChannelID: 1, ModelName: "incompatible", Priority: 1, CompactStrategy: dbmodel.CompactStrategyIncompatible},
+			{ID: 2, ChannelID: 2, ModelName: "official", Priority: 99, CompactStrategy: dbmodel.CompactStrategyOfficial},
+		},
+	}
+	ranks := map[int]int{
+		1: compactGroupItemRank(group.Items[0], nil),
+		2: compactGroupItemRank(group.Items[1], nil),
+	}
+
+	iter := balancer.NewIteratorWithCandidateRanks(group, 0, "octopus-model", ranks)
+	if !iter.Next() {
+		t.Fatal("Next() = false, want first candidate")
+	}
+	if got := iter.Item().ID; got != 2 {
+		t.Fatalf("first candidate ID = %d, want 2", got)
+	}
+	if !iter.Next() {
+		t.Fatal("Next() = false, want second candidate")
+	}
+	if got := iter.Item().ID; got != 1 {
+		t.Fatalf("second candidate ID = %d, want 1", got)
+	}
+}
+
+func TestCompactStrategyOrderTreatsIncompatibleAsUncached(t *testing.T) {
+	got := compactStrategyOrder(llm.APIFormatOpenAIResponse, compactStrategyIncompatible, true)
+	want := []compactStrategy{compactStrategyOfficial, compactStrategyResponsesManual, compactStrategyChatManual}
+	if len(got) != len(want) {
+		t.Fatalf("order length = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %#v, want %#v", got, want)
+		}
 	}
 }
 
