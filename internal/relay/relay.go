@@ -221,12 +221,20 @@ func (r *relayRun) buildRealAttempt(
 
 	usedKey := dbmodel.ChannelKey{}
 	if stickyKeyID > 0 {
-		usedKey = channel.GetChannelKeyByID(stickyKeyID)
+		if channel.Type == dbmodel.ChannelTypeCodexOAuth {
+			usedKey = codexChannelKeyByID(channel, stickyKeyID)
+		} else {
+			usedKey = channel.GetChannelKeyByID(stickyKeyID)
+		}
 	}
-	if usedKey.ChannelKey == "" {
-		usedKey = channel.GetChannelKey()
+	if usedKey.ID == 0 {
+		if channel.Type == dbmodel.ChannelTypeCodexOAuth {
+			usedKey = codexChannelKey(channel)
+		} else {
+			usedKey = channel.GetChannelKey()
+		}
 	}
-	if usedKey.ChannelKey == "" {
+	if usedKey.ID == 0 {
 		r.iter.Skip(channel.ID, 0, channel.Name, "no available key")
 		return nil, nil
 	}
@@ -236,7 +244,7 @@ func (r *relayRun) buildRealAttempt(
 		return nil, nil
 	}
 
-	outAdapter, err := newOutbound(channel.Type, r.internalRequest, channel.GetBaseUrl(), usedKey.ChannelKey)
+	outAdapter, err := newOutboundForChannel(channel, usedKey, r.internalRequest)
 	if err != nil {
 		r.iter.Skip(channel.ID, usedKey.ID, channel.Name, err.Error())
 		return nil, nil

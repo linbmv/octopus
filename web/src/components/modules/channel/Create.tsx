@@ -38,8 +38,13 @@ export function CreateDialogContent() {
             delay: Number(u.delay || 0),
         }));
         const normalizedKeys = formData.keys
-            .filter((k) => k.channel_key.trim())
-            .map((k) => ({ enabled: k.enabled, channel_key: k.channel_key, remark: k.remark ?? '' }));
+            .filter((k) => k.channel_key.trim() || k.codex_oauth_json?.trim())
+            .map((k) => ({
+                enabled: k.enabled,
+                channel_key: k.channel_key.trim(),
+                remark: k.remark ?? '',
+                codex_oauth_json: k.codex_oauth_json,
+            }));
         const normalizedHeaders = (formData.custom_header ?? [])
             .map((h) => ({ header_key: h.header_key.trim(), header_value: h.header_value }))
             .filter((h) => h.header_key && h.header_value !== '');

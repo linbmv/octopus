@@ -76,6 +76,17 @@ func createChannel(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
+	if channel.Type == model.ChannelTypeCodexOAuth {
+		for i := range channel.Keys {
+			if channel.Keys[i].CodexOAuthJSONInput == "" {
+				continue
+			}
+			if _, err := helper.ParseCodexTokenJSON(channel.Keys[i].CodexOAuthJSONInput); err != nil {
+				resp.Error(c, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
 	if err := op.ChannelCreate(&channel, c.Request.Context()); err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
@@ -99,6 +110,24 @@ func updateChannel(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
+	}
+	for _, key := range req.KeysToAdd {
+		if key.CodexOAuthJSONInput == "" {
+			continue
+		}
+		if _, err := helper.ParseCodexTokenJSON(key.CodexOAuthJSONInput); err != nil {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	for _, key := range req.KeysToUpdate {
+		if key.CodexOAuthJSONInput == nil || *key.CodexOAuthJSONInput == "" {
+			continue
+		}
+		if _, err := helper.ParseCodexTokenJSON(*key.CodexOAuthJSONInput); err != nil {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	channel, err := op.ChannelUpdate(&req, c.Request.Context())
 	if err != nil {

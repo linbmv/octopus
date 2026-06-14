@@ -2,6 +2,7 @@ package task
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/utils/log"
@@ -15,6 +16,7 @@ type taskEntry struct {
 	ticker     *time.Ticker
 	stopCh     chan struct{}
 	updateCh   chan time.Duration
+	running    atomic.Bool
 }
 
 var (
@@ -89,10 +91,20 @@ func RUN() {
 	select {}
 }
 
+func (e *taskEntry) runGuarded() {
+	if !e.running.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer e.running.Store(false)
+		e.fn()
+	}()
+}
+
 func runTask(entry *taskEntry) {
 	// 根据配置决定是否在启动时立即执行
 	if entry.runOnStart {
-		go entry.fn()
+		entry.runGuarded()
 	}
 
 	entry.ticker = time.NewTicker(entry.interval)
@@ -101,7 +113,7 @@ func runTask(entry *taskEntry) {
 	for {
 		select {
 		case <-entry.ticker.C:
-			go entry.fn()
+			entry.runGuarded()
 		case newInterval := <-entry.updateCh:
 			entry.ticker.Stop()
 			entry.interval = newInterval

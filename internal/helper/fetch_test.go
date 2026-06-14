@@ -47,6 +47,76 @@ func TestFetchModelsOpenAIUsesV1AndBearer(t *testing.T) {
 	}
 }
 
+func TestFetchModelsCodexOAuthUsesPlanCatalog(t *testing.T) {
+	teamChannel := model.Channel{
+		Type: model.ChannelTypeCodexOAuth,
+		Keys: []model.ChannelKey{{Enabled: true, CodexPlanType: "team"}},
+	}
+	teamModels, err := FetchModels(context.Background(), teamChannel)
+	if err != nil {
+		t.Fatalf("FetchModels(team codex) error: %v", err)
+	}
+	if !testHasModel(teamModels, "gpt-5.5") || !testHasModel(teamModels, "gpt-5.4") {
+		t.Fatalf("team models missing expected slugs: %v", teamModels)
+	}
+
+	freeChannel := model.Channel{
+		Type: model.ChannelTypeCodexOAuth,
+		Keys: []model.ChannelKey{{Enabled: true, CodexPlanType: "free"}},
+	}
+	freeModels, err := FetchModels(context.Background(), freeChannel)
+	if err != nil {
+		t.Fatalf("FetchModels(free codex) error: %v", err)
+	}
+	if !testHasModel(freeModels, "gpt-5.5") {
+		t.Fatalf("free models missing gpt-5.5: %v", freeModels)
+	}
+	if testHasModel(freeModels, "gpt-5.4") {
+		t.Fatalf("free models unexpectedly include gpt-5.4: %v", freeModels)
+	}
+}
+
+func TestFetchModelsCodexOAuthAppliesMatchRegex(t *testing.T) {
+	matchRegex := `^gpt-5\.4$`
+	models, err := FetchModels(context.Background(), model.Channel{
+		Type:       model.ChannelTypeCodexOAuth,
+		Keys:       []model.ChannelKey{{Enabled: true, CodexPlanType: "team"}},
+		MatchRegex: &matchRegex,
+	})
+	if err != nil {
+		t.Fatalf("FetchModels(codex regex) error: %v", err)
+	}
+	if len(models) != 1 || models[0] != "gpt-5.4" {
+		t.Fatalf("regex-filtered codex models = %v, want [gpt-5.4]", models)
+	}
+}
+
+func TestFetchModelsCodexOAuthUsesHighestEnabledPlan(t *testing.T) {
+	models, err := FetchModels(context.Background(), model.Channel{
+		Type: model.ChannelTypeCodexOAuth,
+		Keys: []model.ChannelKey{
+			{Enabled: false, CodexPlanType: "team"},
+			{Enabled: true, CodexPlanType: "free"},
+			{Enabled: true, CodexPlanType: "team"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("FetchModels(codex highest plan) error: %v", err)
+	}
+	if !testHasModel(models, "gpt-5.4") {
+		t.Fatalf("models = %v, want team-only model gpt-5.4", models)
+	}
+}
+
+func testHasModel(models []string, slug string) bool {
+	for _, model := range models {
+		if model == slug {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFetchModelsDoubaoUsesV3(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

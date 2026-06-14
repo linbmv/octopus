@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/looplj/axonhub/llm"
@@ -100,6 +101,72 @@ func TestNewOutboundKeepsCurrentChatCompatibility(t *testing.T) {
 		{"gemini_contents", llm.APIFormatGeminiContents, llm.RequestTypeChat},
 		{"doubao", dbmodel.ChannelTypeDoubao, llm.RequestTypeChat},
 	})
+}
+
+func TestNewOutboundForChannelRoutesNonCodexLikeNewOutbound(t *testing.T) {
+	channel := &dbmodel.Channel{
+		Type:     llm.APIFormatOpenAIChatCompletion,
+		BaseUrls: []dbmodel.BaseUrl{{URL: testBaseURL}},
+	}
+	key := dbmodel.ChannelKey{ID: 1, ChannelKey: testAPIKey}
+	req := &llm.Request{RequestType: llm.RequestTypeChat}
+
+	got, err := newOutboundForChannel(channel, key, req)
+	if err != nil {
+		t.Fatalf("newOutboundForChannel returned error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("newOutboundForChannel returned nil outbound")
+	}
+
+	want, err := newOutbound(channel.Type, req, channel.GetBaseUrl(), key.ChannelKey)
+	if err != nil {
+		t.Fatalf("newOutbound returned error: %v", err)
+	}
+	if want == nil {
+		t.Fatal("newOutbound returned nil outbound")
+	}
+}
+
+func TestNewOutboundForChannelRoutesCodexOAuth(t *testing.T) {
+	channel := &dbmodel.Channel{
+		ID:       1,
+		Type:     dbmodel.ChannelTypeCodexOAuth,
+		BaseUrls: []dbmodel.BaseUrl{{URL: testBaseURL}},
+	}
+	key := dbmodel.ChannelKey{
+		ID:                2,
+		ChannelID:         channel.ID,
+		CodexAccessToken:  "codex-access-token",
+		CodexRefreshToken: "codex-refresh-token",
+		CodexTokenExpiry:  time.Now().Add(time.Hour).Unix(),
+	}
+	req := &llm.Request{RequestType: llm.RequestTypeChat}
+
+	got, err := newOutboundForChannel(channel, key, req)
+	if err != nil {
+		t.Fatalf("newOutboundForChannel returned error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("newOutboundForChannel returned nil outbound")
+	}
+}
+
+func TestNewOutboundForChannelCodexOAuthMissingToken(t *testing.T) {
+	channel := &dbmodel.Channel{
+		ID:       1,
+		Type:     dbmodel.ChannelTypeCodexOAuth,
+		BaseUrls: []dbmodel.BaseUrl{{URL: testBaseURL}},
+	}
+	key := dbmodel.ChannelKey{ID: 2, ChannelID: channel.ID}
+
+	got, err := newOutboundForChannel(channel, key, &llm.Request{RequestType: llm.RequestTypeChat})
+	if err == nil {
+		t.Fatal("newOutboundForChannel error = nil, want error")
+	}
+	if got != nil {
+		t.Fatalf("newOutboundForChannel outbound = %T, want nil", got)
+	}
 }
 
 func TestNewOutboundKeepsCurrentEmbeddingCompatibility(t *testing.T) {

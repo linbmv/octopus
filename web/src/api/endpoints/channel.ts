@@ -13,6 +13,7 @@ export enum ChannelType {
     Gemini = 'gemini/contents',
     Volcengine = 'doubao',
     OpenAIEmbedding = 'openai/embeddings',
+    CodexOAuth = 'openai/codex_oauth',
 }
 
 /**
@@ -44,6 +45,11 @@ export type ChannelKey = {
     last_use_time_stamp: number;
     total_cost: number;
     remark: string;
+    codex_token_expiry?: number;
+    codex_account_id?: string;
+    codex_plan_type?: string;
+    codex_email?: string;
+    codex_oauth_json?: string;
 };
 
 /**
@@ -84,7 +90,7 @@ export type CreateChannelRequest = {
     type: ChannelType;
     enabled?: boolean;
     base_urls: BaseUrl[];
-    keys: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
+    keys: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark' | 'codex_oauth_json'>>;
     model: string;
     custom_model?: string;
     proxy?: boolean;
@@ -117,15 +123,15 @@ export type UpdateChannelRequest = {
     match_regex?: string | null;
     raw_passthrough?: boolean;
     // keys diff
-    keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
-    keys_to_update?: Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string }>;
+    keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark' | 'codex_oauth_json'>>;
+    keys_to_update?: Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string; codex_oauth_json?: string }>;
     keys_to_delete?: number[];
 };
 
 export type FetchModelRequest = {
     type: ChannelType;
     base_urls: BaseUrl[];
-    keys: Array<Pick<ChannelKey, 'enabled' | 'channel_key'>>;
+    keys: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'codex_plan_type'>>;
     proxy?: boolean;
     channel_proxy?: string | null;
     match_regex?: string | null;

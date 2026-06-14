@@ -23,6 +23,8 @@ export interface ChannelKeyFormItem {
     last_use_time_stamp?: number;
     total_cost?: number;
     remark?: string;
+    codex_plan_type?: string;
+    codex_oauth_json?: string;
 }
 
 export interface ChannelFormData {
@@ -102,8 +104,9 @@ export function ChannelForm({
 
     const fetchModel = useFetchModel();
 
+    const isCodexOAuth = formData.type === ChannelType.CodexOAuth;
     const effectiveKey =
-        formData.keys.find((k) => k.enabled && k.channel_key.trim())?.channel_key.trim() || '';
+        formData.keys.find((k) => k.enabled && (k.channel_key.trim() || k.codex_oauth_json?.trim()))?.channel_key.trim() || '';
 
     const updateModels = (nextAuto: string[], nextCustom: string[]) => {
         const model = nextAuto.join(',');
@@ -113,14 +116,14 @@ export function ChannelForm({
     };
 
     const handleRefreshModels = async () => {
-        if (!formData.base_urls?.[0]?.url || !effectiveKey) return;
+        if (!isCodexOAuth && (!formData.base_urls?.[0]?.url || !effectiveKey)) return;
         fetchModel.mutate(
             {
                 type: formData.type,
                 base_urls: formData.base_urls,
                 keys: formData.keys
-                    .filter((k) => k.channel_key.trim())
-                    .map((k) => ({ enabled: k.enabled, channel_key: k.channel_key.trim() })),
+                    .filter((k) => k.channel_key.trim() || k.codex_plan_type)
+                    .map((k) => ({ enabled: k.enabled, channel_key: k.channel_key.trim(), codex_plan_type: k.codex_plan_type })),
                 proxy: formData.proxy,
                 channel_proxy: formData.channel_proxy?.trim() || null,
                 match_regex: formData.match_regex.trim() || null,
@@ -194,6 +197,38 @@ export function ChannelForm({
         onFormDataChange({ ...formData, keys: next });
     };
 
+    const handleCodexJSONImport = (idx: number) => (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onerror = () => {
+            toast.error(t('codexOAuthImportFailed'));
+        };
+        reader.onload = (ev) => {
+            const json = String(ev.target?.result ?? '');
+            if (!json.trim()) {
+                toast.error(t('codexOAuthImportFailed'));
+                return;
+            }
+            // Validate it parses as JSON before accepting
+            try {
+                JSON.parse(json);
+            } catch {
+                toast.error(t('codexOAuthImportInvalid'));
+                return;
+            }
+            const newKeys = [...formData.keys];
+            const current = newKeys[idx];
+            newKeys[idx] = {
+                ...current,
+                codex_oauth_json: json,
+                remark: current.remark || t('codexOAuthImportedKey'),
+            };
+            onFormDataChange({ ...formData, keys: newKeys });
+        };
+        reader.readAsText(file);
+    };
+
     const handleAddBaseUrl = () => {
         onFormDataChange({
             ...formData,
@@ -265,6 +300,7 @@ export function ChannelForm({
                             <SelectItem className='rounded-xl' value={String(ChannelType.Gemini)}>{t('typeGemini')}</SelectItem>
                             <SelectItem className='rounded-xl' value={String(ChannelType.Volcengine)}>{t('typeVolcengine')}</SelectItem>
                             <SelectItem className='rounded-xl' value={String(ChannelType.OpenAIEmbedding)}>{t('typeOpenAIEmbedding')}</SelectItem>
+                            <SelectItem className='rounded-xl' value={String(ChannelType.CodexOAuth)}>{t('typeCodexOAuth')}</SelectItem>
                         </SelectContent>
                     </Select>
                 </div>
@@ -333,12 +369,21 @@ export function ChannelForm({
                 <div className="space-y-2">
                     {(formData.keys ?? []).map((k, idx) => (
                         <div key={k.id ?? `new-${idx}`} className="flex items-center gap-2">
+                            {formData.type === ChannelType.CodexOAuth && (
+                                <Input
+                                    type="file"
+                                    accept="application/json"
+                                    onChange={handleCodexJSONImport(idx)}
+                                    className="rounded-xl flex-1"
+                                />
+                            )}
                             <Input
                                 type="text"
                                 value={k.channel_key}
                                 onChange={(e) => handleUpdateKey(idx, { channel_key: e.target.value })}
                                 placeholder={t('apiKey')}
-                                required={idx === 0}
+                                required={idx === 0 && formData.type !== ChannelType.CodexOAuth}
+                                disabled={formData.type === ChannelType.CodexOAuth}
                                 className="rounded-xl flex-1"
                             />
                             <Input
@@ -621,6 +666,13 @@ export function ChannelForm({
                     )}
                 </div>
             </div>
+
+            {formData.type === ChannelType.CodexOAuth && (
+                <div className="space-y-1 rounded-xl border border-border/50 bg-muted/20 p-4">
+                    <label className="text-sm font-medium text-card-foreground">{t('codexOAuthImportHint')}</label>
+                    <p className="text-sm text-muted-foreground">{t('codexOAuthImportDesc')}</p>
+                </div>
+            )}
 
             <div className={`flex flex-col gap-3 pt-2 ${onCancel ? 'sm:flex-row' : ''}`}>
                 {onCancel && cancelText && (

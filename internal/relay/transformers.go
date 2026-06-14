@@ -10,6 +10,7 @@ import (
 	"github.com/looplj/axonhub/llm/transformer/doubao"
 	"github.com/looplj/axonhub/llm/transformer/gemini"
 	"github.com/looplj/axonhub/llm/transformer/openai"
+	"github.com/looplj/axonhub/llm/transformer/openai/codex"
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 )
 
@@ -36,6 +37,20 @@ func newInbound(format llm.APIFormat) transformer.Inbound {
 	default:
 		return nil
 	}
+}
+
+func newOutboundForChannel(channel *dbmodel.Channel, key dbmodel.ChannelKey, request *llm.Request) (transformer.Outbound, error) {
+	if channel == nil {
+		return nil, fmt.Errorf("channel is nil")
+	}
+	if channel.Type == dbmodel.ChannelTypeCodexOAuth {
+		tp, err := codexTokenProviderForKey(key)
+		if err != nil {
+			return nil, err
+		}
+		return codex.NewOutboundTransformer(codex.Params{TokenProvider: tp, BaseURL: channel.GetBaseUrl(), Transport: ""})
+	}
+	return newOutbound(channel.Type, request, channel.GetBaseUrl(), key.ChannelKey)
 }
 
 func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key string) (transformer.Outbound, error) {

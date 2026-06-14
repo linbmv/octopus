@@ -50,6 +50,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
                 last_use_time_stamp: k.last_use_time_stamp,
                 total_cost: k.total_cost,
                 remark: k.remark,
+                codex_plan_type: k.codex_plan_type,
             }))
             : [{ enabled: true, channel_key: '', remark: '' }],
         model: channel.model,
@@ -61,6 +62,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         raw_passthrough: channel.raw_passthrough,
     });
     const t = useTranslations('channel.detail');
+    const formT = useTranslations('channel.form');
 
     const currentView = isEditing ? 'editing' : 'viewing';
 
@@ -126,20 +128,26 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         const keys_to_delete = originalKeys.filter((k) => !nextIDs.has(k.id)).map((k) => k.id);
 
         const keys_to_add = nextKeys
-            .filter((k) => !k.id && k.channel_key.trim())
-            .map((k) => ({ enabled: k.enabled, channel_key: k.channel_key, remark: k.remark ?? '' }));
+            .filter((k) => !k.id && (k.channel_key.trim() || k.codex_oauth_json?.trim()))
+            .map((k) => ({
+                enabled: k.enabled,
+                channel_key: k.channel_key.trim(),
+                remark: k.remark ?? '',
+                codex_oauth_json: k.codex_oauth_json,
+            }));
 
         const keys_to_update = nextKeys
             .filter((k) => typeof k.id === 'number' && originalByID.has(k.id as number))
             .map((k) => {
                 const orig = originalByID.get(k.id as number)!;
-                const u: { id: number; enabled?: boolean; channel_key?: string; remark?: string } = { id: k.id as number };
+                const u: { id: number; enabled?: boolean; channel_key?: string; remark?: string; codex_oauth_json?: string } = { id: k.id as number };
                 if (k.enabled !== orig.enabled) u.enabled = k.enabled;
                 if (k.channel_key !== orig.channel_key) u.channel_key = k.channel_key;
                 if ((k.remark ?? '') !== orig.remark) u.remark = k.remark ?? '';
+                if (k.codex_oauth_json) u.codex_oauth_json = k.codex_oauth_json;
                 return Object.keys(u).length > 1 ? u : null;
             })
-            .filter((u) => u !== null) as Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string }>;
+            .filter((u) => u !== null) as Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string; codex_oauth_json?: string }>;
 
         if (keys_to_add.length > 0) req.keys_to_add = keys_to_add;
         if (keys_to_update.length > 0) req.keys_to_update = keys_to_update;
@@ -356,15 +364,26 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
                                         {t('sections.keys')}
                                     </h4>
                                     <div className="rounded-2xl border bg-card overflow-hidden">
-                                        {channel.keys?.map((key) => (
+                                        {channel.keys?.map((key) => {
+                                            const isCodexKey = Boolean(key.codex_email || key.codex_plan_type || key.codex_account_id || key.codex_token_expiry);
+                                            return (
                                             <div key={key.id} className="flex items-center gap-3 p-3 sm:p-4 border-b last:border-0 hover:bg-accent/5 transition-colors">
                                                 <div className={cn("size-2 shrink-0 rounded-full", key.enabled ? "bg-emerald-500" : "bg-destructive")} />
 
-                                                <span className="font-mono text-sm truncate min-w-0 flex-1">
-                                                    {key.channel_key.length > 10
-                                                        ? `${key.channel_key.slice(0, 4)}...${key.channel_key.slice(-4)}`
-                                                        : key.channel_key}
-                                                </span>
+                                                {isCodexKey ? (
+                                                    <div className="min-w-0 flex-1 space-y-1 text-xs text-muted-foreground">
+                                                        {key.codex_email && <div className="truncate"><span className="font-medium text-foreground">{formT('codexEmail')}:</span> {key.codex_email}</div>}
+                                                        {key.codex_plan_type && <div><span className="font-medium text-foreground">{formT('codexPlanType')}:</span> {key.codex_plan_type}</div>}
+                                                        {key.codex_account_id && <div title={key.codex_account_id}><span className="font-medium text-foreground">{formT('codexAccountID')}:</span> {key.codex_account_id.slice(0, 8)}</div>}
+                                                        {key.codex_token_expiry && <div><span className="font-medium text-foreground">{formT('codexTokenExpiry')}:</span> {new Date(key.codex_token_expiry * 1000).toLocaleString(undefined, { timeZoneName: 'short' })}</div>}
+                                                    </div>
+                                                ) : (
+                                                    <span className="font-mono text-sm truncate min-w-0 flex-1">
+                                                        {key.channel_key.length > 10
+                                                            ? `${key.channel_key.slice(0, 4)}...${key.channel_key.slice(-4)}`
+                                                            : key.channel_key}
+                                                    </span>
+                                                )}
 
                                                 {key.remark && (
                                                     <span className="text-xs text-muted-foreground truncate max-w-24" title={key.remark}>
@@ -404,7 +423,8 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
                                                     </Badge>
                                                 </div>
                                             </div>
-                                        ))}
+                                        );
+                                        })}
                                         {(!channel.keys || channel.keys.length === 0) && (
                                             <div className="p-4 text-sm text-muted-foreground text-center">{t('noKeys')}</div>
                                         )}

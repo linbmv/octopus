@@ -13,6 +13,21 @@ import (
 )
 
 func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
+	if request.Type == model.ChannelTypeCodexOAuth {
+		planType := ""
+		bestRank := -1
+		for _, key := range request.Keys {
+			if !key.Enabled || key.CodexPlanType == "" {
+				continue
+			}
+			if rank := codexPlanRank(key.CodexPlanType); rank > bestRank {
+				bestRank = rank
+				planType = key.CodexPlanType
+			}
+		}
+		return filterModelsByMatchRegex(CodexModelsForPlan(planType), request.MatchRegex)
+	}
+
 	client, err := ChannelHttpClient(&request)
 	if err != nil {
 		return nil, err
@@ -29,24 +44,49 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if request.MatchRegex != nil && *request.MatchRegex != "" {
-		matchModel := make([]string, 0)
-		re, err := regexp2.Compile(*request.MatchRegex, regexp2.ECMAScript)
+	return filterModelsByMatchRegex(fetchModel, request.MatchRegex)
+}
+
+func filterModelsByMatchRegex(models []string, matchRegex *string) ([]string, error) {
+	if matchRegex == nil || *matchRegex == "" {
+		return models, nil
+	}
+	matchModel := make([]string, 0)
+	re, err := regexp2.Compile(*matchRegex, regexp2.ECMAScript)
+	if err != nil {
+		return nil, err
+	}
+	for _, model := range models {
+		matched, err := re.MatchString(model)
 		if err != nil {
 			return nil, err
 		}
-		for _, model := range fetchModel {
-			matched, err := re.MatchString(model)
-			if err != nil {
-				return nil, err
-			}
-			if matched {
-				matchModel = append(matchModel, model)
-			}
+		if matched {
+			matchModel = append(matchModel, model)
 		}
-		return matchModel, nil
 	}
-	return fetchModel, nil
+	return matchModel, nil
+}
+
+func codexPlanRank(plan string) int {
+	switch plan {
+	case "pro":
+		return 7
+	case "team":
+		return 6
+	case "business":
+		return 5
+	case "enterprise":
+		return 4
+	case "edu":
+		return 3
+	case "plus":
+		return 2
+	case "free":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // refer: https://platform.openai.com/docs/api-reference/models/list

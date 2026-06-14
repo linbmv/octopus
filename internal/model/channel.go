@@ -17,6 +17,8 @@ const (
 
 const ChannelTypeDoubao llm.APIFormat = "doubao"
 
+const ChannelTypeCodexOAuth llm.APIFormat = "openai/codex_oauth"
+
 type Channel struct {
 	ID             int            `json:"id" gorm:"primaryKey"`
 	Name           string         `json:"name" gorm:"unique;not null"`
@@ -48,14 +50,22 @@ type CustomHeader struct {
 }
 
 type ChannelKey struct {
-	ID               int     `json:"id" gorm:"primaryKey"`
-	ChannelID        int     `json:"channel_id"`
-	Enabled          bool    `json:"enabled" gorm:"default:true"`
-	ChannelKey       string  `json:"channel_key"`
-	StatusCode       int     `json:"status_code"`
-	LastUseTimeStamp int64   `json:"last_use_time_stamp"`
-	TotalCost        float64 `json:"total_cost"`
-	Remark           string  `json:"remark"`
+	ID                  int     `json:"id" gorm:"primaryKey"`
+	ChannelID           int     `json:"channel_id"`
+	Enabled             bool    `json:"enabled" gorm:"default:true"`
+	ChannelKey          string  `json:"channel_key"`
+	StatusCode          int     `json:"status_code"`
+	LastUseTimeStamp    int64   `json:"last_use_time_stamp"`
+	TotalCost           float64 `json:"total_cost"`
+	Remark              string  `json:"remark"`
+	CodexAccessToken    string  `json:"-" gorm:"type:text"`
+	CodexRefreshToken   string  `json:"-" gorm:"type:text"`
+	CodexIDToken        string  `json:"-" gorm:"type:text"`
+	CodexTokenExpiry    int64   `json:"codex_token_expiry,omitempty" gorm:"index"`
+	CodexAccountID      string  `json:"codex_account_id,omitempty" gorm:"type:varchar(128)"`
+	CodexPlanType       string  `json:"codex_plan_type,omitempty" gorm:"type:varchar(32);index"`
+	CodexEmail          string  `json:"codex_email,omitempty" gorm:"type:varchar(255)"`
+	CodexOAuthJSONInput string  `json:"codex_oauth_json,omitempty" gorm:"-"`
 }
 
 // ChannelUpdateRequest 渠道更新请求 - 仅包含变更的数据
@@ -82,16 +92,18 @@ type ChannelUpdateRequest struct {
 }
 
 type ChannelKeyAddRequest struct {
-	Enabled    bool   `json:"enabled"`
-	ChannelKey string `json:"channel_key" binding:"required"`
-	Remark     string `json:"remark"`
+	Enabled             bool   `json:"enabled"`
+	ChannelKey          string `json:"channel_key" binding:"required"`
+	Remark              string `json:"remark"`
+	CodexOAuthJSONInput string `json:"codex_oauth_json,omitempty"`
 }
 
 type ChannelKeyUpdateRequest struct {
-	ID         int     `json:"id" binding:"required"`
-	Enabled    *bool   `json:"enabled,omitempty"`
-	ChannelKey *string `json:"channel_key,omitempty"`
-	Remark     *string `json:"remark,omitempty"`
+	ID                  int     `json:"id" binding:"required"`
+	Enabled             *bool   `json:"enabled,omitempty"`
+	ChannelKey          *string `json:"channel_key,omitempty"`
+	Remark              *string `json:"remark,omitempty"`
+	CodexOAuthJSONInput *string `json:"codex_oauth_json,omitempty"`
 }
 
 func (c *Channel) GetBaseUrl() string {

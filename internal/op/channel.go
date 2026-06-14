@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/bestruirui/octopus/internal/codexauth"
+	"github.com/bestruirui/octopus/internal/codexprovider"
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/cache"
@@ -26,6 +28,13 @@ func ChannelList(ctx context.Context) ([]model.Channel, error) {
 }
 
 func ChannelCreate(channel *model.Channel, ctx context.Context) error {
+	if channel != nil && channel.Type == model.ChannelTypeCodexOAuth {
+		for i := range channel.Keys {
+			if err := codexauth.ApplyCodexOAuthImport(&channel.Keys[i]); err != nil {
+				return fmt.Errorf("failed to import codex oauth key %d: %w", i, err)
+			}
+		}
+	}
 	if err := db.GetDB().WithContext(ctx).Create(channel).Error; err != nil {
 		return err
 	}
@@ -65,6 +74,54 @@ func ChannelKeyUpdate(key model.ChannelKey) error {
 	channelKeyCacheNeedUpdateLock.Unlock()
 	return nil
 }
+
+func ChannelKeyCodexCredentialsUpdate(keyID, channelID int, oldAccessToken, accessToken, refreshToken, idToken, accountID, planType, email string, expiry int64, ctx context.Context) error {
+	if keyID == 0 || channelID == 0 {
+		return fmt.Errorf("invalid channel key")
+	}
+
+	updates := map[string]any{
+		"codex_access_token":  accessToken,
+		"codex_refresh_token": refreshToken,
+		"codex_token_expiry":  expiry,
+	}
+	if idToken != "" {
+		updates["codex_id_token"] = idToken
+	}
+	if accountID != "" {
+		updates["codex_account_id"] = accountID
+	}
+	if planType != "" {
+		updates["codex_plan_type"] = planType
+	}
+	if email != "" {
+		updates["codex_email"] = email
+	}
+
+	query := db.GetDB().WithContext(ctx).Model(&model.ChannelKey{})
+	if oldAccessToken != "" {
+		query = query.Where("id = ? AND codex_access_token = ?", keyID, oldAccessToken)
+	} else {
+		query = query.Where("id = ?", keyID)
+	}
+	result := query.Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("failed to update codex oauth credentials for channel key %d: %w", keyID, result.Error)
+	}
+	if result.RowsAffected == 0 && oldAccessToken != "" {
+		log.Debugf("skip codex oauth credentials update for channel key %d: access token changed", keyID)
+		if err := channelRefreshCacheByID(channelID, ctx); err != nil {
+			return fmt.Errorf("failed to refresh channel cache after codex oauth credentials update: %w", err)
+		}
+		return nil
+	}
+
+	if err := channelRefreshCacheByID(channelID, ctx); err != nil {
+		return fmt.Errorf("failed to refresh channel cache after codex oauth credentials update: %w", err)
+	}
+	return nil
+}
+
 func ChannelBaseUrlUpdate(channelID int, baseUrl []model.BaseUrl) error {
 	ch, ok := channelCache.Get(channelID)
 	if !ok {
@@ -192,6 +249,14 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 
 	// 删除 keys
 	if len(req.KeysToDelete) > 0 {
+		// 清理 provider cache（Critical #2 修复）
+		var keysToClean []model.ChannelKey
+		if err := tx.Where("id IN ? AND channel_id = ?", req.KeysToDelete, req.ID).Find(&keysToClean).Error; err == nil {
+			for _, key := range keysToClean {
+				codexprovider.InvalidateByKey(key.ID, key.CodexAccessToken)
+			}
+		}
+
 		if err := tx.Where("id IN ? AND channel_id = ?", req.KeysToDelete, req.ID).Delete(&model.ChannelKey{}).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to delete channel keys: %w", err)
@@ -216,6 +281,27 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 			if ku.Remark != nil {
 				updates["remark"] = *ku.Remark
 			}
+			if ku.CodexOAuthJSONInput != nil && *ku.CodexOAuthJSONInput != "" {
+				key := model.ChannelKey{CodexOAuthJSONInput: *ku.CodexOAuthJSONInput}
+				if ku.Remark != nil {
+					key.Remark = *ku.Remark
+				}
+				if err := codexauth.ApplyCodexOAuthImport(&key); err != nil {
+					tx.Rollback()
+					return nil, fmt.Errorf("failed to import codex oauth for channel key %d: %w", ku.ID, err)
+				}
+				updates["codex_access_token"] = key.CodexAccessToken
+				updates["codex_refresh_token"] = key.CodexRefreshToken
+				updates["codex_id_token"] = key.CodexIDToken
+				updates["codex_token_expiry"] = key.CodexTokenExpiry
+				updates["codex_account_id"] = key.CodexAccountID
+				updates["codex_plan_type"] = key.CodexPlanType
+				updates["codex_email"] = key.CodexEmail
+				if ku.Remark == nil && key.Remark != "" {
+					updates["remark"] = key.Remark
+				}
+				resetRuntimeState = true
+			}
 			if resetRuntimeState {
 				updates["status_code"] = 0
 				updates["last_use_time_stamp"] = 0
@@ -236,12 +322,18 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	if len(req.KeysToAdd) > 0 {
 		newKeys := make([]model.ChannelKey, 0, len(req.KeysToAdd))
 		for _, ka := range req.KeysToAdd {
-			newKeys = append(newKeys, model.ChannelKey{
-				ChannelID:  req.ID,
-				Enabled:    ka.Enabled,
-				ChannelKey: ka.ChannelKey,
-				Remark:     ka.Remark,
-			})
+			key := model.ChannelKey{
+				ChannelID:           req.ID,
+				Enabled:             ka.Enabled,
+				ChannelKey:          ka.ChannelKey,
+				Remark:              ka.Remark,
+				CodexOAuthJSONInput: ka.CodexOAuthJSONInput,
+			}
+			if err := codexauth.ApplyCodexOAuthImport(&key); err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("failed to import codex oauth for new channel key: %w", err)
+			}
+			newKeys = append(newKeys, key)
 		}
 		if err := tx.Create(&newKeys).Error; err != nil {
 			tx.Rollback()
@@ -331,6 +423,8 @@ func ChannelDel(id int, ctx context.Context) error {
 	for _, k := range ch.Keys {
 		if k.ID != 0 {
 			channelKeyCache.Del(k.ID)
+			// 清理 provider cache（Critical #2 修复）
+			codexprovider.InvalidateByKey(k.ID, k.CodexAccessToken)
 		}
 	}
 	StatsChannelDel(id)
