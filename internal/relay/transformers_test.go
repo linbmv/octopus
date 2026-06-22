@@ -124,6 +124,71 @@ func TestNewOutboundKeepsCurrentImageCompatibility(t *testing.T) {
 	})
 }
 
+func TestOpenAIImageGenerationRoundTripBuildsExpectedOutboundRequest(t *testing.T) {
+	inbound := newInbound(llm.APIFormatOpenAIImageGeneration)
+	if inbound == nil {
+		t.Fatal("newInbound returned nil OpenAI image generation inbound")
+	}
+
+	llmReq, err := inbound.TransformRequest(context.Background(), &httpclient.Request{
+		Method:      "POST",
+		Path:        "/v1/images/generations",
+		ContentType: "application/json",
+		Headers:     map[string][]string{"Content-Type": {"application/json"}},
+		Body:        []byte(`{"model":"dall-e-3","prompt":"a puppy","n":1,"size":"1024x1024","response_format":"url"}`),
+	})
+	if err != nil {
+		t.Fatalf("TransformRequest returned error: %v", err)
+	}
+	if llmReq.Model != "dall-e-3" {
+		t.Fatalf("model = %q, want dall-e-3", llmReq.Model)
+	}
+	if llmReq.RequestType != llm.RequestTypeImage {
+		t.Fatalf("request type = %q, want %q", llmReq.RequestType, llm.RequestTypeImage)
+	}
+	if llmReq.APIFormat != llm.APIFormatOpenAIImageGeneration {
+		t.Fatalf("api format = %q, want %q", llmReq.APIFormat, llm.APIFormatOpenAIImageGeneration)
+	}
+	if llmReq.Image == nil || llmReq.Image.Prompt != "a puppy" {
+		t.Fatalf("image prompt not preserved: %#v", llmReq.Image)
+	}
+
+	outbound, err := newOutbound(llm.APIFormatOpenAIImageGeneration, llmReq, testBaseURL, testAPIKey)
+	if err != nil {
+		t.Fatalf("newOutbound returned error: %v", err)
+	}
+	httpReq, err := outbound.TransformRequest(context.Background(), llmReq)
+	if err != nil {
+		t.Fatalf("TransformRequest returned error: %v", err)
+	}
+	if httpReq.URL != testBaseURL+"/images/generations" {
+		t.Fatalf("URL = %q, want %q", httpReq.URL, testBaseURL+"/images/generations")
+	}
+	if httpReq.APIFormat != string(llm.APIFormatOpenAIImageGeneration) {
+		t.Fatalf("APIFormat = %q, want %q", httpReq.APIFormat, llm.APIFormatOpenAIImageGeneration)
+	}
+	if httpReq.RequestType != llm.RequestTypeImage.String() {
+		t.Fatalf("RequestType = %q, want %q", httpReq.RequestType, llm.RequestTypeImage)
+	}
+	if got := httpReq.TransformerMetadata["model"]; got != "dall-e-3" {
+		t.Fatalf("TransformerMetadata model = %#v, want dall-e-3", got)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(httpReq.Body, &body); err != nil {
+		t.Fatalf("body is not valid JSON: %v", err)
+	}
+	if body["model"] != "dall-e-3" || body["prompt"] != "a puppy" {
+		t.Fatalf("image model/prompt not preserved in outbound body: %#v", body)
+	}
+	if body["size"] != "1024x1024" || body["response_format"] != "url" {
+		t.Fatalf("image options not preserved in outbound body: %#v", body)
+	}
+	if body["n"] != float64(1) {
+		t.Fatalf("n = %#v, want 1", body["n"])
+	}
+}
+
 func TestNewOutboundKeepsCurrentCompactCompatibility(t *testing.T) {
 	assertOutboundCompatible(t, []outboundCase{
 		{"openai_chat", llm.APIFormatOpenAIChatCompletion, llm.RequestTypeCompact},
