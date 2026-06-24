@@ -319,6 +319,52 @@ func TestFinalAttemptEmpty(t *testing.T) {
 	}
 }
 
+func TestNestedGroupFallbackEntersChildAfterParentCandidates(t *testing.T) {
+	parent := dbmodel.Group{
+		ID:   1,
+		Name: "opus",
+		Mode: dbmodel.GroupModeRoundRobin,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeGroup, TargetGroupID: 2, Priority: 1},
+			{ID: 2, Type: dbmodel.GroupItemTypeChannel, ChannelID: 10, ModelName: "opus-a", Priority: 2},
+			{ID: 3, Type: dbmodel.GroupItemTypeChannel, ChannelID: 11, ModelName: "opus-b", Priority: 3},
+		},
+	}
+	child := dbmodel.Group{
+		ID:   2,
+		Name: "gpt",
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 4, Type: dbmodel.GroupItemTypeChannel, ChannelID: 20, ModelName: "gpt-slow", Priority: 20},
+			{ID: 5, Type: dbmodel.GroupItemTypeChannel, ChannelID: 21, ModelName: "gpt-fast", Priority: 10},
+		},
+	}
+
+	orderedParent := nestedFallbackCandidates(parent)
+	if orderedParent[0].Type == dbmodel.GroupItemTypeGroup || orderedParent[1].Type == dbmodel.GroupItemTypeGroup || orderedParent[2].TargetGroupID != 2 {
+		t.Fatalf("父分组应先尝试直连渠道再进入嵌套分组, got %+v", orderedParent)
+	}
+
+	parentIter := newRelayIterator(parent, 1, &llm.Request{Model: "opus"}, context.Background())
+	if !parentIter.Next() || parentIter.Item().Type == dbmodel.GroupItemTypeGroup {
+		t.Fatalf("父分组第一个候选 = %+v, 期望直连 opus 候选", parentIter.Item())
+	}
+	if !parentIter.Next() || parentIter.Item().Type == dbmodel.GroupItemTypeGroup {
+		t.Fatalf("父分组第二个候选 = %+v, 期望直连 opus 候选", parentIter.Item())
+	}
+	if !parentIter.Next() || parentIter.Item().Type != dbmodel.GroupItemTypeGroup {
+		t.Fatalf("父分组直连候选耗尽后应进入嵌套分组, got %+v", parentIter.Item())
+	}
+
+	childIter := newRelayIterator(child, 1, &llm.Request{Model: "opus"}, context.Background())
+	if !childIter.Next() || childIter.Item().ChannelID != 21 {
+		t.Fatalf("子分组应保留自己的 failover priority, 第一个候选 = %+v", childIter.Item())
+	}
+	if !childIter.Next() || childIter.Item().ChannelID != 20 {
+		t.Fatalf("子分组第二个候选 = %+v, 期望 gpt-slow", childIter.Item())
+	}
+}
+
 func TestSafeKeyRemark(t *testing.T) {
 	tests := []struct {
 		name string

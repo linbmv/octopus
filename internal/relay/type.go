@@ -15,7 +15,15 @@ type relayRun struct {
 	internalRequest *llm.Request
 	metrics         *RelayMetrics
 	iter            *balancer.Iterator
+	iterStack       []*relayIteratorFrame
+	iterHistory     []*balancer.Iterator
 	group           dbmodel.Group
+}
+
+type relayIteratorFrame struct {
+	group dbmodel.Group
+	iter  *balancer.Iterator
+	depth int
 }
 
 // relayAttempt 保存一次上游通道尝试的状态。

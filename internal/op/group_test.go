@@ -124,6 +124,65 @@ func TestGroupGetEnabledMapDisabledGroup(t *testing.T) {
 	}
 }
 
+func TestGroupGetEnabledTreeKeepsNestedGroupBoundary(t *testing.T) {
+	parent := model.Group{
+		ID:      201,
+		Name:    "opus",
+		Enabled: true,
+		Mode:    model.GroupModeFailover,
+		Items: []model.GroupItem{
+			{ID: 1, GroupID: 201, Type: model.GroupItemTypeChannel, ChannelID: 301, ModelName: "claude-opus", Priority: 1},
+			{ID: 2, GroupID: 201, Type: model.GroupItemTypeGroup, TargetGroupID: 202, Priority: 2},
+		},
+	}
+	child := model.Group{
+		ID:      202,
+		Name:    "gpt",
+		Enabled: true,
+		Mode:    model.GroupModeRoundRobin,
+		Items: []model.GroupItem{
+			{ID: 3, GroupID: 202, Type: model.GroupItemTypeChannel, ChannelID: 302, ModelName: "gpt-5", Priority: 2},
+			{ID: 4, GroupID: 202, Type: model.GroupItemTypeChannel, ChannelID: 303, ModelName: "gpt-4.1", Priority: 1},
+		},
+	}
+	channelCache.Set(301, model.Channel{ID: 301, Enabled: true})
+	channelCache.Set(302, model.Channel{ID: 302, Enabled: true})
+	channelCache.Set(303, model.Channel{ID: 303, Enabled: true})
+	groupCache.Set(parent.ID, parent)
+	groupCache.Set(child.ID, child)
+	groupMap.Set(parent.Name, parent)
+	defer func() {
+		channelCache.Del(301)
+		channelCache.Del(302)
+		channelCache.Del(303)
+		groupCache.Del(parent.ID)
+		groupCache.Del(child.ID)
+		groupMap.Del(parent.Name)
+	}()
+
+	tree, err := GroupGetEnabledTree(parent.Name, context.Background())
+	if err != nil {
+		t.Fatalf("GroupGetEnabledTree 返回错误: %v", err)
+	}
+	if len(tree.Items) != 2 {
+		t.Fatalf("父分组 items 数量 = %d, 期望保留直连渠道和嵌套分组", len(tree.Items))
+	}
+	if tree.Items[0].Type != model.GroupItemTypeChannel || tree.Items[0].ChannelID != 301 {
+		t.Fatalf("第一个 item = %+v, 期望父级直连渠道", tree.Items[0])
+	}
+	if tree.Items[1].Type != model.GroupItemTypeGroup || tree.Items[1].TargetGroupID != child.ID {
+		t.Fatalf("第二个 item = %+v, 期望保留嵌套分组引用", tree.Items[1])
+	}
+
+	flat, err := GroupGetEnabledMap(parent.Name, context.Background())
+	if err != nil {
+		t.Fatalf("GroupGetEnabledMap 返回错误: %v", err)
+	}
+	if len(flat.Items) != 3 || flat.Items[1].Type == model.GroupItemTypeGroup {
+		t.Fatalf("旧 flat 查询应继续展开子分组, got %+v", flat.Items)
+	}
+}
+
 func TestGroupListModelExcludesDisabledGroups(t *testing.T) {
 	// 构造两个分组：一个启用，一个禁用；确认禁用的不出现在模型列表。
 	g1 := model.Group{ID: 101, Name: "enabled-group", Enabled: true}

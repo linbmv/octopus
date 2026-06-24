@@ -33,6 +33,10 @@ func NewIterator(group model.Group, apiKeyID int, requestModel string) *Iterator
 func NewIteratorWithCandidateRanks(group model.Group, apiKeyID int, requestModel string, ranks map[int]int) *Iterator {
 	b := GetBalancer(group.Mode)
 	candidates := b.Candidates(group.Items)
+	return NewIteratorFromCandidates(group, apiKeyID, requestModel, candidates, ranks)
+}
+
+func NewIteratorFromCandidates(group model.Group, apiKeyID int, requestModel string, candidates []model.GroupItem, ranks map[int]int) *Iterator {
 	applyCandidateRanks(candidates, ranks)
 
 	stickyIdx := -1

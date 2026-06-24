@@ -66,6 +66,24 @@ processGroup:
 	return expandEnabledGroup(group)
 }
 
+func GroupGetEnabledTree(name string, ctx context.Context) (model.Group, error) {
+	group, ok := groupMap.Get(name)
+	if !ok {
+		fallbackName := stripModelSuffix(name)
+		if fallbackName != name {
+			group, ok = groupMap.Get(fallbackName)
+			if ok {
+				goto processGroup
+			}
+		}
+		return model.Group{}, fmt.Errorf("group not found")
+	}
+
+processGroup:
+	visited := map[int]struct{}{group.ID: {}}
+	return filterEnabledGroupTree(group, 0, visited)
+}
+
 // GroupGetEnabledByID 根据分组 ID 获取启用的分组，并递归展开嵌套分组成员
 func GroupGetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
 	group, ok := groupCache.Get(id)
@@ -73,6 +91,19 @@ func GroupGetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
 		return nil, fmt.Errorf("group not found")
 	}
 	expanded, err := expandEnabledGroup(group)
+	if err != nil {
+		return nil, err
+	}
+	return &expanded, nil
+}
+
+func GroupGetEnabledTreeByID(id int, ctx context.Context) (*model.Group, error) {
+	group, ok := groupCache.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("group not found")
+	}
+	visited := map[int]struct{}{group.ID: {}}
+	expanded, err := filterEnabledGroupTree(group, 0, visited)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +120,58 @@ func expandEnabledGroup(group model.Group) (model.Group, error) {
 	if err != nil {
 		return model.Group{}, err
 	}
+	group.Items = items
+	return group, nil
+}
+
+func filterEnabledGroupTree(group model.Group, depth int, visited map[int]struct{}) (model.Group, error) {
+	if depth > maxGroupNestDepth {
+		return model.Group{}, fmt.Errorf("group %d: nesting depth exceeded (max %d)", group.ID, maxGroupNestDepth)
+	}
+	if !group.Enabled || len(group.Items) == 0 {
+		group.Items = nil
+		return group, nil
+	}
+
+	items := make([]model.GroupItem, 0, len(group.Items))
+	for _, item := range group.Items {
+		if item.Disabled {
+			continue
+		}
+
+		item.Type = normalizeGroupItemType(item.Type)
+		switch item.Type {
+		case model.GroupItemTypeChannel:
+			channel, ok := channelCache.Get(item.ChannelID)
+			if !ok || !channel.Enabled {
+				continue
+			}
+			items = append(items, item)
+
+		case model.GroupItemTypeGroup:
+			if item.TargetGroupID <= 0 {
+				continue
+			}
+			if _, ok := visited[item.TargetGroupID]; ok {
+				return model.Group{}, fmt.Errorf("group %d: circular reference detected (target %d)", group.ID, item.TargetGroupID)
+			}
+			targetGroup, ok := groupCache.Get(item.TargetGroupID)
+			if !ok || !targetGroup.Enabled {
+				continue
+			}
+			nextVisited := cloneIntSet(visited)
+			nextVisited[item.TargetGroupID] = struct{}{}
+			filteredTarget, err := filterEnabledGroupTree(targetGroup, depth+1, nextVisited)
+			if err != nil {
+				return model.Group{}, err
+			}
+			if len(filteredTarget.Items) == 0 {
+				continue
+			}
+			items = append(items, item)
+		}
+	}
+
 	group.Items = items
 	return group, nil
 }

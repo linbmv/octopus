@@ -55,7 +55,7 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 		}
 	}
 
-	group, err := op.GroupGetEnabledMap(internalRequest.Model, c.Request.Context())
+	group, err := op.GroupGetEnabledTree(internalRequest.Model, c.Request.Context())
 	if err != nil {
 		resp.Error(c, http.StatusNotFound, "model not found")
 		return nil, err
@@ -80,21 +80,46 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 			StartTime:       time.Now(),
 			InternalRequest: internalRequest,
 		},
-		iter:  iter,
-		group: group,
+		iter:        iter,
+		iterStack:   []*relayIteratorFrame{{group: group, iter: iter}},
+		iterHistory: []*balancer.Iterator{iter},
+		group:       group,
 	}, nil
 }
 
 func newRelayIterator(group dbmodel.Group, apiKeyID int, request *llm.Request, ctx context.Context) *balancer.Iterator {
+	candidates := nestedFallbackCandidates(group)
 	if request == nil || request.RequestType != llm.RequestTypeCompact {
 		requestModel := ""
 		if request != nil {
 			requestModel = request.Model
 		}
-		return balancer.NewIterator(group, apiKeyID, requestModel)
+		return balancer.NewIteratorFromCandidates(group, apiKeyID, requestModel, candidates, nil)
 	}
+	group.Items = candidates
 	ranks := compactCandidateRanks(group, ctx)
-	return balancer.NewIteratorWithCandidateRanks(group, apiKeyID, request.Model, ranks)
+	return balancer.NewIteratorFromCandidates(group, apiKeyID, request.Model, candidates, ranks)
+}
+
+func nestedFallbackCandidates(group dbmodel.Group) []dbmodel.GroupItem {
+	if len(group.Items) <= 1 {
+		return group.Items
+	}
+	directItems := make([]dbmodel.GroupItem, 0, len(group.Items))
+	nestedItems := make([]dbmodel.GroupItem, 0)
+	for _, item := range group.Items {
+		if item.Type != dbmodel.GroupItemTypeGroup {
+			directItems = append(directItems, item)
+		} else {
+			nestedItems = append(nestedItems, item)
+		}
+	}
+	if len(nestedItems) == 0 || len(directItems) == 0 {
+		return balancer.GetBalancer(group.Mode).Candidates(group.Items)
+	}
+	ordered := balancer.GetBalancer(group.Mode).Candidates(directItems)
+	ordered = append(ordered, balancer.GetBalancer(group.Mode).Candidates(nestedItems)...)
+	return ordered
 }
 
 func compactCandidateRanks(group dbmodel.Group, ctx context.Context) map[int]int {
@@ -150,11 +175,11 @@ func (r *relayRun) run() {
 	ctx := r.c.Request.Context()
 	var lastErr error
 
-	for r.iter.Next() {
+	for {
 		select {
 		case <-ctx.Done():
 			log.Infof("request context canceled, stopping retry")
-			r.metrics.Save(ctx, false, context.Canceled, r.iter.Attempts())
+			r.metrics.Save(ctx, false, context.Canceled, r.attempts())
 			return
 		default:
 		}
@@ -165,16 +190,16 @@ func (r *relayRun) run() {
 			continue
 		}
 		if attempt == nil {
-			continue
+			break
 		}
 
 		written, err := attempt.run()
 		if err == nil {
-			r.metrics.Save(ctx, true, nil, r.iter.Attempts())
+			r.metrics.Save(ctx, true, nil, r.attempts())
 			return
 		}
 		if written {
-			r.metrics.Save(ctx, false, err, r.iter.Attempts())
+			r.metrics.Save(ctx, false, err, r.attempts())
 			return
 		}
 		lastErr = err
@@ -183,13 +208,69 @@ func (r *relayRun) run() {
 	if lastErr == nil {
 		lastErr = errors.New("all channels failed")
 	}
-	r.metrics.Save(ctx, false, lastErr, r.iter.Attempts())
+	r.metrics.Save(ctx, false, lastErr, r.attempts())
 	resp.Error(r.c, http.StatusBadGateway, lastErr.Error())
 }
 
+func (r *relayRun) attempts() []dbmodel.ChannelAttempt {
+	attempts := make([]dbmodel.ChannelAttempt, 0)
+	for _, iter := range r.iterHistory {
+		attempts = append(attempts, iter.Attempts()...)
+	}
+	return attempts
+}
+
 func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
-	item := r.iter.Item()
-	return r.resolveGroupItem(item, r.iter.IsSticky(), r.iter.StickyKeyID())
+	for {
+		frame := r.currentIteratorFrame()
+		if frame == nil {
+			return nil, nil
+		}
+		item := frame.iter.Item()
+		if item.Type != dbmodel.GroupItemTypeGroup {
+			r.iter = frame.iter
+			return r.resolveGroupItem(item, frame.iter.IsSticky(), frame.iter.StickyKeyID())
+		}
+		if err := r.pushNestedGroupIterator(frame, item); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (r *relayRun) currentIteratorFrame() *relayIteratorFrame {
+	for len(r.iterStack) > 0 {
+		frame := r.iterStack[len(r.iterStack)-1]
+		if frame.iter.Next() {
+			r.iter = frame.iter
+			return frame
+		}
+		r.iterStack = r.iterStack[:len(r.iterStack)-1]
+		if len(r.iterStack) > 0 {
+			r.iter = r.iterStack[len(r.iterStack)-1].iter
+		}
+	}
+	return nil
+}
+
+func (r *relayRun) pushNestedGroupIterator(parent *relayIteratorFrame, item dbmodel.GroupItem) error {
+	targetGroup, err := op.GroupGetEnabledTreeByID(item.TargetGroupID, r.c.Request.Context())
+	if err != nil {
+		parent.iter.SkipFor(item, false, 0, 0, fmt.Sprintf("group_%d", item.TargetGroupID), err.Error())
+		return err
+	}
+	if len(targetGroup.Items) == 0 {
+		parent.iter.SkipFor(item, false, 0, 0, targetGroup.Name, "nested group has no available channel")
+		return nil
+	}
+	parent.iter.RedirectFor(item, 0, parent.group.Name, targetGroup.ID, targetGroup.Name, parent.depth+1, "enter nested group")
+	childIter := newRelayIterator(*targetGroup, r.c.GetInt("api_key_id"), r.internalRequest, r.c.Request.Context())
+	r.iterHistory = append(r.iterHistory, childIter)
+	r.iterStack = append(r.iterStack, &relayIteratorFrame{
+		group: *targetGroup,
+		iter:  childIter,
+		depth: parent.depth + 1,
+	})
+	return nil
 }
 
 func (r *relayRun) resolveGroupItem(
