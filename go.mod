@@ -10,7 +10,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
-	github.com/looplj/axonhub/llm v0.0.0-20260620040416-7122f32994d9
+	github.com/looplj/axonhub/llm v0.0.0-20260625062649-e92f4bf8ef03
 	github.com/samber/lo v1.52.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
