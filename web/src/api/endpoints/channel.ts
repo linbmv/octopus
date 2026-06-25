@@ -261,6 +261,7 @@ export function useDeleteChannel() {
             logger.log('渠道删除成功');
             queryClient.invalidateQueries({ queryKey: ['channels', 'list'] });
             queryClient.invalidateQueries({ queryKey: ['models', 'channel'] });
+            queryClient.invalidateQueries({ queryKey: ['groups', 'list'] });
         },
         onError: (error) => {
             logger.error('渠道删除失败:', error);
