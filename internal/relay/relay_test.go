@@ -319,6 +319,30 @@ func TestFinalAttemptEmpty(t *testing.T) {
 	}
 }
 
+func TestRelayRunAttemptsRenumbersNestedIteratorAttempts(t *testing.T) {
+	parentGroup := dbmodel.Group{Items: []dbmodel.GroupItem{{ModelName: "parent-model"}}}
+	childGroup := dbmodel.Group{Items: []dbmodel.GroupItem{{ModelName: "child-model"}}}
+	parentIter := balancer.NewIterator(parentGroup, 1, "request-model")
+	childIter := balancer.NewIterator(childGroup, 1, "request-model")
+	if !parentIter.Next() || !childIter.Next() {
+		t.Fatal("测试 iterator 应包含候选")
+	}
+	parentIter.Skip(1, 0, "parent", "parent skipped")
+	childIter.Skip(2, 0, "child", "child skipped")
+
+	r := &relayRun{iterHistory: []*balancer.Iterator{parentIter, childIter}}
+	attempts := r.attempts()
+	if len(attempts) != 2 {
+		t.Fatalf("attempts 数量 = %d, 期望 2", len(attempts))
+	}
+	if attempts[0].AttemptNum != 1 || attempts[1].AttemptNum != 2 {
+		t.Fatalf("attempt num 应全局连续, got %d/%d", attempts[0].AttemptNum, attempts[1].AttemptNum)
+	}
+	if attempts[0].ChannelID != 1 || attempts[1].ChannelID != 2 {
+		t.Fatalf("attempt 顺序被改变: %+v", attempts)
+	}
+}
+
 func TestNestedGroupFallbackEntersChildAfterParentCandidates(t *testing.T) {
 	parent := dbmodel.Group{
 		ID:   1,

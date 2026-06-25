@@ -223,6 +223,9 @@ func (r *relayRun) attempts() []dbmodel.ChannelAttempt {
 	for _, iter := range r.iterHistory {
 		attempts = append(attempts, iter.Attempts()...)
 	}
+	for i := range attempts {
+		attempts[i].AttemptNum = i + 1
+	}
 	return attempts
 }
 
