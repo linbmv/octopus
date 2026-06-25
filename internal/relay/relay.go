@@ -81,7 +81,7 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 			InternalRequest: internalRequest,
 		},
 		iter:        iter,
-		iterStack:   []*relayIteratorFrame{{group: group, iter: iter}},
+		iterStack:   []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
 		iterHistory: []*balancer.Iterator{iter},
 		group:       group,
 	}, nil
@@ -101,6 +101,12 @@ func newRelayIterator(group dbmodel.Group, apiKeyID int, request *llm.Request, c
 	return balancer.NewIteratorFromCandidates(group, apiKeyID, request.Model, candidates, ranks)
 }
 
+// nestedFallbackCandidates returns group items ordered with direct channels before nested groups.
+// This ensures nested groups act as fallback pools: parent group's direct channels are exhausted
+// before entering any nested group, regardless of priority values.
+//
+// Example: if group has [DirectA(priority=100), NestedB(priority=50), DirectC(priority=30)],
+// the result is [DirectA, DirectC, NestedB], NOT [NestedB, DirectC, DirectA].
 func nestedFallbackCandidates(group dbmodel.Group) []dbmodel.GroupItem {
 	if len(group.Items) <= 1 {
 		return group.Items
@@ -256,7 +262,7 @@ func (r *relayRun) pushNestedGroupIterator(parent *relayIteratorFrame, item dbmo
 	targetGroup, err := op.GroupGetEnabledTreeByID(item.TargetGroupID, r.c.Request.Context())
 	if err != nil {
 		parent.iter.SkipFor(item, false, 0, 0, fmt.Sprintf("group_%d", item.TargetGroupID), err.Error())
-		return err
+		return nil // Skip failed nested group and continue iteration
 	}
 	if len(targetGroup.Items) == 0 {
 		parent.iter.SkipFor(item, false, 0, 0, targetGroup.Name, "nested group has no available channel")
