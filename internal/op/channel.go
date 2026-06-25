@@ -353,11 +353,15 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 			if modelName == "" {
 				continue
 			}
+			channelName := channel.Name
+			if channelName == "" {
+				channelName = fmt.Sprintf("Channel %d", channel.ID)
+			}
 			models = append(models, model.LLMChannel{
 				Name:        modelName,
 				Enabled:     channel.Enabled,
 				ChannelID:   channel.ID,
-				ChannelName: channel.Name,
+				ChannelName: channelName,
 			})
 		}
 	}
