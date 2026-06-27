@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
+	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/op"
 	"github.com/looplj/axonhub/llm"
 )
 
@@ -18,6 +21,43 @@ func testChannel(baseURL string, channelType llm.APIFormat) model.Channel {
 		Proxy:    false,
 		BaseUrls: []model.BaseUrl{{URL: baseURL}},
 		Keys:     []model.ChannelKey{{ID: 1, Enabled: true, ChannelKey: "test-key"}},
+	}
+}
+
+func TestChannelAutoGroupPrunesStaleItemsWhenAutoGroupDisabled(t *testing.T) {
+	ctx := context.Background()
+	if err := db.InitDB("sqlite", filepath.Join(t.TempDir(), "octopus.db"), false); err != nil {
+		t.Fatalf("init test db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	group := model.Group{ID: 701, Name: "manual-group", Enabled: true, Mode: model.GroupModeFailover}
+	if err := db.GetDB().WithContext(ctx).Create(&group).Error; err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	items := []model.GroupItem{
+		{ID: 7001, GroupID: group.ID, Type: model.GroupItemTypeChannel, ChannelID: 801, ModelName: "old-model", Priority: 1},
+		{ID: 7002, GroupID: group.ID, Type: model.GroupItemTypeChannel, ChannelID: 801, ModelName: "current-model", Priority: 2},
+	}
+	if err := db.GetDB().WithContext(ctx).Create(&items).Error; err != nil {
+		t.Fatalf("create group items: %v", err)
+	}
+	if err := op.GroupRefreshCacheByID(group.ID, ctx); err != nil {
+		t.Fatalf("refresh group cache: %v", err)
+	}
+
+	ChannelAutoGroup(&model.Channel{
+		ID:        801,
+		AutoGroup: model.AutoGroupTypeNone,
+		Model:     "current-model",
+	}, ctx)
+
+	remaining, err := op.GroupItemList(group.ID, ctx)
+	if err != nil {
+		t.Fatalf("list group items: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].ModelName != "current-model" {
+		t.Fatalf("应清理旧模型并保留当前模型, got %+v", remaining)
 	}
 }
 

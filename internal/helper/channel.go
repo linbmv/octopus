@@ -60,6 +60,10 @@ func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
 	if channel == nil {
 		return
 	}
+	channelModelNames := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel)
+	if err := op.GroupItemPruneByChannelModels(channel.ID, channelModelNames, ctx); err != nil {
+		log.Warnf("prune stale group items failed (channel=%d): %v", channel.ID, err)
+	}
 	if channel.AutoGroup == model.AutoGroupTypeNone {
 		return
 	}
@@ -69,7 +73,6 @@ func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
 		return
 	}
 
-	channelModelNames := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel)
 	if len(channelModelNames) == 0 {
 		return
 	}

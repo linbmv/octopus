@@ -757,6 +757,57 @@ func GroupItemBatchDelByChannelAndModels(keys []model.GroupIDAndLLMName, ctx con
 	return nil
 }
 
+func GroupItemPruneByChannelModels(channelID int, modelNames []string, ctx context.Context) error {
+	if channelID == 0 {
+		return nil
+	}
+
+	allowed := make([]string, 0, len(modelNames))
+	seen := make(map[string]struct{}, len(modelNames))
+	for _, modelName := range modelNames {
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" {
+			continue
+		}
+		key := strings.ToLower(modelName)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		allowed = append(allowed, key)
+	}
+
+	query := db.GetDB().WithContext(ctx).
+		Model(&model.GroupItem{}).
+		Where("type = ? AND channel_id = ?", model.GroupItemTypeChannel, channelID)
+	if len(allowed) > 0 {
+		query = query.Where("LOWER(model_name) NOT IN ?", allowed)
+	}
+
+	var groupIDs []int
+	if err := query.Distinct("group_id").Pluck("group_id", &groupIDs).Error; err != nil {
+		return fmt.Errorf("failed to find stale group ids: %w", err)
+	}
+	if len(groupIDs) == 0 {
+		return nil
+	}
+
+	deleteQuery := db.GetDB().WithContext(ctx).
+		Where("type = ? AND channel_id = ?", model.GroupItemTypeChannel, channelID)
+	if len(allowed) > 0 {
+		deleteQuery = deleteQuery.Where("LOWER(model_name) NOT IN ?", allowed)
+	}
+	if err := deleteQuery.Delete(&model.GroupItem{}).Error; err != nil {
+		return fmt.Errorf("failed to delete stale group items: %w", err)
+	}
+
+	if err := groupRefreshCacheByIDs(groupIDs, ctx); err != nil {
+		return fmt.Errorf("failed to refresh group cache: %w", err)
+	}
+
+	return nil
+}
+
 func GroupItemList(groupID int, ctx context.Context) ([]model.GroupItem, error) {
 	var items []model.GroupItem
 	if err := db.GetDB().WithContext(ctx).

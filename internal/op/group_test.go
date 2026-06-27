@@ -2,10 +2,28 @@ package op
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 )
+
+func initTestDB(t *testing.T) {
+	t.Helper()
+	if err := db.InitDB("sqlite", filepath.Join(t.TempDir(), "octopus.db"), false); err != nil {
+		t.Fatalf("init test db: %v", err)
+	}
+	groupCache.Clear()
+	groupMap.Clear()
+	channelCache.Clear()
+	t.Cleanup(func() {
+		_ = db.Close()
+		groupCache.Clear()
+		groupMap.Clear()
+		channelCache.Clear()
+	})
+}
 
 func TestStripModelSuffix(t *testing.T) {
 	tests := []struct {
@@ -180,6 +198,94 @@ func TestGroupGetEnabledTreeKeepsNestedGroupBoundary(t *testing.T) {
 	}
 	if len(flat.Items) != 3 || flat.Items[1].Type == model.GroupItemTypeGroup {
 		t.Fatalf("旧 flat 查询应继续展开子分组, got %+v", flat.Items)
+	}
+}
+
+func TestGroupItemPruneByChannelModelsDeletesStaleModels(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+
+	group := model.Group{ID: 301, Name: "prune-group", Enabled: true, Mode: model.GroupModeFailover}
+	if err := db.GetDB().WithContext(ctx).Create(&group).Error; err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	items := []model.GroupItem{
+		{ID: 1001, GroupID: group.ID, Type: model.GroupItemTypeChannel, ChannelID: 501, ModelName: "GPT-4", Priority: 1},
+		{ID: 1002, GroupID: group.ID, Type: model.GroupItemTypeChannel, ChannelID: 501, ModelName: "old-model", Priority: 2},
+		{ID: 1003, GroupID: group.ID, Type: model.GroupItemTypeChannel, ChannelID: 502, ModelName: "old-model", Priority: 3},
+		{ID: 1004, GroupID: group.ID, Type: model.GroupItemTypeGroup, TargetGroupID: 302, Priority: 4},
+	}
+	if err := db.GetDB().WithContext(ctx).Create(&items).Error; err != nil {
+		t.Fatalf("create group items: %v", err)
+	}
+	group.Items = items
+	groupCache.Set(group.ID, group)
+	groupMap.Set(group.Name, group)
+
+	if err := GroupItemPruneByChannelModels(501, []string{"gpt-4"}, ctx); err != nil {
+		t.Fatalf("GroupItemPruneByChannelModels 返回错误: %v", err)
+	}
+
+	remaining, err := GroupItemList(group.ID, ctx)
+	if err != nil {
+		t.Fatalf("list group items: %v", err)
+	}
+	ids := map[int]bool{}
+	for _, item := range remaining {
+		ids[item.ID] = true
+	}
+	if !ids[1001] {
+		t.Fatal("大小写不同但仍存在于渠道模型列表的分组项不应被删除")
+	}
+	if ids[1002] {
+		t.Fatal("同渠道已下架模型的分组项应被删除")
+	}
+	if !ids[1003] {
+		t.Fatal("其它渠道的同名模型分组项不应被删除")
+	}
+	if !ids[1004] {
+		t.Fatal("嵌套分组项不应被删除")
+	}
+
+	refreshed, ok := groupCache.Get(group.ID)
+	if !ok {
+		t.Fatal("清理后应刷新分组缓存")
+	}
+	for _, item := range refreshed.Items {
+		if item.ID == 1002 {
+			t.Fatal("刷新后的分组缓存不应包含已删除的旧模型项")
+		}
+	}
+}
+
+func TestGroupItemPruneByChannelModelsDeletesAllWhenModelListEmpty(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+
+	group := model.Group{ID: 401, Name: "empty-model-group", Enabled: true, Mode: model.GroupModeFailover}
+	if err := db.GetDB().WithContext(ctx).Create(&group).Error; err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	items := []model.GroupItem{
+		{ID: 2001, GroupID: group.ID, Type: model.GroupItemTypeChannel, ChannelID: 601, ModelName: "old-a", Priority: 1},
+		{ID: 2002, GroupID: group.ID, Type: model.GroupItemTypeChannel, ChannelID: 601, ModelName: "old-b", Priority: 2},
+	}
+	if err := db.GetDB().WithContext(ctx).Create(&items).Error; err != nil {
+		t.Fatalf("create group items: %v", err)
+	}
+	group.Items = items
+	groupCache.Set(group.ID, group)
+	groupMap.Set(group.Name, group)
+
+	if err := GroupItemPruneByChannelModels(601, nil, ctx); err != nil {
+		t.Fatalf("GroupItemPruneByChannelModels 返回错误: %v", err)
+	}
+	remaining, err := GroupItemList(group.ID, ctx)
+	if err != nil {
+		t.Fatalf("list group items: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("空模型列表应删除该渠道所有分组项, got %+v", remaining)
 	}
 }
 
