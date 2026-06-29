@@ -475,6 +475,7 @@
                 "requests": "Request Details",
                 "tokens": "Token Usage",
                 "costs": "Cost Details",
+                "limits": "Limits",
                 "baseUrls": "Base URLs",
                 "keys": "Keys"
             },
@@ -490,7 +491,10 @@
                 "outputToken": "Output Tokens",
                 "inputCost": "Input Cost",
                 "outputCost": "Output Cost",
-                "avgWaitTime": "Wait Time"
+                "avgWaitTime": "Wait Time",
+                "rpmLimit": "RPM Limit",
+                "maxConcurrency": "Max Concurrency",
+                "unlimited": "Unlimited"
             },
             "actions": {
                 "edit": "Edit",
@@ -522,6 +526,9 @@
             "customHeaderAdd": "Add Header",
             "channelProxy": "Channel Proxy",
             "channelProxyPlaceholder": "Optional: proxy for this channel (overrides global proxy)",
+            "rpmLimit": "RPM Limit",
+            "maxConcurrency": "Max Concurrency",
+            "unlimitedNumber": "0 = unlimited",
             "paramOverride": "Param Override",
             "paramOverridePlaceholder": "Optional: JSON string to override request params",
             "model": "Model",

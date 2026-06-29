@@ -66,6 +66,8 @@ export type Channel = {
     channel_proxy?: string | null;
     match_regex?: string | null;
     raw_passthrough: boolean;
+    rpm_limit: number;
+    max_concurrency: number;
     stats: StatsChannel;
 };
 
@@ -95,6 +97,8 @@ export type CreateChannelRequest = {
     param_override?: string | null;
     match_regex?: string | null;
     raw_passthrough?: boolean;
+    rpm_limit?: number;
+    max_concurrency?: number;
 };
 
 /**
@@ -116,6 +120,8 @@ export type UpdateChannelRequest = {
     param_override?: string | null;
     match_regex?: string | null;
     raw_passthrough?: boolean;
+    rpm_limit?: number;
+    max_concurrency?: number;
     // keys diff
     keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
     keys_to_update?: Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string }>;

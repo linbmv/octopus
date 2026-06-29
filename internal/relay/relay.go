@@ -326,7 +326,8 @@ func (r *relayRun) buildRealAttempt(
 		return nil, nil
 	}
 
-	outAdapter, err := newOutbound(channel.Type, r.internalRequest, channel.GetBaseUrl(), usedKey.ChannelKey)
+	baseURL := selectRuntimeBaseURL(channel)
+	outAdapter, err := newOutbound(channel.Type, r.internalRequest, baseURL, usedKey.ChannelKey)
 	if err != nil {
 		r.iter.Skip(channel.ID, usedKey.ID, channel.Name, err.Error())
 		return nil, nil
@@ -351,12 +352,20 @@ func (r *relayRun) buildRealAttempt(
 		channel:    channel,
 		groupItem:  item,
 		usedKey:    usedKey,
+		baseURL:    baseURL,
 		keyRemark:  keyRemark,
 	}, nil
 }
 
 // run 统一管理一次通道尝试的完整生命周期。
 func (ra *relayAttempt) run() (bool, error) {
+	releaseLimits, msg, ok := reserveChannelLimits(ra.channel)
+	if !ok {
+		ra.iter.Skip(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, msg)
+		return false, errors.New(msg)
+	}
+	defer releaseLimits()
+
 	span := ra.iter.StartAttempt(
 		ra.channel.ID,
 		ra.usedKey.ID,
@@ -389,6 +398,7 @@ func (ra *relayAttempt) run() (bool, error) {
 	ra.usedKey.LastUseTimeStamp = time.Now().Unix()
 
 	if fwdErr == nil {
+		recordRuntimeURLSuccess(ra.channel.ID, ra.baseURL, span.Duration())
 		ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
 		op.ChannelKeyUpdate(ra.usedKey)
 
@@ -429,6 +439,7 @@ func (ra *relayAttempt) run() (bool, error) {
 		return false, nil
 	}
 
+	recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
 	op.ChannelKeyUpdate(ra.usedKey)
 	span.End(dbmodel.AttemptFailed, fwdErr.Error())
 	op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
@@ -592,10 +603,14 @@ func (ra *relayAttempt) compactAttempt(strategy compactStrategy) (transformer.Ou
 	case compactStrategyResponsesManual:
 		return ra.outAdapter, compactResponsesFallbackRequest(ra.internalRequest), true, nil
 	case compactStrategyChatManual:
+		baseURL := ra.baseURL
+		if baseURL == "" {
+			baseURL = ra.channel.GetBaseUrl()
+		}
 		if ra.channel.Type == llm.APIFormatOpenAIChatCompletion {
 			return ra.outAdapter, compactChatFallbackRequest(ra.internalRequest), true, nil
 		}
-		chatAdapter, err := newOutbound(llm.APIFormatOpenAIChatCompletion, ra.internalRequest, ra.channel.GetBaseUrl(), ra.usedKey.ChannelKey)
+		chatAdapter, err := newOutbound(llm.APIFormatOpenAIChatCompletion, ra.internalRequest, baseURL, ra.usedKey.ChannelKey)
 		if err != nil {
 			log.Warnf("compact endpoint downgrade: build chat outbound failed: %v", err)
 			return nil, nil, false, err

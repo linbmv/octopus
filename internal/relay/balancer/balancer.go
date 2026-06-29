@@ -3,6 +3,9 @@ package balancer
 import (
 	"math/rand"
 	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -75,53 +78,106 @@ func (b *Failover) Candidates(items []model.GroupItem) []model.GroupItem {
 	return sortByPriority(items)
 }
 
-// Weighted 加权分配：按权重概率排序
+// Weighted 加权分配：按平滑加权轮询稳定分配流量。
 type Weighted struct{}
+
+var smoothWeightedState = &weightedRRState{groups: make(map[string]map[string]int)}
+
+type weightedRRState struct {
+	mu     sync.Mutex
+	groups map[string]map[string]int
+}
 
 func (b *Weighted) Candidates(items []model.GroupItem) []model.GroupItem {
 	n := len(items)
 	if n == 0 {
 		return nil
 	}
-
-	// 构建加权随机排序
-	type weightedItem struct {
-		item   model.GroupItem
-		score  float64
+	if n == 1 {
+		result := make([]model.GroupItem, 1)
+		copy(result, items)
+		return result
 	}
 
 	totalWeight := 0
-	for _, item := range items {
-		w := item.Weight
-		if w <= 0 {
-			w = 1
-		}
-		totalWeight += w
-	}
-
-	scored := make([]weightedItem, n)
+	weights := make([]int, n)
 	for i, item := range items {
 		w := item.Weight
 		if w <= 0 {
 			w = 1
 		}
-		// 给每个 item 一个加权随机分数：weight/totalWeight 作为概率基础，加上随机扰动
-		scored[i] = weightedItem{
-			item:  item,
-			score: rand.Float64() * float64(w) / float64(totalWeight),
+		weights[i] = w
+		totalWeight += w
+	}
+	if totalWeight <= 0 {
+		return sortByPriority(items)
+	}
+
+	groupKey := weightedGroupKey(items)
+	smoothWeightedState.mu.Lock()
+	defer smoothWeightedState.mu.Unlock()
+
+	currentWeights := smoothWeightedState.groups[groupKey]
+	if currentWeights == nil {
+		currentWeights = make(map[string]int, n)
+		smoothWeightedState.groups[groupKey] = currentWeights
+	}
+
+	selectedIdx := 0
+	selectedWeight := 0
+	for i, item := range items {
+		itemKey := weightedItemKey(item)
+		currentWeights[itemKey] += weights[i]
+		current := currentWeights[itemKey]
+		if i == 0 || current > selectedWeight || (current == selectedWeight && item.ID < items[selectedIdx].ID) {
+			selectedIdx = i
+			selectedWeight = current
 		}
 	}
-
-	// 按分数降序排列（分数越高优先级越高）
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
-	})
+	currentWeights[weightedItemKey(items[selectedIdx])] -= totalWeight
 
 	result := make([]model.GroupItem, n)
-	for i := range scored {
-		result[i] = scored[i].item
+	result[0] = items[selectedIdx]
+	next := 1
+	for i, item := range items {
+		if i == selectedIdx {
+			continue
+		}
+		result[next] = item
+		next++
 	}
 	return result
+}
+
+func weightedGroupKey(items []model.GroupItem) string {
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		keys = append(keys, weightedItemKey(item))
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for i, key := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(key)
+	}
+	return b.String()
+}
+
+func weightedItemKey(item model.GroupItem) string {
+	return strings.Join([]string{
+		intString(item.ID),
+		intString(item.ChannelID),
+		intString(item.TargetGroupID),
+		item.ModelName,
+		item.Type,
+	}, ":")
+}
+
+func intString(value int) string {
+	return strconv.Itoa(value)
 }
 
 func sortByPriority(items []model.GroupItem) []model.GroupItem {

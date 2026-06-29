@@ -32,6 +32,8 @@ type Channel struct {
 	CustomHeader   []CustomHeader `json:"custom_header" gorm:"serializer:json"`
 	ParamOverride  *string        `json:"param_override"`
 	RawPassthrough bool           `json:"raw_passthrough" gorm:"not null;default:false"`
+	RPMLimit       int            `json:"rpm_limit" gorm:"not null;default:0"`
+	MaxConcurrency int            `json:"max_concurrency" gorm:"not null;default:0"`
 	ChannelProxy   *string        `json:"channel_proxy"`
 	Stats          *StatsChannel  `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
 	MatchRegex     *string        `json:"match_regex"`
@@ -74,6 +76,8 @@ type ChannelUpdateRequest struct {
 	ChannelProxy   *string         `json:"channel_proxy,omitempty"`
 	ParamOverride  *string         `json:"param_override,omitempty"`
 	RawPassthrough *bool           `json:"raw_passthrough,omitempty"`
+	RPMLimit       *int            `json:"rpm_limit,omitempty"`
+	MaxConcurrency *int            `json:"max_concurrency,omitempty"`
 	MatchRegex     *string         `json:"match_regex,omitempty"`
 
 	KeysToAdd    []ChannelKeyAddRequest    `json:"keys_to_add,omitempty"`

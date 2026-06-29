@@ -56,6 +56,14 @@ func compactStrategyKeyForItem(channel *dbmodel.Channel, item dbmodel.GroupItem,
 	return cacheKey
 }
 
+func (ra *relayAttempt) compactStrategyCacheKey() compactStrategyCacheKey {
+	cacheKey := compactStrategyKeyForItem(ra.channel, ra.groupItem, ra.usedKey)
+	if ra.baseURL != "" {
+		cacheKey.BaseURL = ra.baseURL
+	}
+	return cacheKey
+}
+
 // cachedCompactStrategy resolves the compact strategy for the current attempt
 // from a two-layer cache:
 //  1. an in-memory sync.Map keyed by (group item + channel + key + model),
@@ -69,7 +77,7 @@ func compactStrategyKeyForItem(channel *dbmodel.Channel, item dbmodel.GroupItem,
 // An empty strategy (never probed / unknown) reports hasCached=false so the
 // caller runs the full fallback chain.
 func (ra *relayAttempt) cachedCompactStrategy() (compactStrategy, bool) {
-	cacheKey := compactStrategyKeyForItem(ra.channel, ra.groupItem, ra.usedKey)
+	cacheKey := ra.compactStrategyCacheKey()
 	value, ok := compactStrategyCache.Load(cacheKey)
 	if ok {
 		entry, ok := value.(compactStrategyCacheEntry)
@@ -90,7 +98,7 @@ func (ra *relayAttempt) rememberCompactStrategy(ctx context.Context, strategy co
 	if strategy == "" {
 		return
 	}
-	compactStrategyCache.Store(compactStrategyKeyForItem(ra.channel, ra.groupItem, ra.usedKey), compactStrategyCacheEntry{
+	compactStrategyCache.Store(ra.compactStrategyCacheKey(), compactStrategyCacheEntry{
 		strategy: strategy,
 		storedAt: time.Now(),
 	})

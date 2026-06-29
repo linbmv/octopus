@@ -59,6 +59,8 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         auto_group: channel.auto_group,
         match_regex: channel.match_regex ?? '',
         raw_passthrough: channel.raw_passthrough,
+        rpm_limit: channel.rpm_limit ?? 0,
+        max_concurrency: channel.max_concurrency ?? 0,
     });
     const t = useTranslations('channel.detail');
 
@@ -117,6 +119,10 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         }
 
         if (formData.raw_passthrough !== channel.raw_passthrough) req.raw_passthrough = formData.raw_passthrough;
+        const nextRPMLimit = Math.max(0, Number(formData.rpm_limit || 0));
+        if (nextRPMLimit !== (channel.rpm_limit ?? 0)) req.rpm_limit = nextRPMLimit;
+        const nextMaxConcurrency = Math.max(0, Number(formData.max_concurrency || 0));
+        if (nextMaxConcurrency !== (channel.max_concurrency ?? 0)) req.max_concurrency = nextMaxConcurrency;
 
         const originalKeys = channel.keys;
         const originalByID = new Map(originalKeys.map((k) => [k.id, k]));
@@ -311,6 +317,28 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
                                             <dd className="text-2xl font-bold text-card-foreground">
                                                 {stats.output_cost.formatted.value}
                                                 <span className="text-sm font-normal ml-1 text-muted-foreground">{stats.output_cost.formatted.unit}</span>
+                                            </dd>
+                                        </div>
+                                    </dl>
+                                </section>
+
+                                {/* Limits */}
+                                <section className="space-y-3">
+                                    <h4 className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                                        <Activity className="size-3.5" />
+                                        {t('sections.limits')}
+                                    </h4>
+                                    <dl className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+                                        <div className="rounded-2xl border bg-card p-3 sm:p-4 transition-colors hover:bg-accent/5">
+                                            <dt className="mb-2 text-xs text-muted-foreground">{t('metrics.rpmLimit')}</dt>
+                                            <dd className="text-2xl font-bold text-card-foreground">
+                                                {(channel.rpm_limit ?? 0) > 0 ? channel.rpm_limit : t('metrics.unlimited')}
+                                            </dd>
+                                        </div>
+                                        <div className="rounded-2xl border bg-card p-3 sm:p-4 transition-colors hover:bg-accent/5">
+                                            <dt className="mb-2 text-xs text-muted-foreground">{t('metrics.maxConcurrency')}</dt>
+                                            <dd className="text-2xl font-bold text-card-foreground">
+                                                {(channel.max_concurrency ?? 0) > 0 ? channel.max_concurrency : t('metrics.unlimited')}
                                             </dd>
                                         </div>
                                     </dl>

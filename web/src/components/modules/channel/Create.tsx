@@ -28,6 +28,8 @@ export function CreateDialogContent() {
         proxy: false,
         match_regex: '',
         raw_passthrough: false,
+        rpm_limit: 0,
+        max_concurrency: 0,
     });
     const t = useTranslations('channel.create');
 
@@ -63,6 +65,8 @@ export function CreateDialogContent() {
                 param_override: paramOverride,
                 match_regex: formData.match_regex.trim(),
                 raw_passthrough: formData.raw_passthrough,
+                rpm_limit: Math.max(0, Number(formData.rpm_limit || 0)),
+                max_concurrency: Math.max(0, Number(formData.max_concurrency || 0)),
             },
             {
                 onSuccess: () => {
@@ -82,6 +86,8 @@ export function CreateDialogContent() {
                         proxy: false,
                         match_regex: '',
                         raw_passthrough: false,
+                        rpm_limit: 0,
+                        max_concurrency: 0,
                     });
                     setIsOpen(false);
                 }

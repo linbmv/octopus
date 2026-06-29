@@ -475,6 +475,7 @@
                 "requests": "请求详情",
                 "tokens": "Token 使用",
                 "costs": "成本详情",
+                "limits": "限制",
                 "baseUrls": "Base URLs",
                 "keys": "密钥"
             },
@@ -490,7 +491,10 @@
                 "outputToken": "输出 Token",
                 "inputCost": "输入成本",
                 "outputCost": "输出成本",
-                "avgWaitTime": "等待时间"
+                "avgWaitTime": "等待时间",
+                "rpmLimit": "RPM 限制",
+                "maxConcurrency": "最大并发",
+                "unlimited": "不限"
             },
             "actions": {
                 "edit": "编辑",
@@ -522,6 +526,9 @@
             "customHeaderAdd": "添加 Header",
             "channelProxy": "渠道代理",
             "channelProxyPlaceholder": "可选：仅对该渠道生效（覆盖全局代理）",
+            "rpmLimit": "RPM 限制",
+            "maxConcurrency": "最大并发",
+            "unlimitedNumber": "0 = 不限",
             "paramOverride": "参数覆盖",
             "paramOverridePlaceholder": "可选：JSON 字符串，用于覆盖请求参数",
             "model": "模型",

@@ -177,6 +177,14 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "raw_passthrough")
 		updates.RawPassthrough = *req.RawPassthrough
 	}
+	if req.RPMLimit != nil {
+		selectFields = append(selectFields, "rpm_limit")
+		updates.RPMLimit = *req.RPMLimit
+	}
+	if req.MaxConcurrency != nil {
+		selectFields = append(selectFields, "max_concurrency")
+		updates.MaxConcurrency = *req.MaxConcurrency
+	}
 	if req.MatchRegex != nil {
 		selectFields = append(selectFields, "match_regex")
 		updates.MatchRegex = req.MatchRegex

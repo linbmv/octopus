@@ -41,6 +41,8 @@ export interface ChannelFormData {
     auto_group: AutoGroupType;
     match_regex: string;
     raw_passthrough: boolean;
+    rpm_limit: number;
+    max_concurrency: number;
 }
 
 export interface ChannelFormProps {
@@ -503,6 +505,40 @@ export function ChannelForm({
                                     value={formData.channel_proxy}
                                     onChange={(e) => onFormDataChange({ ...formData, channel_proxy: e.target.value })}
                                     placeholder={t('channelProxyPlaceholder')}
+                                    className="rounded-xl"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label htmlFor={`${idPrefix}-rpm-limit`} className="text-sm font-medium text-card-foreground">
+                                    {t('rpmLimit')}
+                                </label>
+                                <Input
+                                    id={`${idPrefix}-rpm-limit`}
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={formData.rpm_limit}
+                                    onChange={(e) => onFormDataChange({ ...formData, rpm_limit: Math.max(0, Number(e.target.value || 0)) })}
+                                    placeholder={t('unlimitedNumber')}
+                                    className="rounded-xl"
+                                />
+                            </div>
+
+                            <div className="space-y-2">
+                                <label htmlFor={`${idPrefix}-max-concurrency`} className="text-sm font-medium text-card-foreground">
+                                    {t('maxConcurrency')}
+                                </label>
+                                <Input
+                                    id={`${idPrefix}-max-concurrency`}
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={formData.max_concurrency}
+                                    onChange={(e) => onFormDataChange({ ...formData, max_concurrency: Math.max(0, Number(e.target.value || 0)) })}
+                                    placeholder={t('unlimitedNumber')}
                                     className="rounded-xl"
                                 />
                             </div>
