@@ -240,7 +240,7 @@ func TestCompactEndpointDowngradeTriesResponsesBeforeChat(t *testing.T) {
 		usedKey:    dbmodel.ChannelKey{ID: 1, ChannelKey: "test-key"},
 	}
 
-	statusCode, err := ra.forward()
+	statusCode, _, err := ra.forward()
 	if err != nil {
 		t.Fatalf("forward returned error: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestOfficialCompactGatewayTimeoutFallsBackToManualResponses(t *testing.T) {
 		usedKey:    dbmodel.ChannelKey{ID: 1, ChannelKey: "test-key"},
 	}
 
-	statusCode, err := ra.forward()
+	statusCode, _, err := ra.forward()
 	if err != nil {
 		t.Fatalf("forward returned error: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestCompactStrategyTriesChatAfterInvalidCodexResponsesFallback(t *testing.T
 		usedKey:    dbmodel.ChannelKey{ID: 1, ChannelKey: "test-key"},
 	}
 
-	statusCode, err := ra.forward()
+	statusCode, _, err := ra.forward()
 	if err != nil {
 		t.Fatalf("forward returned error: %v", err)
 	}
@@ -691,5 +691,6 @@ func runCompactForwardForTestWithItem(t *testing.T, channel *dbmodel.Channel, gr
 		usedKey:    dbmodel.ChannelKey{ID: 1, ChannelKey: "test-key"},
 	}
 
-	return ra.forward()
+	statusCode, _, err := ra.forward()
+	return statusCode, err
 }

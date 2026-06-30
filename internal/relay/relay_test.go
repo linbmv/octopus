@@ -141,32 +141,32 @@ func TestRelayAttemptCanRetryNextKeyOnlyForKeyLevelStatuses(t *testing.T) {
 	ra.keyOptions = []dbmodel.ChannelKey{{ID: 1}, {ID: 2}}
 	ra.usedKey = dbmodel.ChannelKey{ID: 1, StatusCode: http.StatusTooManyRequests}
 
-	if !ra.canRetryNextKey(errors.New("rate limited")) {
+	if !ra.canRetryNextKey(errors.New("rate limited"), nil) {
 		t.Fatal("429 should retry next key")
 	}
 	ra.usedKey.StatusCode = http.StatusForbidden
-	if !ra.canRetryNextKey(errors.New("forbidden")) {
+	if !ra.canRetryNextKey(errors.New("forbidden"), nil) {
 		t.Fatal("403 should retry next key")
 	}
 	ra.usedKey.StatusCode = http.StatusBadGateway
-	if ra.canRetryNextKey(errors.New("bad gateway")) {
+	if ra.canRetryNextKey(errors.New("bad gateway"), nil) {
 		t.Fatal("502 should not retry next key")
 	}
 
 	// 503 + model_not_found 应该换 key（上游权限问题，不是真正的渠道故障）
 	ra.usedKey.StatusCode = http.StatusServiceUnavailable
-	if !ra.canRetryNextKey(errors.New("error: 分组 Gemini 下模型 deepseek/deepseek-v4-flash 无可用渠道（distributor）, code: model_not_found")) {
+	if !ra.canRetryNextKey(errors.New("error: 分组 Gemini 下模型 deepseek/deepseek-v4-flash 无可用渠道（distributor）, code: model_not_found"), []byte(`{"error":"model_not_found"}`)) {
 		t.Fatal("503 + model_not_found should retry next key")
 	}
-	if !ra.canRetryNextKey(errors.New("Request failed: Service Unavailable, error: model not found")) {
+	if !ra.canRetryNextKey(errors.New("Request failed: Service Unavailable, error: model not found"), []byte(`{"error":"model not found"}`)) {
 		t.Fatal("503 + 'model not found' should retry next key")
 	}
-	if !ra.canRetryNextKey(errors.New("invalid_model: the model is not supported")) {
+	if !ra.canRetryNextKey(errors.New("invalid_model: the model is not supported"), []byte(`{"error":"invalid_model"}`)) {
 		t.Fatal("503 + invalid_model should retry next key")
 	}
 
 	// 503 但是真正的服务故障（如网络超时），不应该换 key
-	if ra.canRetryNextKey(errors.New("upstream timeout")) {
+	if ra.canRetryNextKey(errors.New("upstream timeout"), []byte(`{"error":"timeout"}`)) {
 		t.Fatal("503 + generic error should not retry next key")
 	}
 }

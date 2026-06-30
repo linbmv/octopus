@@ -365,12 +365,12 @@ func (ra *relayAttempt) run() (bool, error) {
 
 	var lastErr error
 	for {
-		written, err := ra.runWithCurrentKey()
+		written, responseBody, err := ra.runWithCurrentKey()
 		if err == nil || written {
 			return written, err
 		}
 		lastErr = err
-		if !ra.canRetryNextKey(err) {
+		if !ra.canRetryNextKey(err, responseBody) {
 			return false, err
 		}
 		if !ra.switchToNextKey() {
@@ -381,7 +381,7 @@ func (ra *relayAttempt) run() (bool, error) {
 	}
 }
 
-func (ra *relayAttempt) runWithCurrentKey() (bool, error) {
+func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 
 	span := ra.iter.StartAttempt(
 		ra.channel.ID,
@@ -407,7 +407,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, error) {
 		ra.iter.Index()+1, ra.iter.Len(),
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID, ra.iter.IsSticky(), ra.metrics.ActualModel)
 
-	upstreamStatusCode, fwdErr := ra.forward()
+	upstreamStatusCode, upstreamResponseBody, fwdErr := ra.forward()
 	if fwdErr == nil && upstreamStatusCode == 0 {
 		upstreamStatusCode = http.StatusOK
 	}
@@ -453,7 +453,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, error) {
 			ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
 			span.Duration().Milliseconds(), firstTokenMs, shouldSticky)
 
-		return false, nil
+		return false, nil, nil
 	}
 
 	recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
@@ -465,12 +465,8 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, error) {
 	})
 	balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 
-	// 分类错误级别用于日志和指标
-	var responseBody []byte
-	if fwdErr != nil {
-		responseBody = []byte(fwdErr.Error())
-	}
-	classification := errorclass.Classify(upstreamStatusCode, responseBody)
+	// 使用完整的上游响应体进行智能错误分类
+	classification := errorclass.Classify(upstreamStatusCode, upstreamResponseBody)
 
 	// attempt 失败日志（第一阶段可观测性增强 + Phase 4 error_level）
 	log.Warnf("attempt %d/%d failed: channel=%s(%d), key=%d, duration=%dms, error_level=%s, error=%v",
@@ -478,22 +474,16 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, error) {
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
 		span.Duration().Milliseconds(), classification.Level, fwdErr)
 
-	return ra.c.Writer.Written(), fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
+	return ra.c.Writer.Written(), upstreamResponseBody, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
 }
 
-func (ra *relayAttempt) canRetryNextKey(err error) bool {
+func (ra *relayAttempt) canRetryNextKey(err error, upstreamResponseBody []byte) bool {
 	if err == nil || ra.c.Writer.Written() || ra.keyIndex+1 >= len(ra.keyOptions) {
 		return false
 	}
 
-	// 使用统一的错误分类器判断是否为 key 级错误
-	// 响应体从 error 中提取（如果有的话）
-	var responseBody []byte
-	if err != nil {
-		responseBody = []byte(err.Error())
-	}
-
-	return errorclass.CanRetryNextKey(ra.usedKey.StatusCode, responseBody)
+	// 使用统一的错误分类器判断是否为 key 级错误，传入完整的上游响应体
+	return errorclass.CanRetryNextKey(ra.usedKey.StatusCode, upstreamResponseBody)
 }
 
 func (ra *relayAttempt) switchToNextKey() bool {
@@ -592,16 +582,16 @@ func newFirstTokenGuard(parent context.Context, timeout time.Duration) (ctx cont
 }
 
 // forward 转发请求到上游服务
-func (ra *relayAttempt) forward() (int, error) {
+func (ra *relayAttempt) forward() (int, []byte, error) {
 	ctx := ra.c.Request.Context()
 	if ra.internalRequest.RawRequest == nil {
-		return 0, fmt.Errorf("missing raw request")
+		return 0, nil, fmt.Errorf("missing raw request")
 	}
 
 	httpClient, err := helper.ChannelHttpClient(ra.channel)
 	if err != nil {
 		log.Warnf("failed to get http client: %v", err)
-		return 0, err
+		return 0, nil, err
 	}
 
 	if isCompactOpenAIChannel(ra.channel.Type, ra.internalRequest) {
@@ -625,36 +615,38 @@ func isCompactOpenAIChannel(channelType llm.APIFormat, request *llm.Request) boo
 	}
 }
 
-func (ra *relayAttempt) forwardCompact(ctx context.Context, httpClient *http.Client) (int, error) {
+func (ra *relayAttempt) forwardCompact(ctx context.Context, httpClient *http.Client) (int, []byte, error) {
 	cached, hasCached := ra.cachedCompactStrategy()
 	strategies := compactStrategyOrder(ra.channel.Type, cached, hasCached)
 	if len(strategies) == 0 {
-		return 0, fmt.Errorf("channel type %s is not compatible with %s request", ra.channel.Type, llm.RequestTypeCompact)
+		return 0, nil, fmt.Errorf("channel type %s is not compatible with %s request", ra.channel.Type, llm.RequestTypeCompact)
 	}
 
 	var lastStatusCode int
+	var lastResponseBody []byte
 	var lastErr error
 	for _, strategy := range strategies {
 		outAdapter, outboundRequest, needsChatToCompact, err := ra.compactAttempt(strategy)
 		if err != nil {
-			return lastStatusCode, err
+			return lastStatusCode, lastResponseBody, err
 		}
 
 		log.Infof("compact route: channel=%s(%d), strategy=%s", ra.channel.Name, ra.channel.ID, strategy)
-		statusCode, fwdErr := ra.forwardWithAdapter(ctx, httpClient, outAdapter, outboundRequest, needsChatToCompact)
+		statusCode, responseBody, fwdErr := ra.forwardWithAdapter(ctx, httpClient, outAdapter, outboundRequest, needsChatToCompact)
 		if fwdErr == nil {
 			ra.rememberCompactStrategy(ctx, strategy)
-			return statusCode, nil
+			return statusCode, responseBody, nil
 		}
 
 		lastStatusCode = statusCode
+		lastResponseBody = responseBody
 		lastErr = fwdErr
 		if !ra.canTryNextCompactStrategy(strategy, fwdErr) {
-			return statusCode, fwdErr
+			return statusCode, responseBody, fwdErr
 		}
 	}
 
-	return lastStatusCode, lastErr
+	return lastStatusCode, lastResponseBody, lastErr
 }
 
 func (ra *relayAttempt) compactAttempt(strategy compactStrategy) (transformer.Outbound, *llm.Request, bool, error) {
@@ -760,7 +752,7 @@ func (ra *relayAttempt) forwardWithAdapter(
 	outAdapter transformer.Outbound,
 	outboundRequest *llm.Request,
 	needsChatToCompact bool,
-) (int, error) {
+) (int, []byte, error) {
 	// 更新活跃请求状态为等待上游（第一阶段可观测性增强）
 	UpdateState(ra.trackingID, StateWaitingUpstream)
 
@@ -796,21 +788,21 @@ func (ra *relayAttempt) forwardWithAdapter(
 	if err != nil {
 		// 等待响应头阶段触发首字超时：此时尚未写客户端，返回明确错误以便切换下一通道。
 		if errors.Is(context.Cause(fwdCtx), errFirstTokenTimeout) {
-			return relayMiddleware.upstreamStatusCode, fmt.Errorf("first token timeout (%ds)", ra.group.FirstTokenTimeOut)
+			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, fmt.Errorf("first token timeout (%ds)", ra.group.FirstTokenTimeOut)
 		}
-		return relayMiddleware.upstreamStatusCode, err
+		return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, err
 	}
 	if result == nil {
-		return 0, fmt.Errorf("empty pipeline result")
+		return 0, nil, fmt.Errorf("empty pipeline result")
 	}
 	if result.Stream {
 		if err := ra.writeStream(fwdCtx, stopFirstTokenGuard, result.EventStream); err != nil {
-			return http.StatusOK, err
+			return http.StatusOK, nil, err
 		}
-		return http.StatusOK, nil
+		return http.StatusOK, nil, nil
 	}
 	if result.Response == nil {
-		return 0, fmt.Errorf("empty pipeline response")
+		return 0, nil, fmt.Errorf("empty pipeline response")
 	}
 	body := result.Response.Body
 	statusCode := result.Response.StatusCode
@@ -831,12 +823,12 @@ func (ra *relayAttempt) forwardWithAdapter(
 
 	// 软错误检测：HTTP 200 但内容是错误，触发重试
 	if isSoftError(statusCode, body, contentType) {
-		return statusCode, fmt.Errorf("soft error detected: upstream returned 200 but content indicates error")
+		return statusCode, body, fmt.Errorf("soft error detected: upstream returned 200 but content indicates error")
 	}
 
 	ra.metrics.InternalResponse = body
 	ra.c.Data(statusCode, contentType, body)
-	return statusCode, nil
+	return statusCode, body, nil
 }
 
 func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.Request) {
@@ -1090,14 +1082,15 @@ func safeKeyRemark(remark string) string {
 
 // relayPipelineMiddleware 承接 octopus 自己的通道级副作用：
 // 1. 在 pipeline 发出上游请求前应用渠道参数覆盖和自定义 header；
-// 2. 在上游失败时保存 HTTP 状态码，供 key 冷却、熔断和后续选路使用；
+// 2. 在上游失败时保存 HTTP 状态码和响应体，供 key 冷却、熔断和后续选路使用；
 // 3. 在非流式响应转成 llm.Response 后记录 usage。
 // axonhub/llm 只提供了部分函数式 middleware 构造器，错误状态码和 llm 响应 usage 这两个回调没有公开构造器，
 // 所以这里保留一个很薄的结构体实现完整接口，而不是在 relay 主流程里重复 pipeline 的执行逻辑。
 type relayPipelineMiddleware struct {
 	pipeline.DummyMiddleware
-	attempt            *relayAttempt
-	upstreamStatusCode int
+	attempt              *relayAttempt
+	upstreamStatusCode   int
+	upstreamResponseBody []byte
 }
 
 func (m *relayPipelineMiddleware) Name() string {
@@ -1125,8 +1118,10 @@ func (m *relayPipelineMiddleware) OnOutboundRawRequest(ctx context.Context, requ
 func (m *relayPipelineMiddleware) OnOutboundRawError(ctx context.Context, err error) {
 	var upstreamErr *httpclient.Error
 	if errors.As(err, &upstreamErr) {
-		// pipeline 会把上游错误转换成统一错误返回；这里在转换前记录原始 HTTP 状态码，用于渠道 key 的后续调度决策。
+		// pipeline 会把上游错误转换成统一错误返回；这里在转换前记录原始 HTTP 状态码和响应体，用于渠道 key 的后续调度决策。
 		m.upstreamStatusCode = upstreamErr.StatusCode
+		// 保存响应体用于智能错误分类（如 503 + model_not_found）
+		m.upstreamResponseBody = upstreamErr.Body
 	}
 }
 

@@ -192,11 +192,16 @@ func classify503Error(responseBody []byte) Classification {
 	bodyLower := strings.ToLower(string(responseBody))
 
 	// 识别上游返回的 model_not_found / invalid_model / model_not_supported 等权限相关错误
+	// 同时支持英文通用表述和中文错误信息
 	if strings.Contains(bodyLower, "model_not_found") ||
 		strings.Contains(bodyLower, "model not found") ||
 		strings.Contains(bodyLower, "invalid_model") ||
 		strings.Contains(bodyLower, "model_not_supported") ||
-		strings.Contains(bodyLower, "无可用渠道") {
+		strings.Contains(bodyLower, "not available") ||
+		strings.Contains(bodyLower, "no available") ||
+		strings.Contains(bodyLower, "unavailable") ||
+		strings.Contains(bodyLower, "无可用") ||
+		strings.Contains(bodyLower, "不可用") {
 		return Classification{
 			Level:  ErrorLevelKey,
 			Reason: "503 model permission error (treat as key-level)",
@@ -250,11 +255,18 @@ func classify429Error(headers map[string]string, responseBody []byte) Classifica
 func parseRetryAfterSeconds(retryAfter string) int {
 	// 尝试直接解析为整数
 	seconds := 0
+	const maxSeconds = 604800 // 7 天上限（HTTP 规范建议的最大值）
+
 	for _, ch := range retryAfter {
 		if ch < '0' || ch > '9' {
 			break
 		}
-		seconds = seconds*10 + int(ch-'0')
+		newSeconds := seconds*10 + int(ch-'0')
+		// 溢出检测：新值必须 > 旧值 且不超过上限
+		if newSeconds > maxSeconds || newSeconds < seconds {
+			return maxSeconds
+		}
+		seconds = newSeconds
 	}
 	return seconds
 }
