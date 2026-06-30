@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sort"
 	"time"
 
 	"github.com/looplj/axonhub/llm"
@@ -174,4 +175,51 @@ func (c *Channel) GetChannelKey() ChannelKey {
 		return ChannelKey{}
 	}
 	return best
+}
+
+func (c *Channel) AvailableKeys() []ChannelKey {
+	if c == nil || len(c.Keys) == 0 {
+		return nil
+	}
+	nowSec := time.Now().Unix()
+	keys := make([]ChannelKey, 0, len(c.Keys))
+	for _, key := range c.Keys {
+		if key.IsAvailable(nowSec) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func (c *Channel) AvailableKeysForAttempt(stickyKeyID int) []ChannelKey {
+	keys := c.AvailableKeys()
+	if len(keys) <= 1 {
+		return keys
+	}
+
+	result := make([]ChannelKey, 0, len(keys))
+	if stickyKeyID > 0 {
+		for _, key := range keys {
+			if key.ID == stickyKeyID {
+				result = append(result, key)
+				break
+			}
+		}
+	}
+
+	remaining := make([]ChannelKey, 0, len(keys))
+	for _, key := range keys {
+		if stickyKeyID > 0 && key.ID == stickyKeyID {
+			continue
+		}
+		remaining = append(remaining, key)
+	}
+	sort.SliceStable(remaining, func(i, j int) bool {
+		if remaining[i].TotalCost == remaining[j].TotalCost {
+			return remaining[i].ID < remaining[j].ID
+		}
+		return remaining[i].TotalCost < remaining[j].TotalCost
+	})
+	result = append(result, remaining...)
+	return result
 }

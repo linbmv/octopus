@@ -309,17 +309,12 @@ func (r *relayRun) buildRealAttempt(
 		return nil, nil
 	}
 
-	usedKey := dbmodel.ChannelKey{}
-	if stickyKeyID > 0 {
-		usedKey = channel.GetChannelKeyByID(stickyKeyID)
-	}
-	if usedKey.ChannelKey == "" {
-		usedKey = channel.GetChannelKey()
-	}
-	if usedKey.ChannelKey == "" {
+	keyOptions := channel.AvailableKeysForAttempt(stickyKeyID)
+	if len(keyOptions) == 0 {
 		r.iter.Skip(channel.ID, 0, channel.Name, "no available key")
 		return nil, nil
 	}
+	usedKey := keyOptions[0]
 
 	keyRemark := cleanKeyRemark(usedKey.Remark)
 	if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {
@@ -352,6 +347,7 @@ func (r *relayRun) buildRealAttempt(
 		channel:    channel,
 		groupItem:  item,
 		usedKey:    usedKey,
+		keyOptions: keyOptions,
 		baseURL:    baseURL,
 		keyRemark:  keyRemark,
 	}, nil
@@ -365,6 +361,26 @@ func (ra *relayAttempt) run() (bool, error) {
 		return false, errors.New(msg)
 	}
 	defer releaseLimits()
+
+	var lastErr error
+	for {
+		written, err := ra.runWithCurrentKey()
+		if err == nil || written {
+			return written, err
+		}
+		lastErr = err
+		if !ra.canRetryNextKey(err) {
+			return false, err
+		}
+		if !ra.switchToNextKey() {
+			return false, err
+		}
+		log.Infof("retrying channel %s(%d) with next key=%d after key-level error: %v",
+			ra.channel.Name, ra.channel.ID, ra.usedKey.ID, lastErr)
+	}
+}
+
+func (ra *relayAttempt) runWithCurrentKey() (bool, error) {
 
 	span := ra.iter.StartAttempt(
 		ra.channel.ID,
@@ -455,6 +471,40 @@ func (ra *relayAttempt) run() (bool, error) {
 		span.Duration().Milliseconds(), fwdErr)
 
 	return ra.c.Writer.Written(), fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
+}
+
+func (ra *relayAttempt) canRetryNextKey(err error) bool {
+	if err == nil || ra.c.Writer.Written() || ra.keyIndex+1 >= len(ra.keyOptions) {
+		return false
+	}
+	switch ra.usedKey.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
+		return true
+	default:
+		return false
+	}
+}
+
+func (ra *relayAttempt) switchToNextKey() bool {
+	for ra.keyIndex+1 < len(ra.keyOptions) {
+		ra.keyIndex++
+		nextKey := ra.keyOptions[ra.keyIndex]
+		if nextKey.ChannelKey == "" {
+			continue
+		}
+		outAdapter, err := newOutbound(ra.channel.Type, ra.internalRequest, ra.baseURL, nextKey.ChannelKey)
+		if err != nil {
+			ra.iter.Skip(ra.channel.ID, nextKey.ID, ra.channel.Name, err.Error())
+			continue
+		}
+		ra.usedKey = nextKey
+		ra.keyRemark = cleanKeyRemark(nextKey.Remark)
+		ra.outAdapter = outAdapter
+		ra.metrics.ParamOverride = ""
+		ra.metrics.OutboundRequestSummary = nil
+		return true
+	}
+	return false
 }
 
 func shouldRefreshSticky(span *balancer.AttemptSpan, healthyTimeoutSec int) (bool, int64) {

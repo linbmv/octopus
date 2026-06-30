@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
@@ -131,6 +133,58 @@ func TestMiddlewareOnOutboundRawErrorIgnoresNonHTTPError(t *testing.T) {
 	if m.upstreamStatusCode != 0 {
 		t.Fatalf("upstreamStatusCode = %d, 非 HTTP 错误期望为 0", m.upstreamStatusCode)
 	}
+}
+
+func TestRelayAttemptCanRetryNextKeyOnlyForKeyLevelStatuses(t *testing.T) {
+	ra := newTestAttempt(&dbmodel.Channel{})
+	ra.c = testGinContext()
+	ra.keyOptions = []dbmodel.ChannelKey{{ID: 1}, {ID: 2}}
+	ra.usedKey = dbmodel.ChannelKey{ID: 1, StatusCode: http.StatusTooManyRequests}
+
+	if !ra.canRetryNextKey(errors.New("rate limited")) {
+		t.Fatal("429 should retry next key")
+	}
+	ra.usedKey.StatusCode = http.StatusForbidden
+	if !ra.canRetryNextKey(errors.New("forbidden")) {
+		t.Fatal("403 should retry next key")
+	}
+	ra.usedKey.StatusCode = http.StatusBadGateway
+	if ra.canRetryNextKey(errors.New("bad gateway")) {
+		t.Fatal("502 should not retry next key")
+	}
+}
+
+func TestRelayAttemptSwitchToNextKeyRebuildsOutbound(t *testing.T) {
+	ra := newTestAttempt(&dbmodel.Channel{
+		Type: llm.APIFormatOpenAIChatCompletion,
+	})
+	ra.internalRequest = &llm.Request{RequestType: llm.RequestTypeChat}
+	ra.baseURL = "https://example.com/v1"
+	ra.keyOptions = []dbmodel.ChannelKey{
+		{ID: 1, ChannelKey: "sk-1"},
+		{ID: 2, ChannelKey: "sk-2", Remark: "fallback"},
+	}
+	ra.usedKey = ra.keyOptions[0]
+
+	if !ra.switchToNextKey() {
+		t.Fatal("switchToNextKey() = false, want true")
+	}
+	if ra.usedKey.ID != 2 {
+		t.Fatalf("usedKey.ID = %d, want 2", ra.usedKey.ID)
+	}
+	if ra.outAdapter == nil {
+		t.Fatal("outAdapter should be rebuilt")
+	}
+	if ra.keyRemark != "fallback" {
+		t.Fatalf("keyRemark = %q, want fallback", ra.keyRemark)
+	}
+}
+
+func testGinContext() *gin.Context {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	return ctx
 }
 
 func TestMiddlewareOnOutboundLlmResponseRecordsUsage(t *testing.T) {

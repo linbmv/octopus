@@ -3,8 +3,10 @@ package helper
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/dlclark/regexp2"
@@ -17,17 +19,52 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	fetchModel := make([]string, 0)
-	switch request.Type {
-	case llm.APIFormatAnthropicMessage:
-		fetchModel, err = fetchAnthropicModels(client, ctx, request)
-	case llm.APIFormatGeminiContents:
-		fetchModel, err = fetchGeminiModels(client, ctx, request)
-	default:
-		fetchModel, err = fetchOpenAIModels(client, ctx, request)
+
+	keys := request.AvailableKeys()
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("channel %s has no available API key", request.Name)
 	}
-	if err != nil {
-		return nil, err
+
+	type fetchResult struct {
+		models []string
+		err    error
+	}
+	results := make([]fetchResult, len(keys))
+	var wg sync.WaitGroup
+	for i, key := range keys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			models, fetchErr := fetchModelsWithKey(client, ctx, request, key.ChannelKey)
+			results[i] = fetchResult{models: models, err: fetchErr}
+		}()
+	}
+	wg.Wait()
+
+	fetchModel := make([]string, 0)
+	seen := make(map[string]struct{})
+	var firstErr error
+	for _, result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
+		}
+		for _, modelName := range result.models {
+			modelName = strings.TrimSpace(modelName)
+			if modelName == "" {
+				continue
+			}
+			if _, ok := seen[modelName]; ok {
+				continue
+			}
+			seen[modelName] = struct{}{}
+			fetchModel = append(fetchModel, modelName)
+		}
+	}
+	if len(fetchModel) == 0 && firstErr != nil {
+		return nil, firstErr
 	}
 	if request.MatchRegex != nil && *request.MatchRegex != "" {
 		matchModel := make([]string, 0)
@@ -49,8 +86,35 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 	return fetchModel, nil
 }
 
+func fetchModelsWithKey(client *http.Client, ctx context.Context, request model.Channel, key string) ([]string, error) {
+	switch request.Type {
+	case llm.APIFormatAnthropicMessage:
+		models, err := fetchAnthropicModels(client, ctx, request, key)
+		if err == nil && len(models) > 0 {
+			return models, nil
+		}
+		fallback, fallbackErr := fetchOpenAIModels(client, ctx, request, key)
+		if fallbackErr == nil {
+			return fallback, nil
+		}
+		return models, err
+	case llm.APIFormatGeminiContents:
+		models, err := fetchGeminiModels(client, ctx, request, key)
+		if err == nil && len(models) > 0 {
+			return models, nil
+		}
+		fallback, fallbackErr := fetchOpenAIModels(client, ctx, request, key)
+		if fallbackErr == nil {
+			return fallback, nil
+		}
+		return models, err
+	default:
+		return fetchOpenAIModels(client, ctx, request, key)
+	}
+}
+
 // refer: https://platform.openai.com/docs/api-reference/models/list
-func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
+func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.Channel, key string) ([]string, error) {
 	baseURL := transformer.NormalizeBaseURL(request.GetBaseUrl(), "v1")
 	if request.Type == model.ChannelTypeDoubao {
 		baseURL = transformer.NormalizeBaseURL(request.GetBaseUrl(), "v3")
@@ -61,7 +125,7 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 		baseURL+"/models",
 		nil,
 	)
-	req.Header.Set("Authorization", "Bearer "+request.GetChannelKey().ChannelKey)
+	req.Header.Set("Authorization", "Bearer "+key)
 	applyCustomHeaders(req, request)
 
 	resp, err := client.Do(req)
@@ -69,6 +133,9 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("fetch OpenAI models failed: status %d", resp.StatusCode)
+	}
 
 	var result model.OpenAIModelList
 
@@ -84,7 +151,7 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 }
 
 // refer: https://ai.google.dev/api/models
-func fetchGeminiModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
+func fetchGeminiModels(client *http.Client, ctx context.Context, request model.Channel, key string) ([]string, error) {
 	var allModels []string
 	pageToken := ""
 	baseURL := transformer.NormalizeBaseURL(request.GetBaseUrl(), "v1beta")
@@ -100,7 +167,7 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 			baseURL+"/models",
 			nil,
 		)
-		req.Header.Set("X-Goog-Api-Key", request.GetChannelKey().ChannelKey)
+		req.Header.Set("X-Goog-Api-Key", key)
 		applyCustomHeaders(req, request)
 		if pageToken != "" {
 			q := req.URL.Query()
@@ -113,6 +180,9 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 			return nil, err
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("fetch Gemini models failed: status %d", resp.StatusCode)
+		}
 
 		var result model.GeminiModelList
 
@@ -130,14 +200,11 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 		}
 		pageToken = result.NextPageToken
 	}
-	if len(allModels) == 0 {
-		return fetchOpenAIModels(client, ctx, request)
-	}
 	return allModels, nil
 }
 
 // refer: https://platform.claude.com/docs
-func fetchAnthropicModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
+func fetchAnthropicModels(client *http.Client, ctx context.Context, request model.Channel, key string) ([]string, error) {
 
 	var allModels []string
 	var afterID string
@@ -150,7 +217,7 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 			baseURL+"/models",
 			nil,
 		)
-		req.Header.Set("X-Api-Key", request.GetChannelKey().ChannelKey)
+		req.Header.Set("X-Api-Key", key)
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 		applyCustomHeaders(req, request)
 		// 设置多页参数
@@ -166,6 +233,9 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 			return nil, err
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("fetch Anthropic models failed: status %d", resp.StatusCode)
+		}
 
 		var result model.AnthropicModelList
 
@@ -182,9 +252,6 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 		}
 
 		afterID = result.LastID
-	}
-	if len(allModels) == 0 {
-		return fetchOpenAIModels(client, ctx, request)
 	}
 	return allModels, nil
 }

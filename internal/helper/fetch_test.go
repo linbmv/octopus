@@ -87,6 +87,71 @@ func TestFetchModelsOpenAIUsesV1AndBearer(t *testing.T) {
 	}
 }
 
+func TestFetchModelsMergesModelsFromAllAvailableKeys(t *testing.T) {
+	seenAuth := make(map[string]bool)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		seenAuth[auth] = true
+		switch auth {
+		case "Bearer key-a":
+			_ = json.NewEncoder(w).Encode(model.OpenAIModelList{Data: []model.OpenAIModel{{ID: "shared"}, {ID: "model-a"}}})
+		case "Bearer key-b":
+			_ = json.NewEncoder(w).Encode(model.OpenAIModelList{Data: []model.OpenAIModel{{ID: "shared"}, {ID: "model-b"}}})
+		default:
+			t.Fatalf("unexpected Authorization header: %q", auth)
+		}
+	}))
+	defer server.Close()
+
+	channel := testChannel(server.URL, llm.APIFormatOpenAIChatCompletion)
+	channel.Keys = []model.ChannelKey{
+		{ID: 1, Enabled: true, ChannelKey: "key-a"},
+		{ID: 2, Enabled: true, ChannelKey: "key-b"},
+	}
+
+	models, err := FetchModels(context.Background(), channel)
+	if err != nil {
+		t.Fatalf("FetchModels 错误: %v", err)
+	}
+	if !seenAuth["Bearer key-a"] || !seenAuth["Bearer key-b"] {
+		t.Fatalf("expected both keys to be used, got %+v", seenAuth)
+	}
+	want := []string{"shared", "model-a", "model-b"}
+	if len(models) != len(want) {
+		t.Fatalf("models = %v, want %v", models, want)
+	}
+	for i := range want {
+		if models[i] != want[i] {
+			t.Fatalf("models = %v, want %v", models, want)
+		}
+	}
+}
+
+func TestFetchModelsKeepsSuccessfulKeyWhenAnotherKeyFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer key-bad" {
+			http.Error(w, "bad key", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(model.OpenAIModelList{Data: []model.OpenAIModel{{ID: "model-ok"}}})
+	}))
+	defer server.Close()
+
+	channel := testChannel(server.URL, llm.APIFormatOpenAIChatCompletion)
+	channel.Keys = []model.ChannelKey{
+		{ID: 1, Enabled: true, ChannelKey: "key-bad"},
+		{ID: 2, Enabled: true, ChannelKey: "key-ok"},
+	}
+
+	models, err := FetchModels(context.Background(), channel)
+	if err != nil {
+		t.Fatalf("FetchModels 错误: %v", err)
+	}
+	if len(models) != 1 || models[0] != "model-ok" {
+		t.Fatalf("models = %v, want [model-ok]", models)
+	}
+}
+
 func TestFetchModelsDoubaoUsesV3(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

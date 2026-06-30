@@ -124,3 +124,35 @@ func TestChannelGetChannelKeyStillUsesKeyAfter401(t *testing.T) {
 		t.Errorf("GetChannelKey().ID = %d, want 1（401 不应禁用 key）", got.ID)
 	}
 }
+
+func TestChannelAvailableKeysForAttemptPrioritizesStickyThenCost(t *testing.T) {
+	ch := &Channel{Keys: []ChannelKey{
+		{ID: 1, Enabled: true, ChannelKey: "sk-expensive", TotalCost: 100},
+		{ID: 2, Enabled: true, ChannelKey: "sk-cheap", TotalCost: 1},
+		{ID: 3, Enabled: true, ChannelKey: "sk-sticky", TotalCost: 50},
+	}}
+
+	keys := ch.AvailableKeysForAttempt(3)
+	want := []int{3, 2, 1}
+	if len(keys) != len(want) {
+		t.Fatalf("key count = %d, want %d", len(keys), len(want))
+	}
+	for i, id := range want {
+		if keys[i].ID != id {
+			t.Fatalf("keys[%d].ID = %d, want %d (all=%+v)", i, keys[i].ID, id, keys)
+		}
+	}
+}
+
+func TestChannelAvailableKeysForAttemptSkipsUnavailableSticky(t *testing.T) {
+	nowSec := time.Now().Unix()
+	ch := &Channel{Keys: []ChannelKey{
+		{ID: 1, Enabled: true, ChannelKey: "sk-rate-limited", TotalCost: 0, StatusCode: http.StatusTooManyRequests, LastUseTimeStamp: nowSec},
+		{ID: 2, Enabled: true, ChannelKey: "sk-ok", TotalCost: 1},
+	}}
+
+	keys := ch.AvailableKeysForAttempt(1)
+	if len(keys) != 1 || keys[0].ID != 2 {
+		t.Fatalf("keys = %+v, want only key 2", keys)
+	}
+}
