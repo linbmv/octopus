@@ -101,16 +101,22 @@ func getStatusCodeMeta(statusCode int) statusCodeMeta {
 	return statusCodeMeta{ErrorLevelNone}
 }
 
-// Classify 基于状态码 + 响应体智能分类错误级别
-//
-// 分类策略：
-//   - 404 做语义分析：明确的 model_not_found → Client 级，其他 → Channel 级
-//   - 503 做语义分析：model_not_found/invalid_model → Key 级（权限问题），其他 → Channel 级
-//   - 其他状态码：走表驱动分类（statusCodeMetaMap）
-func Classify(statusCode int, responseBody []byte) Classification {
+// ClassifyWithHeaders 基于状态码 + headers + 响应体智能分类错误级别
+// 支持高级场景：429 Retry-After、400 quota errors
+func ClassifyWithHeaders(statusCode int, headers map[string]string, responseBody []byte) Classification {
 	// 2xx 成功
 	if statusCode >= 200 && statusCode < 300 {
 		return Classification{Level: ErrorLevelNone, Reason: "success"}
+	}
+
+	// 429 错误：根据 Retry-After header 判断限流范围
+	if statusCode == http.StatusTooManyRequests {
+		return classify429Error(headers, responseBody)
+	}
+
+	// 400 错误：根据响应体智能分类
+	if statusCode == http.StatusBadRequest {
+		return classify400Error(responseBody)
 	}
 
 	// 404 错误：根据响应体智能分类
@@ -129,6 +135,16 @@ func Classify(statusCode int, responseBody []byte) Classification {
 		Level:  meta.Level,
 		Reason: http.StatusText(statusCode),
 	}
+}
+
+// Classify 基于状态码 + 响应体智能分类错误级别
+//
+// 分类策略：
+//   - 404 做语义分析：明确的 model_not_found → Client 级，其他 → Channel 级
+//   - 503 做语义分析：model_not_found/invalid_model → Key 级（权限问题），其他 → Channel 级
+//   - 其他状态码：走表驱动分类（statusCodeMetaMap）
+func Classify(statusCode int, responseBody []byte) Classification {
+	return ClassifyWithHeaders(statusCode, nil, responseBody)
 }
 
 // classify404Error 根据响应体内容智能分类 404 错误
@@ -191,6 +207,85 @@ func classify503Error(responseBody []byte) Classification {
 	return Classification{
 		Level:  ErrorLevelChannel,
 		Reason: "503 service unavailable",
+	}
+}
+
+// classify429Error 根据 Retry-After header 和响应体智能分类 429 错误
+// 设计原则：
+//   - Retry-After > 60s：渠道级限流（全局/IP 限流）
+//   - Retry-After <= 60s 或无 header：Key 级限流（账户限流）
+func classify429Error(headers map[string]string, responseBody []byte) Classification {
+	if headers != nil {
+		if retryAfter, ok := headers["Retry-After"]; ok {
+			// 尝试解析为秒数
+			if seconds := parseRetryAfterSeconds(retryAfter); seconds > 60 {
+				return Classification{
+					Level:  ErrorLevelChannel,
+					Reason: "429 rate limit (Retry-After > 60s, likely global/IP limit)",
+				}
+			}
+		}
+
+		// 检查其他限流范围 headers（如 X-RateLimit-Scope）
+		if scope, ok := headers["X-RateLimit-Scope"]; ok {
+			scopeLower := strings.ToLower(scope)
+			if scopeLower == "global" || scopeLower == "ip" {
+				return Classification{
+					Level:  ErrorLevelChannel,
+					Reason: "429 rate limit (scope: " + scope + ")",
+				}
+			}
+		}
+	}
+
+	// 默认：Key 级限流
+	return Classification{
+		Level:  ErrorLevelKey,
+		Reason: "429 rate limit (account-level)",
+	}
+}
+
+// parseRetryAfterSeconds 解析 Retry-After header 为秒数
+// 支持两种格式：秒数（"120"）或 HTTP-date（"Wed, 21 Oct 2015 07:28:00 GMT"）
+func parseRetryAfterSeconds(retryAfter string) int {
+	// 尝试直接解析为整数
+	seconds := 0
+	for _, ch := range retryAfter {
+		if ch < '0' || ch > '9' {
+			break
+		}
+		seconds = seconds*10 + int(ch-'0')
+	}
+	return seconds
+}
+
+// classify400Error 根据响应体内容智能分类 400 错误
+// 设计原则：400 默认是客户端错误，但某些上游会用 400 返回权限/配额问题
+func classify400Error(responseBody []byte) Classification {
+	if len(responseBody) == 0 {
+		return Classification{
+			Level:  ErrorLevelClient,
+			Reason: "400 bad request",
+		}
+	}
+
+	bodyLower := strings.ToLower(string(responseBody))
+
+	// 识别伪装成 400 的权限/配额错误
+	if strings.Contains(bodyLower, "quota") ||
+		strings.Contains(bodyLower, "insufficient_quota") ||
+		strings.Contains(bodyLower, "billing") ||
+		strings.Contains(bodyLower, "payment") {
+		return Classification{
+			Level:  ErrorLevelKey,
+			Reason: "400 quota/billing error (treat as key-level)",
+		}
+	}
+
+	// 真正的客户端错误
+	return Classification{
+		Level:  ErrorLevelClient,
+		Reason: "400 bad request",
 	}
 }
 

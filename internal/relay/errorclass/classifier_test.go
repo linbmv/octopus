@@ -338,3 +338,146 @@ func TestClassify503EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+func TestClassify429WithHeaders(t *testing.T) {
+	tests := []struct {
+		name         string
+		headers      map[string]string
+		responseBody []byte
+		wantLevel    ErrorLevel
+	}{
+		{
+			name:      "Retry-After > 60s (channel-level)",
+			headers:   map[string]string{"Retry-After": "120"},
+			wantLevel: ErrorLevelChannel,
+		},
+		{
+			name:      "Retry-After <= 60s (key-level)",
+			headers:   map[string]string{"Retry-After": "30"},
+			wantLevel: ErrorLevelKey,
+		},
+		{
+			name:      "No Retry-After header (key-level default)",
+			headers:   map[string]string{},
+			wantLevel: ErrorLevelKey,
+		},
+		{
+			name:      "X-RateLimit-Scope: global (channel-level)",
+			headers:   map[string]string{"X-RateLimit-Scope": "global"},
+			wantLevel: ErrorLevelChannel,
+		},
+		{
+			name:      "X-RateLimit-Scope: ip (channel-level)",
+			headers:   map[string]string{"X-RateLimit-Scope": "IP"},
+			wantLevel: ErrorLevelChannel,
+		},
+		{
+			name:      "X-RateLimit-Scope: account (key-level)",
+			headers:   map[string]string{"X-RateLimit-Scope": "account"},
+			wantLevel: ErrorLevelKey,
+		},
+		{
+			name:      "nil headers (key-level default)",
+			headers:   nil,
+			wantLevel: ErrorLevelKey,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyWithHeaders(429, tt.headers, tt.responseBody)
+			if got.Level != tt.wantLevel {
+				t.Errorf("ClassifyWithHeaders(429, %v, ...) = %v, want %v (reason: %s)",
+					tt.headers, got.Level, tt.wantLevel, got.Reason)
+			}
+		})
+	}
+}
+
+func TestClassify400WithQuotaErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		responseBody []byte
+		wantLevel    ErrorLevel
+	}{
+		{
+			name:         "400 with quota error (key-level)",
+			responseBody: []byte(`{"error": {"message": "You exceeded your current quota", "code": "insufficient_quota"}}`),
+			wantLevel:    ErrorLevelKey,
+		},
+		{
+			name:         "400 with billing error (key-level)",
+			responseBody: []byte(`{"error": "Billing issue detected, please update payment method"}`),
+			wantLevel:    ErrorLevelKey,
+		},
+		{
+			name:         "400 with payment error (key-level)",
+			responseBody: []byte(`{"error": "Payment required"}`),
+			wantLevel:    ErrorLevelKey,
+		},
+		{
+			name:         "400 generic bad request (client-level)",
+			responseBody: []byte(`{"error": "Invalid JSON format"}`),
+			wantLevel:    ErrorLevelClient,
+		},
+		{
+			name:         "400 empty response (client-level)",
+			responseBody: []byte{},
+			wantLevel:    ErrorLevelClient,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(400, tt.responseBody)
+			if got.Level != tt.wantLevel {
+				t.Errorf("Classify(400, %q) = %v, want %v (reason: %s)",
+					tt.responseBody, got.Level, tt.wantLevel, got.Reason)
+			}
+		})
+	}
+}
+
+func TestParseRetryAfterSeconds(t *testing.T) {
+	tests := []struct {
+		name       string
+		retryAfter string
+		want       int
+	}{
+		{
+			name:       "simple seconds",
+			retryAfter: "120",
+			want:       120,
+		},
+		{
+			name:       "small seconds",
+			retryAfter: "30",
+			want:       30,
+		},
+		{
+			name:       "zero",
+			retryAfter: "0",
+			want:       0,
+		},
+		{
+			name:       "HTTP-date (not supported)",
+			retryAfter: "Wed, 21 Oct 2015 07:28:00 GMT",
+			want:       0,
+		},
+		{
+			name:       "empty string",
+			retryAfter: "",
+			want:       0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseRetryAfterSeconds(tt.retryAfter)
+			if got != tt.want {
+				t.Errorf("parseRetryAfterSeconds(%q) = %d, want %d", tt.retryAfter, got, tt.want)
+			}
+		})
+	}
+}
+

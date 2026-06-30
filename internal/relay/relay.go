@@ -465,11 +465,18 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, error) {
 	})
 	balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 
-	// attempt 失败日志（第一阶段可观测性增强）
-	log.Warnf("attempt %d/%d failed: channel=%s(%d), key=%d, duration=%dms, error=%v",
+	// 分类错误级别用于日志和指标
+	var responseBody []byte
+	if fwdErr != nil {
+		responseBody = []byte(fwdErr.Error())
+	}
+	classification := errorclass.Classify(upstreamStatusCode, responseBody)
+
+	// attempt 失败日志（第一阶段可观测性增强 + Phase 4 error_level）
+	log.Warnf("attempt %d/%d failed: channel=%s(%d), key=%d, duration=%dms, error_level=%s, error=%v",
 		ra.iter.Index()+1, ra.iter.Len(),
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
-		span.Duration().Milliseconds(), fwdErr)
+		span.Duration().Milliseconds(), classification.Level, fwdErr)
 
 	return ra.c.Writer.Written(), fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
 }
