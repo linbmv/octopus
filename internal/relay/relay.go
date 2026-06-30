@@ -17,6 +17,7 @@ import (
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/relay/errorclass"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/utils/jsonpatch"
 	"github.com/bestruirui/octopus/internal/utils/log"
@@ -478,27 +479,14 @@ func (ra *relayAttempt) canRetryNextKey(err error) bool {
 		return false
 	}
 
-	// 标准的 key 级错误：401/403/429
-	switch ra.usedKey.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
-		return true
+	// 使用统一的错误分类器判断是否为 key 级错误
+	// 响应体从 error 中提取（如果有的话）
+	var responseBody []byte
+	if err != nil {
+		responseBody = []byte(err.Error())
 	}
 
-	// 上游返回 503，但实际是权限/模型不存在问题（如 new_api distributor 的 model_not_found）
-	// 这种情况应该换 key 尝试，而不是当作渠道级故障
-	if ra.usedKey.StatusCode == http.StatusServiceUnavailable && err != nil {
-		errMsg := err.Error()
-		// 识别上游返回的 model_not_found / invalid_model / model_not_supported 等权限相关错误
-		if strings.Contains(errMsg, "model_not_found") ||
-			strings.Contains(errMsg, "model not found") ||
-			strings.Contains(errMsg, "invalid_model") ||
-			strings.Contains(errMsg, "model_not_supported") ||
-			strings.Contains(errMsg, "无可用渠道") {
-			return true
-		}
-	}
-
-	return false
+	return errorclass.CanRetryNextKey(ra.usedKey.StatusCode, responseBody)
 }
 
 func (ra *relayAttempt) switchToNextKey() bool {
