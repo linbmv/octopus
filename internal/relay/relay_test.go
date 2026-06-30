@@ -152,6 +152,23 @@ func TestRelayAttemptCanRetryNextKeyOnlyForKeyLevelStatuses(t *testing.T) {
 	if ra.canRetryNextKey(errors.New("bad gateway")) {
 		t.Fatal("502 should not retry next key")
 	}
+
+	// 503 + model_not_found 应该换 key（上游权限问题，不是真正的渠道故障）
+	ra.usedKey.StatusCode = http.StatusServiceUnavailable
+	if !ra.canRetryNextKey(errors.New("error: 分组 Gemini 下模型 deepseek/deepseek-v4-flash 无可用渠道（distributor）, code: model_not_found")) {
+		t.Fatal("503 + model_not_found should retry next key")
+	}
+	if !ra.canRetryNextKey(errors.New("Request failed: Service Unavailable, error: model not found")) {
+		t.Fatal("503 + 'model not found' should retry next key")
+	}
+	if !ra.canRetryNextKey(errors.New("invalid_model: the model is not supported")) {
+		t.Fatal("503 + invalid_model should retry next key")
+	}
+
+	// 503 但是真正的服务故障（如网络超时），不应该换 key
+	if ra.canRetryNextKey(errors.New("upstream timeout")) {
+		t.Fatal("503 + generic error should not retry next key")
+	}
 }
 
 func TestRelayAttemptSwitchToNextKeyRebuildsOutbound(t *testing.T) {
