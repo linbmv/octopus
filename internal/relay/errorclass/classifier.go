@@ -3,6 +3,7 @@ package errorclass
 import (
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ErrorLevel 表示错误的严重级别
@@ -103,7 +104,8 @@ func getStatusCodeMeta(statusCode int) statusCodeMeta {
 
 // ClassifyWithHeaders 基于状态码 + headers + 响应体智能分类错误级别
 // 支持高级场景：429 Retry-After、400 quota errors
-func ClassifyWithHeaders(statusCode int, headers map[string]string, responseBody []byte) Classification {
+// headers 使用 http.Header 类型以支持大小写无关的 header 查找
+func ClassifyWithHeaders(statusCode int, headers http.Header, responseBody []byte) Classification {
 	// 2xx 成功
 	if statusCode >= 200 && statusCode < 300 {
 		return Classification{Level: ErrorLevelNone, Reason: "success"}
@@ -159,7 +161,13 @@ func classify404Error(responseBody []byte) Classification {
 		}
 	}
 
-	bodyLower := strings.ToLower(string(responseBody))
+	// 大响应体优化：只扫描前 8KB，避免对 10MB HTML 错误页做全量转换
+	const maxScanBytes = 8192
+	scanBody := responseBody
+	if len(scanBody) > maxScanBytes {
+		scanBody = scanBody[:maxScanBytes]
+	}
+	bodyLower := strings.ToLower(string(scanBody))
 
 	// 仅当明确是"模型不存在"时才视为客户端错误
 	if strings.Contains(bodyLower, "model_not_found") ||
@@ -189,7 +197,13 @@ func classify503Error(responseBody []byte) Classification {
 		}
 	}
 
-	bodyLower := strings.ToLower(string(responseBody))
+	// 大响应体优化：只扫描前 8KB
+	const maxScanBytes = 8192
+	scanBody := responseBody
+	if len(scanBody) > maxScanBytes {
+		scanBody = scanBody[:maxScanBytes]
+	}
+	bodyLower := strings.ToLower(string(scanBody))
 
 	// 识别上游返回的 model_not_found / invalid_model / model_not_supported 等权限相关错误
 	// 同时支持英文通用表述和中文错误信息
@@ -219,9 +233,10 @@ func classify503Error(responseBody []byte) Classification {
 // 设计原则：
 //   - Retry-After > 60s：渠道级限流（全局/IP 限流）
 //   - Retry-After <= 60s 或无 header：Key 级限流（账户限流）
-func classify429Error(headers map[string]string, responseBody []byte) Classification {
+func classify429Error(headers http.Header, responseBody []byte) Classification {
 	if headers != nil {
-		if retryAfter, ok := headers["Retry-After"]; ok {
+		// http.Header.Get() 是大小写无关的
+		if retryAfter := headers.Get("Retry-After"); retryAfter != "" {
 			// 尝试解析为秒数
 			if seconds := parseRetryAfterSeconds(retryAfter); seconds > 60 {
 				return Classification{
@@ -232,7 +247,7 @@ func classify429Error(headers map[string]string, responseBody []byte) Classifica
 		}
 
 		// 检查其他限流范围 headers（如 X-RateLimit-Scope）
-		if scope, ok := headers["X-RateLimit-Scope"]; ok {
+		if scope := headers.Get("X-RateLimit-Scope"); scope != "" {
 			scopeLower := strings.ToLower(scope)
 			if scopeLower == "global" || scopeLower == "ip" {
 				return Classification{
@@ -253,10 +268,11 @@ func classify429Error(headers map[string]string, responseBody []byte) Classifica
 // parseRetryAfterSeconds 解析 Retry-After header 为秒数
 // 支持两种格式：秒数（"120"）或 HTTP-date（"Wed, 21 Oct 2015 07:28:00 GMT"）
 func parseRetryAfterSeconds(retryAfter string) int {
-	// 尝试直接解析为整数
-	seconds := 0
+	retryAfter = strings.TrimSpace(retryAfter)
 	const maxSeconds = 604800 // 7 天上限（HTTP 规范建议的最大值）
 
+	// 先尝试解析为整数
+	seconds := 0
 	for _, ch := range retryAfter {
 		if ch < '0' || ch > '9' {
 			break
@@ -268,7 +284,24 @@ func parseRetryAfterSeconds(retryAfter string) int {
 		}
 		seconds = newSeconds
 	}
-	return seconds
+
+	// 如果成功解析到数字，直接返回
+	if seconds > 0 {
+		return seconds
+	}
+
+	// 尝试解析为 HTTP-date（RFC 1123, RFC 850, ANSI C）
+	if t, err := http.ParseTime(retryAfter); err == nil {
+		duration := int(time.Until(t).Seconds())
+		if duration > 0 {
+			if duration > maxSeconds {
+				return maxSeconds
+			}
+			return duration
+		}
+	}
+
+	return 0
 }
 
 // classify400Error 根据响应体内容智能分类 400 错误
@@ -281,7 +314,13 @@ func classify400Error(responseBody []byte) Classification {
 		}
 	}
 
-	bodyLower := strings.ToLower(string(responseBody))
+	// 大响应体优化：只扫描前 8KB
+	const maxScanBytes = 8192
+	scanBody := responseBody
+	if len(scanBody) > maxScanBytes {
+		scanBody = scanBody[:maxScanBytes]
+	}
+	bodyLower := strings.ToLower(string(scanBody))
 
 	// 识别伪装成 400 的权限/配额错误
 	if strings.Contains(bodyLower, "quota") ||

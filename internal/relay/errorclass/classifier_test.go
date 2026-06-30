@@ -1,6 +1,7 @@
 package errorclass
 
 import (
+	"net/http"
 	"testing"
 )
 
@@ -342,38 +343,58 @@ func TestClassify503EdgeCases(t *testing.T) {
 func TestClassify429WithHeaders(t *testing.T) {
 	tests := []struct {
 		name         string
-		headers      map[string]string
+		headers      http.Header
 		responseBody []byte
 		wantLevel    ErrorLevel
 	}{
 		{
-			name:      "Retry-After > 60s (channel-level)",
-			headers:   map[string]string{"Retry-After": "120"},
+			name: "Retry-After > 60s (channel-level)",
+			headers: func() http.Header {
+				h := http.Header{}
+				h.Set("Retry-After", "120")
+				return h
+			}(),
 			wantLevel: ErrorLevelChannel,
 		},
 		{
-			name:      "Retry-After <= 60s (key-level)",
-			headers:   map[string]string{"Retry-After": "30"},
+			name: "Retry-After <= 60s (key-level)",
+			headers: func() http.Header {
+				h := http.Header{}
+				h.Set("Retry-After", "30")
+				return h
+			}(),
 			wantLevel: ErrorLevelKey,
 		},
 		{
 			name:      "No Retry-After header (key-level default)",
-			headers:   map[string]string{},
+			headers:   http.Header{},
 			wantLevel: ErrorLevelKey,
 		},
 		{
-			name:      "X-RateLimit-Scope: global (channel-level)",
-			headers:   map[string]string{"X-RateLimit-Scope": "global"},
+			name: "X-RateLimit-Scope: global (channel-level)",
+			headers: func() http.Header {
+				h := http.Header{}
+				h.Set("X-RateLimit-Scope", "global")
+				return h
+			}(),
 			wantLevel: ErrorLevelChannel,
 		},
 		{
-			name:      "X-RateLimit-Scope: ip (channel-level)",
-			headers:   map[string]string{"X-RateLimit-Scope": "IP"},
+			name: "X-RateLimit-Scope: ip (channel-level)",
+			headers: func() http.Header {
+				h := http.Header{}
+				h.Set("X-RateLimit-Scope", "IP")
+				return h
+			}(),
 			wantLevel: ErrorLevelChannel,
 		},
 		{
-			name:      "X-RateLimit-Scope: account (key-level)",
-			headers:   map[string]string{"X-RateLimit-Scope": "account"},
+			name: "X-RateLimit-Scope: account (key-level)",
+			headers: func() http.Header {
+				h := http.Header{}
+				h.Set("X-RateLimit-Scope", "account")
+				return h
+			}(),
 			wantLevel: ErrorLevelKey,
 		},
 		{
@@ -481,3 +502,84 @@ func TestParseRetryAfterSeconds(t *testing.T) {
 	}
 }
 
+
+
+// TestClassifyWithHeadersCaseInsensitive tests case-insensitive header matching
+func TestClassifyWithHeadersCaseInsensitive(t *testing.T) {
+	tests := []struct {
+		name      string
+		headerKey string
+		want      ErrorLevel
+	}{
+		{"standard case", "Retry-After", ErrorLevelChannel},
+		{"lowercase", "retry-after", ErrorLevelChannel},
+		{"uppercase", "RETRY-AFTER", ErrorLevelChannel},
+		{"mixed case", "ReTrY-aFtEr", ErrorLevelChannel},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := http.Header{}
+			h.Set(tt.headerKey, "120")
+			got := ClassifyWithHeaders(429, h, nil)
+			if got.Level != tt.want {
+				t.Errorf("ClassifyWithHeaders with header key %q = %v, want %v", tt.headerKey, got.Level, tt.want)
+			}
+		})
+	}
+}
+
+// TestLargeResponseBodyPerformance tests that large response bodies are handled efficiently
+func TestLargeResponseBodyPerformance(t *testing.T) {
+	// 创建一个 10MB 的响应体（模拟 HTML 错误页）
+	largeBody := make([]byte, 10*1024*1024)
+	for i := range largeBody {
+		largeBody[i] = 'x'
+	}
+	// 在前 8KB 之外添加关键字（不应该被匹配到）
+	copy(largeBody[9*1024*1024:], []byte("model_not_found"))
+
+	// 503 错误应该被分类为 Channel 级（因为 model_not_found 在扫描窗口之外）
+	got := Classify(503, largeBody)
+	if got.Level != ErrorLevelChannel {
+		t.Errorf("Classify(503, large body with late model_not_found) = %v, want %v", got.Level, ErrorLevelChannel)
+	}
+
+	// 在前 8KB 内添加关键字
+	copy(largeBody[100:], []byte("model_not_found"))
+	got = Classify(503, largeBody)
+	if got.Level != ErrorLevelKey {
+		t.Errorf("Classify(503, large body with early model_not_found) = %v, want %v", got.Level, ErrorLevelKey)
+	}
+}
+
+// TestHTTPDateParsing tests HTTP-date format in Retry-After header
+func TestHTTPDateParsing(t *testing.T) {
+	tests := []struct {
+		name      string
+		retryAfter string
+		wantLevel ErrorLevel
+	}{
+		{
+			name:      "future HTTP-date (should be channel-level if > 60s)",
+			retryAfter: "Wed, 21 Oct 2099 07:28:00 GMT",
+			wantLevel: ErrorLevelChannel,
+		},
+		{
+			name:      "past HTTP-date (should be key-level, treated as 0)",
+			retryAfter: "Wed, 21 Oct 2000 07:28:00 GMT",
+			wantLevel: ErrorLevelKey,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := http.Header{}
+			h.Set("Retry-After", tt.retryAfter)
+			got := ClassifyWithHeaders(429, h, nil)
+			if got.Level != tt.wantLevel {
+				t.Errorf("ClassifyWithHeaders(429, Retry-After=%q) = %v, want %v", tt.retryAfter, got.Level, tt.wantLevel)
+			}
+		})
+	}
+}
