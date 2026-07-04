@@ -11,9 +11,9 @@ import (
 var ErrEmptyWeightTable = errors.New("empty health weight table")
 
 type WeightCandidate struct {
-	ChannelID int
-	KeyID     int
-	Model     string
+	ChannelID  int
+	KeyID      int
+	Model      string
 	BaseWeight float64
 }
 

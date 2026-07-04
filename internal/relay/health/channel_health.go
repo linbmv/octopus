@@ -79,6 +79,10 @@ type HealthStats struct {
 	KeyErrorCount              int64 // Key 级错误计数
 	AutoFirstTokenTimeoutCount int64
 
+	// Shadow mode 统计
+	ShadowAutoTimeoutWouldTrigger int64 // shadow 模式下"本该触发自动超时"的次数
+	ShadowLastWindowSize          int   // 用于计算滑动窗口 shadow 命中率
+
 	// 滑动窗口（最近 N 个事件）
 	RecentResults []bool // true=success, false=failure
 
@@ -119,6 +123,10 @@ type HealthConfig struct {
 	TimeoutRateBackoffThreshold  float64
 	TimeoutRateBackoffMultiplier float64
 	SlowModelKeywords            []string
+	MaxMultiplierStack           float64 // multiplier 叠加上限，防止过度膨胀
+
+	// Shadow mode
+	ShadowMode bool // true = 只记录不执行自动超时切换
 
 	// CV 阈值
 	StableCV             float64
@@ -152,6 +160,8 @@ type TimeoutPolicy struct {
 	SlowModelProfile   bool    `json:"slow_model_profile"`
 	TimeoutRate        float64 `json:"timeout_rate"`
 	TimeoutRateBackoff bool    `json:"timeout_rate_backoff"`
+	ShadowMode         bool    `json:"shadow_mode"`
+	ShadowHitRate      float64 `json:"shadow_hit_rate,omitempty"` // shadow 模式命中率
 }
 
 // DefaultHealthConfig 默认配置
@@ -168,6 +178,8 @@ func DefaultHealthConfig() HealthConfig {
 		TimeoutRateBackoffThreshold:  0.20,
 		TimeoutRateBackoffMultiplier: 1.25,
 		SlowModelKeywords:            []string{"thinking", "opus", "reasoning", "long-context", "long_context", "200k", "1m"},
+		MaxMultiplierStack:           3.0, // 防止 multiplier 叠加过度膨胀
+		ShadowMode:                   false,
 
 		StableCV:             0.3,
 		ModerateCV:           0.8,
@@ -392,8 +404,14 @@ func (h *ChannelHealth) GetTimeout() time.Duration {
 		multiplier *= h.Config.SlowModelMultiplier
 	}
 
-	if timeoutRate := h.timeoutRateLocked(); timeoutRate >= h.Config.TimeoutRateBackoffThreshold && h.Config.TimeoutRateBackoffMultiplier > 0 {
+	timeoutRate := h.timeoutRateLocked()
+	if timeoutRate >= h.Config.TimeoutRateBackoffThreshold && h.Config.TimeoutRateBackoffMultiplier > 0 {
 		multiplier *= h.Config.TimeoutRateBackoffMultiplier
+	}
+
+	// 防止 multiplier 过度叠加
+	if h.Config.MaxMultiplierStack > 0 && multiplier > h.Config.MaxMultiplierStack {
+		multiplier = h.Config.MaxMultiplierStack
 	}
 
 	// 计算超时 = P95 × multiplier
@@ -440,12 +458,20 @@ func (h *ChannelHealth) GetTimeoutPolicy() TimeoutPolicy {
 		source = "cold_start"
 	}
 
+	// 计算 shadow 命中率
+	shadowHitRate := 0.0
+	if h.Config.ShadowMode && h.Stats.ShadowLastWindowSize > 0 {
+		shadowHitRate = float64(h.Stats.ShadowAutoTimeoutWouldTrigger) / float64(h.Stats.ShadowLastWindowSize)
+	}
+
 	return TimeoutPolicy{
 		Source:             source,
 		MinTimeoutMS:       minTimeout.Milliseconds(),
 		SlowModelProfile:   slowModel,
 		TimeoutRate:        timeoutRate,
 		TimeoutRateBackoff: backoff,
+		ShadowMode:         h.Config.ShadowMode,
+		ShadowHitRate:      shadowHitRate,
 	}
 }
 
@@ -454,6 +480,25 @@ func (h *ChannelHealth) timeoutRateLocked() float64 {
 		return 0
 	}
 	return float64(h.Stats.TimeoutCount) / float64(h.Stats.TotalCount)
+}
+
+// RecordShadowTimeout 记录 shadow 模式下的超时事件
+func (h *ChannelHealth) RecordShadowTimeout() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.Stats.ShadowAutoTimeoutWouldTrigger++
+	// 使用滑动窗口大小作为分母
+	windowSize := h.Config.WindowSize
+	if windowSize <= 0 {
+		windowSize = 50
+	}
+	// 只保留最近 N 次的统计
+	if h.Stats.TotalCount > 0 && h.Stats.TotalCount <= int64(windowSize) {
+		h.Stats.ShadowLastWindowSize = int(h.Stats.TotalCount)
+	} else {
+		h.Stats.ShadowLastWindowSize = windowSize
+	}
 }
 
 func isSlowFirstTokenModel(model string) bool {

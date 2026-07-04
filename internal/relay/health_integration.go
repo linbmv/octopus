@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -178,7 +179,19 @@ func applyHealthSettings(config health.HealthConfig) health.HealthConfig {
 		}
 		config.SlowModelKeywords = keywords
 	}
+	if value, err := op.SettingGetBool(dbmodel.SettingKeyHealthShadowMode); err == nil {
+		config.ShadowMode = value
+	}
+	if value, err := op.SettingGetString(dbmodel.SettingKeyHealthMaxMultiplierStack); err == nil {
+		if floatVal, parseErr := parseFloat(value); parseErr == nil && floatVal > 0 {
+			config.MaxMultiplierStack = floatVal
+		}
+	}
 	return config
+}
+
+func parseFloat(s string) (float64, error) {
+	return strconv.ParseFloat(s, 64)
 }
 
 // init 默认初始化

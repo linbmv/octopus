@@ -29,17 +29,17 @@ type PercentileEstimator interface {
 
 // EstimatorSnapshot 估计器快照（用于持久化）
 type EstimatorSnapshot struct {
-	Type    string    `json:"type"`    // "tdigest" | "histogram"
-	Version string    `json:"version"` // schema 版本
-	Data    []byte    `json:"data"`    // 实现特定的序列化数据
-	Count   int64     `json:"count"`   // 样本总数
+	Type      string    `json:"type"`    // "tdigest" | "histogram"
+	Version   string    `json:"version"` // schema 版本
+	Data      []byte    `json:"data"`    // 实现特定的序列化数据
+	Count     int64     `json:"count"`   // 样本总数
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // EstimatorConfig 估计器配置
 type EstimatorConfig struct {
 	// T-Digest 配置
-	TDigestCompression int // 压缩率（默认 100）
+	TDigestCompression  int // 压缩率（默认 100）
 	TDigestMaxMergeSets int // 最大合并集合数（默认 5）
 
 	// Histogram 配置（降级备选）
@@ -49,7 +49,7 @@ type EstimatorConfig struct {
 // DefaultEstimatorConfig 默认配置
 func DefaultEstimatorConfig() EstimatorConfig {
 	return EstimatorConfig{
-		TDigestCompression: 100,
+		TDigestCompression:  100,
 		TDigestMaxMergeSets: 5,
 		// 默认 histogram 分桶：1s, 2s, 5s, 10s, 15s, 20s, 30s, 40s
 		HistogramBuckets: []float64{

@@ -27,6 +27,8 @@ const (
 	SettingKeyHealthRecoveryProbeInterval    SettingKey = "health_recovery_probe_interval"     // 低健康候选恢复探测最小间隔（秒）
 	SettingKeyHealthTimeoutRateThreshold     SettingKey = "health_timeout_rate_threshold"      // 自动超时率放宽阈值（百分比）
 	SettingKeyHealthSlowModelKeywords        SettingKey = "health_slow_model_keywords"         // 慢首字模型关键词（逗号分隔）
+	SettingKeyHealthShadowMode               SettingKey = "health_shadow_mode"                 // 自动超时 shadow 模式（只记录不执行）
+	SettingKeyHealthMaxMultiplierStack       SettingKey = "health_max_multiplier_stack"        // multiplier 叠加上限（浮点数，0=无限制）
 	SettingKeyStickyHealthyFirstTokenTimeout SettingKey = "sticky_healthy_first_token_timeout" // 粘性健康首token阈值（秒），0=关闭健康粘性检查
 )
 
@@ -55,7 +57,9 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyHealthRecoveryProbeInterval, Value: "300"},    // 或每5分钟至少探测一次
 		{Key: SettingKeyHealthTimeoutRateThreshold, Value: "20"},      // 自动超时率>=20%时放宽超时
 		{Key: SettingKeyHealthSlowModelKeywords, Value: "thinking,opus,reasoning,long-context,long_context,200k,1m"},
-		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"}, // 默认关闭健康粘性检查（0=任何成功都粘住）
+		{Key: SettingKeyHealthShadowMode, Value: "false"},           // shadow mode 默认关闭
+		{Key: SettingKeyHealthMaxMultiplierStack, Value: "3.0"},     // multiplier 叠加上限 3.0x
+		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"}, // 默认不启用粘性健康检查
 	}
 }
 
@@ -70,7 +74,7 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("model info update interval must be an integer")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeySmartHealthEnabled, SettingKeyHealthWeightedBalancerEnabled:
+	case SettingKeyRelayLogKeepEnabled, SettingKeySmartHealthEnabled, SettingKeyHealthWeightedBalancerEnabled, SettingKeyHealthShadowMode:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("%s must be true or false", s.Key)
 		}
@@ -96,6 +100,15 @@ func (s *Setting) Validate() error {
 		}
 		return nil
 	case SettingKeyHealthSlowModelKeywords:
+		return nil
+	case SettingKeyHealthMaxMultiplierStack:
+		val, err := strconv.ParseFloat(s.Value, 64)
+		if err != nil {
+			return fmt.Errorf("must be a valid float number")
+		}
+		if val < 0 {
+			return fmt.Errorf("must be non-negative (0 = no limit)")
+		}
 		return nil
 	}
 

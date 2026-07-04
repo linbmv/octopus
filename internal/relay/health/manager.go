@@ -420,3 +420,26 @@ func mapToOutcome(
 	// 默认：上游错误
 	return OutcomeUpstreamError
 }
+
+// IsShadowMode 检查是否开启 shadow mode
+func (m *HealthManager) IsShadowMode() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.ShadowMode
+}
+
+// RecordShadowTimeout 记录 shadow 模式下的超时事件（只统计不执行）
+func (m *HealthManager) RecordShadowTimeout(channelID int, keyID int, model string) {
+	if !m.enabled {
+		return
+	}
+
+	key := HealthKey{
+		ChannelID: channelID,
+		KeyID:     keyID,
+		Model:     model,
+	}
+
+	health := m.GetOrCreate(key)
+	health.RecordShadowTimeout()
+}

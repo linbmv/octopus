@@ -30,6 +30,8 @@ export const SettingKey = {
     HealthRecoveryProbeInterval: 'health_recovery_probe_interval',
     HealthTimeoutRateThreshold: 'health_timeout_rate_threshold',
     HealthSlowModelKeywords: 'health_slow_model_keywords',
+    HealthShadowMode: 'health_shadow_mode',
+    HealthMaxMultiplierStack: 'health_max_multiplier_stack',
 } as const;
 
 /**

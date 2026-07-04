@@ -34,6 +34,8 @@ type HealthMetrics struct {
 	// 事件类型计数快照
 	timeoutCount               *prometheus.GaugeVec
 	autoFirstTokenTimeoutCount *prometheus.GaugeVec
+	shadowAutoTimeoutCount     *prometheus.GaugeVec
+	shadowHitRate              *prometheus.GaugeVec
 	networkErrCount            *prometheus.GaugeVec
 	rateLimitCount             *prometheus.GaugeVec
 	modelErrCount              *prometheus.GaugeVec
@@ -171,6 +173,26 @@ func NewHealthMetrics(namespace string) *HealthMetrics {
 			[]string{"channel_id", "key_id", "model"},
 		),
 
+		shadowAutoTimeoutCount: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: namespace,
+				Subsystem: "health",
+				Name:      "shadow_auto_timeout_count",
+				Help:      "Shadow mode: would-trigger auto timeout count",
+			},
+			[]string{"channel_id", "key_id", "model"},
+		),
+
+		shadowHitRate: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: namespace,
+				Subsystem: "health",
+				Name:      "shadow_hit_rate",
+				Help:      "Shadow mode: auto timeout hit rate (0-1)",
+			},
+			[]string{"channel_id", "key_id", "model"},
+		),
+
 		networkErrCount: promauto.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
@@ -272,6 +294,12 @@ func (m *HealthMetrics) Update(key HealthKey, health *ChannelHealth) {
 	// 事件类型计数快照
 	m.timeoutCount.With(labels).Set(float64(stats.TimeoutCount))
 	m.autoFirstTokenTimeoutCount.With(labels).Set(float64(stats.AutoFirstTokenTimeoutCount))
+	m.shadowAutoTimeoutCount.With(labels).Set(float64(stats.ShadowAutoTimeoutWouldTrigger))
+	if stats.ShadowLastWindowSize > 0 {
+		m.shadowHitRate.With(labels).Set(float64(stats.ShadowAutoTimeoutWouldTrigger) / float64(stats.ShadowLastWindowSize))
+	} else {
+		m.shadowHitRate.With(labels).Set(0)
+	}
 	m.networkErrCount.With(labels).Set(float64(stats.NetworkCount))
 	m.rateLimitCount.With(labels).Set(float64(stats.RateLimitCount))
 	m.modelErrCount.With(labels).Set(float64(stats.ModelErrorCount))

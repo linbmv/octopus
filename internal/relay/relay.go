@@ -939,11 +939,23 @@ func (ra *relayAttempt) recordFirstTokenTimeout(timeout firstTokenTimeoutConfig)
 	if timeout.Source != firstTokenTimeoutAdaptive || timeout.Duration <= 0 || !smartHealthEnabled() || healthManager == nil {
 		return
 	}
+	// Shadow mode: 只记录统计，不触发实际超时切换
+	if healthManager.IsShadowMode() {
+		healthManager.RecordShadowTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
+		return
+	}
 	healthManager.RecordTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel, timeout.Duration)
 }
 
 func (ra *relayAttempt) isAdaptiveFirstTokenTimeout(err error) bool {
-	return isFirstTokenTimeoutError(err) && ra.firstTokenTimeout().Source == firstTokenTimeoutAdaptive
+	if !isFirstTokenTimeoutError(err) || ra.firstTokenTimeout().Source != firstTokenTimeoutAdaptive {
+		return false
+	}
+	// Shadow mode 下自动超时不算真正的自动超时（不影响熔断/fallback）
+	if smartHealthEnabled() && healthManager != nil && healthManager.IsShadowMode() {
+		return false
+	}
+	return true
 }
 
 func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.Request) {

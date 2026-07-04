@@ -14,25 +14,25 @@ import (
 
 // HealthSnapshot 健康状态快照（用于持久化）
 type HealthSnapshot struct {
-	Version   string                    `json:"version"`
-	Timestamp time.Time                 `json:"timestamp"`
+	Version   string                         `json:"version"`
+	Timestamp time.Time                      `json:"timestamp"`
 	States    map[string]HealthStateSnapshot `json:"states"`
 }
 
 // HealthStateSnapshot 单个健康状态快照
 type HealthStateSnapshot struct {
-	Key              HealthKey         `json:"key"`
-	Stats            HealthStats       `json:"stats"`
-	Score            float64           `json:"score"`
+	Key               HealthKey         `json:"key"`
+	Stats             HealthStats       `json:"stats"`
+	Score             float64           `json:"score"`
 	EstimatorSnapshot EstimatorSnapshot `json:"estimator_snapshot"`
 }
 
 // PersistenceConfig 持久化配置
 type PersistenceConfig struct {
-	Enabled       bool          // 是否启用持久化
-	DataDir       string        // 数据目录
-	Interval      time.Duration // 持久化间隔
-	MaxSnapshots  int           // 最大快照数量
+	Enabled      bool          // 是否启用持久化
+	DataDir      string        // 数据目录
+	Interval     time.Duration // 持久化间隔
+	MaxSnapshots int           // 最大快照数量
 }
 
 // DefaultPersistenceConfig 默认持久化配置
@@ -173,9 +173,9 @@ func (p *HealthPersistence) createSnapshot() HealthSnapshot {
 		}
 
 		states[keyStr] = HealthStateSnapshot{
-			Key:              key,
-			Stats:            stats,
-			Score:            health.GetScore(),
+			Key:               key,
+			Stats:             stats,
+			Score:             health.GetScore(),
 			EstimatorSnapshot: estimatorSnapshot,
 		}
 	}
@@ -231,7 +231,6 @@ func (p *HealthPersistence) Load() error {
 				continue
 			}
 		}
-
 
 		health.RestoreStats(stateSnapshot.Stats, stateSnapshot.Score)
 

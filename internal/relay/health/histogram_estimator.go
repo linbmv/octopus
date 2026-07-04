@@ -127,18 +127,18 @@ func (e *HistogramEstimator) Snapshot() EstimatorSnapshot {
 	})
 	if err != nil {
 		return EstimatorSnapshot{
-			Type:    "histogram",
-			Version: "v1",
-			Count:   e.count,
+			Type:      "histogram",
+			Version:   "v1",
+			Count:     e.count,
 			UpdatedAt: time.Now(),
 		}
 	}
 
 	return EstimatorSnapshot{
-		Type:    "histogram",
-		Version: "v1",
-		Data:    data,
-		Count:   e.count,
+		Type:      "histogram",
+		Version:   "v1",
+		Data:      data,
+		Count:     e.count,
 		UpdatedAt: time.Now(),
 	}
 }

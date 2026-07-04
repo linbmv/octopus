@@ -10,17 +10,17 @@ type RolloutStage struct {
 }
 
 type RollbackMetrics struct {
-	TimeoutRateDelta       float64
-	SuccessRateDelta       float64
-	FirstTokenP95Delta     float64
-	RetryCountDelta        float64
-	FallbackRateDelta      float64
-	TopChannelStarved      bool
-	ErrNoChannel           bool
-	PanicObserved          bool
-	BusinessIncident       bool
-	ObservedRequests       int64
-	StageStartedAt         time.Time
+	TimeoutRateDelta   float64
+	SuccessRateDelta   float64
+	FirstTokenP95Delta float64
+	RetryCountDelta    float64
+	FallbackRateDelta  float64
+	TopChannelStarved  bool
+	ErrNoChannel       bool
+	PanicObserved      bool
+	BusinessIncident   bool
+	ObservedRequests   int64
+	StageStartedAt     time.Time
 }
 
 type RolloutDecision string

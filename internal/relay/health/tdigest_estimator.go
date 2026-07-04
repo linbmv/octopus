@@ -11,10 +11,10 @@ import (
 
 // TDigestEstimator T-Digest 分位数估计器
 type TDigestEstimator struct {
-	mu      sync.RWMutex
-	digest  *tdigest.TDigest
-	count   int64
-	config  EstimatorConfig
+	mu     sync.RWMutex
+	digest *tdigest.TDigest
+	count  int64
+	config EstimatorConfig
 }
 
 // NewTDigestEstimator 创建 T-Digest 估计器
