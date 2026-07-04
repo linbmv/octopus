@@ -2,6 +2,7 @@ package relay
 
 import (
 	"sync"
+	"sync/atomic"
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -16,6 +17,9 @@ var healthMetrics *health.HealthMetrics
 var healthMetricsOnce sync.Once
 var healthPersistence *health.HealthPersistence
 var healthPersistenceMu sync.Mutex
+var healthRecoveryProbeCounter uint64
+
+const healthRecoveryProbeEvery = 20
 
 // InitHealthSystem 初始化健康系统
 func InitHealthSystem(config health.HealthConfig) {
@@ -103,10 +107,20 @@ func healthWeightForGroupItem(item dbmodel.GroupItem) float64 {
 			bestScore = score
 		}
 	}
+	if shouldProbeUnhealthyCandidate(bestScore) {
+		return 1
+	}
 	if bestScore <= 0 {
 		return 0.01
 	}
 	return bestScore
+}
+
+func shouldProbeUnhealthyCandidate(score float64) bool {
+	if score <= 0 || score >= 0.5 {
+		return false
+	}
+	return atomic.AddUint64(&healthRecoveryProbeCounter, 1)%healthRecoveryProbeEvery == 0
 }
 
 func healthWeightedBalancerEnabled() bool {

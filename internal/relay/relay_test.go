@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +41,23 @@ func TestFirstTokenTimeoutManualSourceTakesPrecedence(t *testing.T) {
 	}
 	if got.Duration != 12*time.Second {
 		t.Fatalf("timeout duration = %v, want 12s", got.Duration)
+	}
+}
+
+func TestShouldProbeUnhealthyCandidateEveryNthCheck(t *testing.T) {
+	atomic.StoreUint64(&healthRecoveryProbeCounter, 0)
+	defer atomic.StoreUint64(&healthRecoveryProbeCounter, 0)
+
+	for i := 1; i < healthRecoveryProbeEvery; i++ {
+		if shouldProbeUnhealthyCandidate(0.25) {
+			t.Fatalf("probe triggered at check %d, want only every %d", i, healthRecoveryProbeEvery)
+		}
+	}
+	if !shouldProbeUnhealthyCandidate(0.25) {
+		t.Fatalf("probe not triggered at check %d", healthRecoveryProbeEvery)
+	}
+	if shouldProbeUnhealthyCandidate(0.8) {
+		t.Fatal("healthy candidate should not trigger recovery probe")
 	}
 }
 

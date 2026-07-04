@@ -21,24 +21,25 @@ func NewHealthAPI(manager *HealthManager) *HealthAPI {
 
 // HealthStatusResponse 健康状态响应
 type HealthStatusResponse struct {
-	ChannelID int     `json:"channel_id"`
-	KeyID     int     `json:"key_id"`
-	Model     string  `json:"model"`
-	Score     float64 `json:"score"`
+	ChannelID int                 `json:"channel_id"`
+	KeyID     int                 `json:"key_id"`
+	Model     string              `json:"model"`
+	Score     float64             `json:"score"`
 	Stats     HealthStatsResponse `json:"stats"`
-	Timeout   int64   `json:"adaptive_timeout_ms"`
+	Timeout   int64               `json:"adaptive_timeout_ms"`
 }
 
 // HealthStatsResponse 统计信息响应
 type HealthStatsResponse struct {
-	TotalCount      int64   `json:"total_count"`
-	SuccessCount    int64   `json:"success_count"`
-	SuccessRate     float64 `json:"success_rate"`
-	TimeoutCount    int64   `json:"timeout_count"`
-	NetworkCount    int64   `json:"network_count"`
-	RateLimitCount  int64   `json:"rate_limit_count"`
-	ModelErrorCount int64   `json:"model_error_count"`
-	KeyErrorCount   int64   `json:"key_error_count"`
+	TotalCount                 int64   `json:"total_count"`
+	SuccessCount               int64   `json:"success_count"`
+	SuccessRate                float64 `json:"success_rate"`
+	TimeoutCount               int64   `json:"timeout_count"`
+	AutoFirstTokenTimeoutCount int64   `json:"auto_first_token_timeout_count"`
+	NetworkCount               int64   `json:"network_count"`
+	RateLimitCount             int64   `json:"rate_limit_count"`
+	ModelErrorCount            int64   `json:"model_error_count"`
+	KeyErrorCount              int64   `json:"key_error_count"`
 
 	FirstTokenP50MS int64   `json:"first_token_p50_ms"`
 	FirstTokenP95MS int64   `json:"first_token_p95_ms"`
@@ -261,14 +262,15 @@ func convertStats(stats HealthStats) HealthStatsResponse {
 	}
 
 	return HealthStatsResponse{
-		TotalCount:      stats.TotalCount,
-		SuccessCount:    stats.SuccessCount,
-		SuccessRate:     stats.SuccessRate,
-		TimeoutCount:    stats.TimeoutCount,
-		NetworkCount:    stats.NetworkCount,
-		RateLimitCount:  stats.RateLimitCount,
-		ModelErrorCount: stats.ModelErrorCount,
-		KeyErrorCount:   stats.KeyErrorCount,
+		TotalCount:                 stats.TotalCount,
+		SuccessCount:               stats.SuccessCount,
+		SuccessRate:                stats.SuccessRate,
+		TimeoutCount:               stats.TimeoutCount,
+		AutoFirstTokenTimeoutCount: stats.AutoFirstTokenTimeoutCount,
+		NetworkCount:               stats.NetworkCount,
+		RateLimitCount:             stats.RateLimitCount,
+		ModelErrorCount:            stats.ModelErrorCount,
+		KeyErrorCount:              stats.KeyErrorCount,
 
 		FirstTokenP50MS: stats.FirstTokenP50.Milliseconds(),
 		FirstTokenP95MS: stats.FirstTokenP95.Milliseconds(),

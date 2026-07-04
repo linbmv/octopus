@@ -43,10 +43,10 @@ func TestChannelHealth_BasicFlow(t *testing.T) {
 
 	// 添加失败事件
 	event := HealthEvent{
-		Level:   errorclass.ErrorLevelChannel,
-		Outcome: OutcomeFirstTokenTimeout,
+		Level:         errorclass.ErrorLevelChannel,
+		Outcome:       OutcomeFirstTokenTimeout,
 		TimeoutBudget: 10 * time.Second,
-		At:      time.Now(),
+		At:            time.Now(),
 	}
 	health.OnEvent(event)
 
@@ -65,6 +65,7 @@ func TestChannelHealth_AdaptiveTimeout(t *testing.T) {
 	config := DefaultHealthConfig()
 	config.MinSamplesForAdaptiveTimeout = 10
 	config.MinTimeout = 2 * time.Second // 降低最小超时，避免限制
+	config.MinAdaptiveTimeout = 2 * time.Second
 	config.StableCV = 0.3
 	config.StableMultiplier = 1.10
 
@@ -117,6 +118,78 @@ func TestChannelHealth_AdaptiveTimeout(t *testing.T) {
 	}
 }
 
+func TestChannelHealthAdaptiveTimeoutMinimum(t *testing.T) {
+	config := DefaultHealthConfig()
+	config.MinSamplesForAdaptiveTimeout = 3
+	config.MinTimeout = time.Second
+	config.MinAdaptiveTimeout = 15 * time.Second
+	config.StableMultiplier = 1.10
+
+	health := NewChannelHealth(HealthKey{ChannelID: 1, KeyID: 1, Model: "gpt-4"}, config)
+	for i := 0; i < 5; i++ {
+		health.OnEvent(HealthEvent{
+			Level:          errorclass.ErrorLevelNone,
+			Outcome:        OutcomeSuccess,
+			FirstTokenTime: 2 * time.Second,
+			At:             time.Now(),
+		})
+	}
+
+	if got := health.GetTimeout(); got != 15*time.Second {
+		t.Fatalf("adaptive timeout = %v, want 15s floor", got)
+	}
+}
+
+func TestChannelHealthSlowModelProfile(t *testing.T) {
+	config := DefaultHealthConfig()
+	config.MinSamplesForAdaptiveTimeout = 3
+	config.MinTimeout = time.Second
+	config.MinAdaptiveTimeout = 15 * time.Second
+	config.SlowModelMinAdaptiveTimeout = 25 * time.Second
+	config.SlowModelMultiplier = 1.30
+
+	health := NewChannelHealth(HealthKey{ChannelID: 1, KeyID: 1, Model: "claude-opus-4-thinking"}, config)
+	for i := 0; i < 5; i++ {
+		health.OnEvent(HealthEvent{
+			Level:          errorclass.ErrorLevelNone,
+			Outcome:        OutcomeSuccess,
+			FirstTokenTime: 3 * time.Second,
+			At:             time.Now(),
+		})
+	}
+
+	if got := health.GetTimeout(); got < 25*time.Second {
+		t.Fatalf("slow model adaptive timeout = %v, want at least 25s", got)
+	}
+}
+
+func TestChannelHealthTimeoutRateBackoff(t *testing.T) {
+	config := DefaultHealthConfig()
+	config.MinSamplesForAdaptiveTimeout = 3
+	config.MinTimeout = time.Second
+	config.MinAdaptiveTimeout = time.Second
+	config.TimeoutRateBackoffThreshold = 0.20
+	config.TimeoutRateBackoffMultiplier = 2.0
+	config.StableMultiplier = 1.0
+	config.ModerateMultiplier = 1.0
+	config.HighJitterMultiplier = 1.0
+
+	baseline := NewChannelHealth(HealthKey{ChannelID: 1, KeyID: 1, Model: "gpt-4"}, config)
+	backoff := NewChannelHealth(HealthKey{ChannelID: 1, KeyID: 2, Model: "gpt-4"}, config)
+	for i := 0; i < 8; i++ {
+		event := HealthEvent{Level: errorclass.ErrorLevelNone, Outcome: OutcomeSuccess, FirstTokenTime: 5 * time.Second, At: time.Now()}
+		baseline.OnEvent(event)
+		backoff.OnEvent(event)
+	}
+	for i := 0; i < 2; i++ {
+		backoff.OnEvent(HealthEvent{Level: errorclass.ErrorLevelChannel, Outcome: OutcomeFirstTokenTimeout, TimeoutBudget: 5 * time.Second, At: time.Now()})
+	}
+
+	if got, wantGreaterThan := backoff.GetTimeout(), baseline.GetTimeout(); got <= wantGreaterThan {
+		t.Fatalf("timeout with backoff = %v, want greater than baseline %v", got, wantGreaterThan)
+	}
+}
+
 // TestChannelHealth_TimeoutSampleWeight 测试超时样本权重
 func TestChannelHealth_TimeoutSampleWeight(t *testing.T) {
 	config := DefaultHealthConfig()
@@ -151,6 +224,9 @@ func TestChannelHealth_TimeoutSampleWeight(t *testing.T) {
 	// P95 应该被超时样本拉高
 	stats := health.GetStats()
 	t.Logf("P95 after timeout: %v", stats.FirstTokenP95)
+	if stats.AutoFirstTokenTimeoutCount != 2 {
+		t.Fatalf("AutoFirstTokenTimeoutCount = %d, want 2", stats.AutoFirstTokenTimeoutCount)
+	}
 
 	// P95 应该 > 3s（因为有 10s 的超时样本）
 	if stats.FirstTokenP95 <= 3*time.Second {

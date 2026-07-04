@@ -32,11 +32,12 @@ type HealthMetrics struct {
 	adaptiveTimeout *prometheus.GaugeVec
 
 	// 事件类型计数
-	timeoutCount    *prometheus.CounterVec
-	networkErrCount *prometheus.CounterVec
-	rateLimitCount  *prometheus.CounterVec
-	modelErrCount   *prometheus.CounterVec
-	keyErrCount     *prometheus.CounterVec
+	timeoutCount               *prometheus.CounterVec
+	autoFirstTokenTimeoutCount *prometheus.GaugeVec
+	networkErrCount            *prometheus.CounterVec
+	rateLimitCount             *prometheus.CounterVec
+	modelErrCount              *prometheus.CounterVec
+	keyErrCount                *prometheus.CounterVec
 
 	// 连续计数器
 	consecutiveSuccess *prometheus.GaugeVec
@@ -160,6 +161,16 @@ func NewHealthMetrics(namespace string) *HealthMetrics {
 			[]string{"channel_id", "key_id", "model"},
 		),
 
+		autoFirstTokenTimeoutCount: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: namespace,
+				Subsystem: "health",
+				Name:      "auto_first_token_timeout_total",
+				Help:      "Total number of automatic adaptive first-token timeout events",
+			},
+			[]string{"channel_id", "key_id", "model"},
+		),
+
 		networkErrCount: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
@@ -260,11 +271,12 @@ func (m *HealthMetrics) Update(key HealthKey, health *ChannelHealth) {
 	m.adaptiveTimeout.With(labels).Set(float64(timeout.Milliseconds()))
 
 	// 事件类型计数
-	m.timeoutCount.With(labels).Add(0)      // 初始化
-	m.networkErrCount.With(labels).Add(0)   // 初始化
-	m.rateLimitCount.With(labels).Add(0)    // 初始化
-	m.modelErrCount.With(labels).Add(0)     // 初始化
-	m.keyErrCount.With(labels).Add(0)       // 初始化
+	m.timeoutCount.With(labels).Add(0) // 初始化
+	m.autoFirstTokenTimeoutCount.With(labels).Set(float64(stats.AutoFirstTokenTimeoutCount))
+	m.networkErrCount.With(labels).Add(0) // 初始化
+	m.rateLimitCount.With(labels).Add(0)  // 初始化
+	m.modelErrCount.With(labels).Add(0)   // 初始化
+	m.keyErrCount.With(labels).Add(0)     // 初始化
 
 	// 连续计数器
 	m.consecutiveSuccess.With(labels).Set(float64(stats.ConsecutiveSuccess))

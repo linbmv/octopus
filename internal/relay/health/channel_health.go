@@ -1,6 +1,7 @@
 package health
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -18,11 +19,11 @@ type HealthKey struct {
 type HealthOutcome int
 
 const (
-	OutcomeSuccess           HealthOutcome = iota
+	OutcomeSuccess HealthOutcome = iota
 	OutcomeFirstTokenTimeout
 	OutcomeNetworkError
-	OutcomeClientCancel      // 客户端主动取消
-	OutcomeClientError       // 客户端配置错误
+	OutcomeClientCancel // 客户端主动取消
+	OutcomeClientError  // 客户端配置错误
 	OutcomeRateLimit
 	OutcomeModelError
 	OutcomeFormatError
@@ -67,15 +68,16 @@ type HealthEvent struct {
 
 // HealthStats 健康统计
 type HealthStats struct {
-	TotalCount      int64
-	SuccessCount    int64
-	TimeoutCount    int64
-	NetworkCount    int64
-	CancelCount     int64
-	RateLimitCount  int64
-	ModelErrorCount int64
-	FormatCount     int64
-	KeyErrorCount   int64 // Key 级错误计数
+	TotalCount                 int64
+	SuccessCount               int64
+	TimeoutCount               int64
+	NetworkCount               int64
+	CancelCount                int64
+	RateLimitCount             int64
+	ModelErrorCount            int64
+	FormatCount                int64
+	KeyErrorCount              int64 // Key 级错误计数
+	AutoFirstTokenTimeoutCount int64
 
 	// 滑动窗口（最近 N 个事件）
 	RecentResults []bool // true=success, false=failure
@@ -111,6 +113,11 @@ type HealthConfig struct {
 	DefaultTimeout               time.Duration
 	ColdStartTimeout             time.Duration
 	MinSamplesForAdaptiveTimeout int
+	MinAdaptiveTimeout           time.Duration
+	SlowModelMinAdaptiveTimeout  time.Duration
+	SlowModelMultiplier          float64
+	TimeoutRateBackoffThreshold  float64
+	TimeoutRateBackoffMultiplier float64
 
 	// CV 阈值
 	StableCV             float64
@@ -120,10 +127,10 @@ type HealthConfig struct {
 	HighJitterMultiplier float64
 
 	// 健康度参数
-	WindowSize             int
-	MinHealthScore         float64
-	FastRecoveryThreshold  int
-	FastRecoveryScore      float64
+	WindowSize            int
+	MinHealthScore        float64
+	FastRecoveryThreshold int
+	FastRecoveryScore     float64
 
 	// 贝叶斯先验
 	PriorSuccess           float64
@@ -131,8 +138,8 @@ type HealthConfig struct {
 	MinSamplesForPosterior int
 
 	// 失败样本权重
-	TimeoutSampleWeight   float64
-	NetworkErrorWeight    float64
+	TimeoutSampleWeight float64
+	NetworkErrorWeight  float64
 
 	// Estimator 配置
 	EstimatorConfig EstimatorConfig
@@ -146,6 +153,11 @@ func DefaultHealthConfig() HealthConfig {
 		DefaultTimeout:               15 * time.Second,
 		ColdStartTimeout:             20 * time.Second,
 		MinSamplesForAdaptiveTimeout: 30,
+		MinAdaptiveTimeout:           15 * time.Second,
+		SlowModelMinAdaptiveTimeout:  25 * time.Second,
+		SlowModelMultiplier:          1.30,
+		TimeoutRateBackoffThreshold:  0.20,
+		TimeoutRateBackoffMultiplier: 1.25,
 
 		StableCV:             0.3,
 		ModerateCV:           0.8,
@@ -182,7 +194,7 @@ type ChannelHealth struct {
 // NewChannelHealth 创建渠道健康状态
 func NewChannelHealth(key HealthKey, config HealthConfig) *ChannelHealth {
 	return &ChannelHealth{
-		Key:   key,
+		Key: key,
 		Stats: HealthStats{
 			RecentResults: make([]bool, 0, config.WindowSize),
 			Estimator:     NewEstimator(config.EstimatorConfig),
@@ -216,6 +228,7 @@ func (h *ChannelHealth) OnEvent(event HealthEvent) {
 	case OutcomeFirstTokenTimeout:
 		h.recordWindowLocked(false)
 		h.Stats.TimeoutCount++
+		h.Stats.AutoFirstTokenTimeoutCount++
 		h.Stats.ConsecutiveSuccess = 0
 		h.Stats.ConsecutiveFailure++
 		h.Stats.ConsecutiveTimeout++
@@ -364,12 +377,26 @@ func (h *ChannelHealth) GetTimeout() time.Duration {
 		multiplier = h.Config.ModerateMultiplier
 	}
 
+	if isSlowFirstTokenModel(h.Key.Model) && h.Config.SlowModelMultiplier > 0 {
+		multiplier *= h.Config.SlowModelMultiplier
+	}
+
+	if timeoutRate := h.timeoutRateLocked(); timeoutRate >= h.Config.TimeoutRateBackoffThreshold && h.Config.TimeoutRateBackoffMultiplier > 0 {
+		multiplier *= h.Config.TimeoutRateBackoffMultiplier
+	}
+
 	// 计算超时 = P95 × multiplier
 	timeout := time.Duration(p95*multiplier) * time.Millisecond
 
 	// 边界限制
 	if timeout < h.Config.MinTimeout {
 		timeout = h.Config.MinTimeout
+	}
+	if timeout < h.Config.MinAdaptiveTimeout {
+		timeout = h.Config.MinAdaptiveTimeout
+	}
+	if isSlowFirstTokenModel(h.Key.Model) && timeout < h.Config.SlowModelMinAdaptiveTimeout {
+		timeout = h.Config.SlowModelMinAdaptiveTimeout
 	}
 	if timeout > h.Config.MaxTimeout {
 		timeout = h.Config.MaxTimeout
@@ -384,6 +411,24 @@ func (h *ChannelHealth) GetTimeout() time.Duration {
 	}
 
 	return timeout
+}
+
+func (h *ChannelHealth) timeoutRateLocked() float64 {
+	if h.Stats.TotalCount <= 0 {
+		return 0
+	}
+	return float64(h.Stats.TimeoutCount) / float64(h.Stats.TotalCount)
+}
+
+func isSlowFirstTokenModel(model string) bool {
+	model = strings.ToLower(model)
+	return strings.Contains(model, "thinking") ||
+		strings.Contains(model, "opus") ||
+		strings.Contains(model, "reasoning") ||
+		strings.Contains(model, "long-context") ||
+		strings.Contains(model, "long_context") ||
+		strings.Contains(model, "200k") ||
+		strings.Contains(model, "1m")
 }
 
 // GetScore 获取健康度评分
