@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ var healthMetricsOnce sync.Once
 var healthPersistence *health.HealthPersistence
 var healthPersistenceMu sync.Mutex
 var healthRecoveryProbeCounter uint64
+var healthLastRecoveryProbeUnix atomic.Int64
 
 // InitHealthSystem 初始化健康系统
 func InitHealthSystem(config health.HealthConfig) {
@@ -119,10 +121,20 @@ func shouldProbeUnhealthyCandidate(score float64) bool {
 		return false
 	}
 	probeEvery := healthRecoveryProbeEvery()
-	if probeEvery <= 0 {
+	if probeEvery > 0 && atomic.AddUint64(&healthRecoveryProbeCounter, 1)%uint64(probeEvery) == 0 {
+		healthLastRecoveryProbeUnix.Store(time.Now().Unix())
+		return true
+	}
+	probeInterval := healthRecoveryProbeInterval()
+	if probeInterval <= 0 {
 		return false
 	}
-	return atomic.AddUint64(&healthRecoveryProbeCounter, 1)%uint64(probeEvery) == 0
+	now := time.Now().Unix()
+	last := healthLastRecoveryProbeUnix.Load()
+	if last > 0 && now-last < int64(probeInterval/time.Second) {
+		return false
+	}
+	return healthLastRecoveryProbeUnix.CompareAndSwap(last, now)
 }
 
 func healthRecoveryProbeEvery() int {
@@ -131,6 +143,14 @@ func healthRecoveryProbeEvery() int {
 		return 20
 	}
 	return value
+}
+
+func healthRecoveryProbeInterval() time.Duration {
+	value, err := op.SettingGetInt(dbmodel.SettingKeyHealthRecoveryProbeInterval)
+	if err != nil || value <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(value) * time.Second
 }
 
 func healthWeightedBalancerEnabled() bool {
@@ -150,6 +170,13 @@ func applyHealthSettings(config health.HealthConfig) health.HealthConfig {
 	}
 	if value, err := op.SettingGetInt(dbmodel.SettingKeyHealthTimeoutRateThreshold); err == nil && value > 0 {
 		config.TimeoutRateBackoffThreshold = float64(value) / 100
+	}
+	if value, err := op.SettingGetString(dbmodel.SettingKeyHealthSlowModelKeywords); err == nil {
+		keywords := strings.Split(value, ",")
+		for i := range keywords {
+			keywords[i] = strings.TrimSpace(keywords[i])
+		}
+		config.SlowModelKeywords = keywords
 	}
 	return config
 }

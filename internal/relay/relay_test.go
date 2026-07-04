@@ -46,7 +46,9 @@ func TestFirstTokenTimeoutManualSourceTakesPrecedence(t *testing.T) {
 
 func TestShouldProbeUnhealthyCandidateEveryNthCheck(t *testing.T) {
 	atomic.StoreUint64(&healthRecoveryProbeCounter, 0)
+	healthLastRecoveryProbeUnix.Store(time.Now().Unix())
 	defer atomic.StoreUint64(&healthRecoveryProbeCounter, 0)
+	defer healthLastRecoveryProbeUnix.Store(0)
 
 	probeEvery := healthRecoveryProbeEvery()
 	for i := 1; i < probeEvery; i++ {

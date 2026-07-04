@@ -20,7 +20,9 @@ func TestDefaultSettingsIncludeHealthWeightedBalancerEnabled(t *testing.T) {
 		SettingKeyHealthMinAdaptiveTimeout:      "15",
 		SettingKeyHealthSlowModelMinTimeout:     "25",
 		SettingKeyHealthRecoveryProbeEvery:      "20",
+		SettingKeyHealthRecoveryProbeInterval:   "300",
 		SettingKeyHealthTimeoutRateThreshold:    "20",
+		SettingKeyHealthSlowModelKeywords:       "thinking,opus,reasoning,long-context,long_context,200k,1m",
 	}
 	for _, setting := range DefaultSettings() {
 		if value, ok := want[setting.Key]; ok {
@@ -40,6 +42,7 @@ func TestSettingValidateHealthPolicyIntegers(t *testing.T) {
 		SettingKeyHealthMinAdaptiveTimeout,
 		SettingKeyHealthSlowModelMinTimeout,
 		SettingKeyHealthRecoveryProbeEvery,
+		SettingKeyHealthRecoveryProbeInterval,
 		SettingKeyHealthTimeoutRateThreshold,
 	}
 	for _, key := range keys {

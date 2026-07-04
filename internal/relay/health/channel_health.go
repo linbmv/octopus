@@ -118,6 +118,7 @@ type HealthConfig struct {
 	SlowModelMultiplier          float64
 	TimeoutRateBackoffThreshold  float64
 	TimeoutRateBackoffMultiplier float64
+	SlowModelKeywords            []string
 
 	// CV 阈值
 	StableCV             float64
@@ -166,6 +167,7 @@ func DefaultHealthConfig() HealthConfig {
 		SlowModelMultiplier:          1.30,
 		TimeoutRateBackoffThreshold:  0.20,
 		TimeoutRateBackoffMultiplier: 1.25,
+		SlowModelKeywords:            []string{"thinking", "opus", "reasoning", "long-context", "long_context", "200k", "1m"},
 
 		StableCV:             0.3,
 		ModerateCV:           0.8,
@@ -385,7 +387,8 @@ func (h *ChannelHealth) GetTimeout() time.Duration {
 		multiplier = h.Config.ModerateMultiplier
 	}
 
-	if isSlowFirstTokenModel(h.Key.Model) && h.Config.SlowModelMultiplier > 0 {
+	slowModel := isSlowFirstTokenModelWithKeywords(h.Key.Model, h.Config.SlowModelKeywords)
+	if slowModel && h.Config.SlowModelMultiplier > 0 {
 		multiplier *= h.Config.SlowModelMultiplier
 	}
 
@@ -403,7 +406,7 @@ func (h *ChannelHealth) GetTimeout() time.Duration {
 	if timeout < h.Config.MinAdaptiveTimeout {
 		timeout = h.Config.MinAdaptiveTimeout
 	}
-	if isSlowFirstTokenModel(h.Key.Model) && timeout < h.Config.SlowModelMinAdaptiveTimeout {
+	if slowModel && timeout < h.Config.SlowModelMinAdaptiveTimeout {
 		timeout = h.Config.SlowModelMinAdaptiveTimeout
 	}
 	if timeout > h.Config.MaxTimeout {
@@ -425,7 +428,7 @@ func (h *ChannelHealth) GetTimeoutPolicy() TimeoutPolicy {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	slowModel := isSlowFirstTokenModel(h.Key.Model)
+	slowModel := isSlowFirstTokenModelWithKeywords(h.Key.Model, h.Config.SlowModelKeywords)
 	minTimeout := h.Config.MinAdaptiveTimeout
 	if slowModel && h.Config.SlowModelMinAdaptiveTimeout > minTimeout {
 		minTimeout = h.Config.SlowModelMinAdaptiveTimeout
@@ -454,14 +457,18 @@ func (h *ChannelHealth) timeoutRateLocked() float64 {
 }
 
 func isSlowFirstTokenModel(model string) bool {
+	return isSlowFirstTokenModelWithKeywords(model, DefaultHealthConfig().SlowModelKeywords)
+}
+
+func isSlowFirstTokenModelWithKeywords(model string, keywords []string) bool {
 	model = strings.ToLower(model)
-	return strings.Contains(model, "thinking") ||
-		strings.Contains(model, "opus") ||
-		strings.Contains(model, "reasoning") ||
-		strings.Contains(model, "long-context") ||
-		strings.Contains(model, "long_context") ||
-		strings.Contains(model, "200k") ||
-		strings.Contains(model, "1m")
+	for _, keyword := range keywords {
+		keyword = strings.TrimSpace(strings.ToLower(keyword))
+		if keyword != "" && strings.Contains(model, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetScore 获取健康度评分

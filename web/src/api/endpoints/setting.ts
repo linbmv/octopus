@@ -27,7 +27,9 @@ export const SettingKey = {
     HealthMinAdaptiveTimeout: 'health_min_adaptive_timeout',
     HealthSlowModelMinTimeout: 'health_slow_model_min_timeout',
     HealthRecoveryProbeEvery: 'health_recovery_probe_every',
+    HealthRecoveryProbeInterval: 'health_recovery_probe_interval',
     HealthTimeoutRateThreshold: 'health_timeout_rate_threshold',
+    HealthSlowModelKeywords: 'health_slow_model_keywords',
 } as const;
 
 /**

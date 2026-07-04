@@ -24,7 +24,9 @@ const (
 	SettingKeyHealthMinAdaptiveTimeout       SettingKey = "health_min_adaptive_timeout"        // 自动首字超时下限（秒）
 	SettingKeyHealthSlowModelMinTimeout      SettingKey = "health_slow_model_min_timeout"      // 慢首字模型自动超时下限（秒）
 	SettingKeyHealthRecoveryProbeEvery       SettingKey = "health_recovery_probe_every"        // 低健康候选恢复探测频率（每 N 次）
+	SettingKeyHealthRecoveryProbeInterval    SettingKey = "health_recovery_probe_interval"     // 低健康候选恢复探测最小间隔（秒）
 	SettingKeyHealthTimeoutRateThreshold     SettingKey = "health_timeout_rate_threshold"      // 自动超时率放宽阈值（百分比）
+	SettingKeyHealthSlowModelKeywords        SettingKey = "health_slow_model_keywords"         // 慢首字模型关键词（逗号分隔）
 	SettingKeyStickyHealthyFirstTokenTimeout SettingKey = "sticky_healthy_first_token_timeout" // 粘性健康首token阈值（秒），0=关闭健康粘性检查
 )
 
@@ -50,8 +52,10 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyHealthMinAdaptiveTimeout, Value: "15"},        // 自动首字超时不低于15秒
 		{Key: SettingKeyHealthSlowModelMinTimeout, Value: "25"},       // thinking/opus等慢首字模型不低于25秒
 		{Key: SettingKeyHealthRecoveryProbeEvery, Value: "20"},        // 低健康候选每20次评估探测一次
+		{Key: SettingKeyHealthRecoveryProbeInterval, Value: "300"},    // 或每5分钟至少探测一次
 		{Key: SettingKeyHealthTimeoutRateThreshold, Value: "20"},      // 自动超时率>=20%时放宽超时
-		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"},   // 默认关闭健康粘性检查（0=任何成功都粘住）
+		{Key: SettingKeyHealthSlowModelKeywords, Value: "thinking,opus,reasoning,long-context,long_context,200k,1m"},
+		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"}, // 默认关闭健康粘性检查（0=任何成功都粘住）
 	}
 }
 
@@ -60,7 +64,7 @@ func (s *Setting) Validate() error {
 	case SettingKeyModelInfoUpdateInterval, SettingKeySyncLLMInterval, SettingKeyRelayLogKeepPeriod,
 		SettingKeyCircuitBreakerThreshold, SettingKeyCircuitBreakerCooldown, SettingKeyCircuitBreakerMaxCooldown,
 		SettingKeyStickyHealthyFirstTokenTimeout, SettingKeyHealthMinAdaptiveTimeout, SettingKeyHealthSlowModelMinTimeout,
-		SettingKeyHealthRecoveryProbeEvery, SettingKeyHealthTimeoutRateThreshold:
+		SettingKeyHealthRecoveryProbeEvery, SettingKeyHealthRecoveryProbeInterval, SettingKeyHealthTimeoutRateThreshold:
 		_, err := strconv.Atoi(s.Value)
 		if err != nil {
 			return fmt.Errorf("model info update interval must be an integer")
@@ -90,6 +94,8 @@ func (s *Setting) Validate() error {
 		if parsedURL.Host == "" {
 			return fmt.Errorf("proxy URL must have a host")
 		}
+		return nil
+	case SettingKeyHealthSlowModelKeywords:
 		return nil
 	}
 
