@@ -182,6 +182,27 @@ func TestHealthManager_GetTimeout(t *testing.T) {
 	t.Logf("Adaptive timeout: %v", timeout)
 }
 
+func TestHealthManager_HasAdaptiveTimeout(t *testing.T) {
+	config := DefaultHealthConfig()
+	config.MinSamplesForAdaptiveTimeout = 3
+	manager := NewHealthManager(config)
+
+	if manager.HasAdaptiveTimeout(1, 100, "gpt-4") {
+		t.Fatal("new channel should not have adaptive timeout")
+	}
+
+	manager.RecordSuccess(1, 100, "gpt-4", time.Second)
+	manager.RecordSuccess(1, 100, "gpt-4", time.Second)
+	if manager.HasAdaptiveTimeout(1, 100, "gpt-4") {
+		t.Fatal("insufficient samples should not have adaptive timeout")
+	}
+
+	manager.RecordSuccess(1, 100, "gpt-4", time.Second)
+	if !manager.HasAdaptiveTimeout(1, 100, "gpt-4") {
+		t.Fatal("sufficient samples should have adaptive timeout")
+	}
+}
+
 // TestHealthManager_Disable 测试禁用功能
 func TestHealthManager_Disable(t *testing.T) {
 	config := DefaultHealthConfig()

@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -218,6 +219,30 @@ func (m *HealthManager) GetTimeout(channelID int, keyID int, model string) time.
 	return health.GetTimeout()
 }
 
+// HasAdaptiveTimeout reports whether this key has enough observations to safely
+// enforce an adaptive first-token timeout. Missing or cold states should not add
+// a new timeout guard because older group config used 0 to mean no first-token
+// limit.
+func (m *HealthManager) HasAdaptiveTimeout(channelID int, keyID int, model string) bool {
+	if !m.enabled {
+		return false
+	}
+
+	key := HealthKey{
+		ChannelID: channelID,
+		KeyID:     keyID,
+		Model:     model,
+	}
+
+	health, ok := m.Get(key)
+	if !ok {
+		return false
+	}
+
+	stats := health.GetStats()
+	return stats.TotalCount >= int64(m.config.MinSamplesForAdaptiveTimeout)
+}
+
 // GetScore 获取健康度评分
 func (m *HealthManager) GetScore(channelID int, keyID int, model string) float64 {
 	if !m.enabled {
@@ -317,6 +342,10 @@ func outcomeFromTransportError(err error) HealthOutcome {
 
 	if err == context.Canceled {
 		return OutcomeClientCancel
+	}
+
+	if strings.Contains(err.Error(), "first token timeout") {
+		return OutcomeFirstTokenTimeout
 	}
 
 	return OutcomeNetworkError
