@@ -168,6 +168,11 @@
             "hint": "为空禁止跨域，* 允许所有",
             "example": "只允许指定域名: https://example.com,https://example2.com"
         },
+        "smartHealth": {
+            "label": "启用智能健康系统",
+            "description": "自动学习渠道延迟和稳定性，动态调整首字超时与渠道权重。",
+            "hint": "开启后，分组首字超时填 0 将使用自动计算；填写具体秒数时，该分组按手动首字超时执行。"
+        },
         "circuitBreaker": {
             "title": "熔断器配置",
             "threshold": {
@@ -374,10 +379,11 @@
             "matchRegexPlaceholder": "留空则默认按分组名称模糊匹配",
             "matchRegexInvalid": "正则无效",
             "firstTokenTimeOut": "首字超时",
-            "firstTokenTimeOutHint": "单位秒，仅流式响应起效，0 表示不限制",
+            "firstTokenTimeOutHint": "单位秒，仅流式响应起效。0 表示使用智能健康系统自动计算；填写具体秒数表示手动覆盖。",
             "sessionKeepTime": "会话保持",
             "sessionKeepTimeHint": "单位秒，会话期间保持使用同一渠道，0 表示禁用",
-            "items": "已选模型",
+            "items": "渠道列表",
+            "itemsHint": "排序仅作为初始参考：智能健康系统启用后会根据实时健康度自动分配流量；手动顺序主要用于冷启动、健康度相近或关闭智能健康系统时。",
             "addItem": "添加模型",
             "autoAdd": "自动添加",
             "clear": "清空",

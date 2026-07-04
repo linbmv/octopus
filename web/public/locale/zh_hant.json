@@ -168,6 +168,11 @@
             "hint": "為空禁止跨網域，* 允許所有",
             "example": "只允許指定域名: https://example.com,https://example2.com"
         },
+        "smartHealth": {
+            "label": "啟用智慧健康系統",
+            "description": "自動學習供應源延遲和穩定性，動態調整首字逾時與供應源權重。",
+            "hint": "開啟後，分組首字逾時填 0 將使用自動計算；填寫具體秒數時，該分組按手動首字逾時執行。"
+        },
         "circuitBreaker": {
             "title": "熔斷器配置",
             "threshold": {
@@ -374,10 +379,11 @@
             "matchRegexPlaceholder": "留空則預設按分組名稱模糊比對",
             "matchRegexInvalid": "正規無效",
             "firstTokenTimeOut": "首字逾時",
-            "firstTokenTimeOutHint": "單位秒，僅串流響應起效，0 表示不限制",
+            "firstTokenTimeOutHint": "單位秒，僅串流響應起效。0 表示使用智慧健康系統自動計算；填寫具體秒數表示手動覆蓋。",
             "sessionKeepTime": "會話保持",
             "sessionKeepTimeHint": "單位秒，會話期間保持使用同一供應源，0 表示停用",
-            "items": "已選模型",
+            "items": "供應源列表",
+            "itemsHint": "排序僅作為初始參考：智慧健康系統啟用後會根據即時健康度自動分配流量；手動順序主要用於冷啟動、健康度相近或關閉智慧健康系統時。",
             "addItem": "新增模型",
             "autoAdd": "自動新增",
             "clear": "清空",

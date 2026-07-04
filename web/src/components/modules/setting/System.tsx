@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Monitor, Globe, Clock, Shield, HelpCircle, X } from 'lucide-react';
+import { Monitor, Globe, Clock, Shield, HelpCircle, X, Activity } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useSettingList, useSetSetting, SettingKey } from '@/api/endpoints/setting';
 import { toast } from '@/components/common/Toast';
@@ -18,16 +19,19 @@ export function SettingSystem() {
     const [statsSaveInterval, setStatsSaveInterval] = useState('');
     const [corsAllowOrigins, setCorsAllowOrigins] = useState('');
     const [corsInputValue, setCorsInputValue] = useState('');
+    const [smartHealthEnabled, setSmartHealthEnabled] = useState(true);
 
     const initialProxyUrl = useRef('');
     const initialStatsSaveInterval = useRef('');
     const initialCorsAllowOrigins = useRef('');
+    const initialSmartHealthEnabled = useRef('true');
 
     useEffect(() => {
         if (settings) {
             const proxy = settings.find(s => s.key === SettingKey.ProxyURL);
             const interval = settings.find(s => s.key === SettingKey.StatsSaveInterval);
             const cors = settings.find(s => s.key === SettingKey.CORSAllowOrigins);
+            const smartHealth = settings.find(s => s.key === SettingKey.SmartHealthEnabled);
             if (proxy) {
                 queueMicrotask(() => setProxyUrl(proxy.value));
                 initialProxyUrl.current = proxy.value;
@@ -39,6 +43,10 @@ export function SettingSystem() {
             if (cors) {
                 queueMicrotask(() => setCorsAllowOrigins(cors.value));
                 initialCorsAllowOrigins.current = cors.value;
+            }
+            if (smartHealth) {
+                queueMicrotask(() => setSmartHealthEnabled(smartHealth.value === 'true'));
+                initialSmartHealthEnabled.current = smartHealth.value;
             }
         }
     }, [settings]);
@@ -55,9 +63,17 @@ export function SettingSystem() {
                     initialStatsSaveInterval.current = value;
                 } else if (key === SettingKey.CORSAllowOrigins) {
                     initialCorsAllowOrigins.current = value;
+                } else if (key === SettingKey.SmartHealthEnabled) {
+                    initialSmartHealthEnabled.current = value;
                 }
             }
         });
+    };
+
+    const handleSmartHealthToggle = (enabled: boolean) => {
+        const value = String(enabled);
+        setSmartHealthEnabled(enabled);
+        handleSave(SettingKey.SmartHealthEnabled, value, initialSmartHealthEnabled.current);
     };
 
     const corsAllowOriginsList = useMemo(() => {
@@ -149,6 +165,36 @@ export function SettingSystem() {
                     onBlur={() => handleSave('stats_save_interval', statsSaveInterval, initialStatsSaveInterval.current)}
                     placeholder={t('statsSaveInterval.placeholder')}
                     className="w-48 rounded-xl"
+                />
+            </div>
+
+            {/* 智能健康系统 */}
+            <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
+                    <Activity className="h-5 w-5 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium">{t('smartHealth.label')}</span>
+                            <TooltipProvider>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <HelpCircle className="size-4 text-muted-foreground cursor-help" />
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                        {t('smartHealth.hint')}
+                                    </TooltipContent>
+                                </Tooltip>
+                            </TooltipProvider>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                            {t('smartHealth.description')}
+                        </p>
+                    </div>
+                </div>
+                <Switch
+                    checked={smartHealthEnabled}
+                    onCheckedChange={handleSmartHealthToggle}
+                    aria-label={t('smartHealth.label')}
                 />
             </div>
 

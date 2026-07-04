@@ -426,6 +426,22 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 		})
 		balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 
+		// 获取首 token 延迟
+		firstTokenDuration := time.Duration(0)
+		if d, ok := span.FirstTokenDuration(); ok {
+			firstTokenDuration = d
+		}
+
+		// 记录健康事件
+		if smartHealthEnabled() && healthManager != nil {
+			healthManager.RecordSuccess(
+				ra.channel.ID,
+				ra.usedKey.ID,
+				ra.metrics.ActualModel,
+				firstTokenDuration,
+			)
+		}
+
 		// 慢成功不刷新 sticky（第二阶段健康粘性，默认关闭）
 		shouldSticky := true
 		firstTokenMs := int64(0)
@@ -444,9 +460,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 
 		// attempt 成功日志（第一阶段可观测性增强）
 		if firstTokenMs == 0 {
-			if d, ok := span.FirstTokenDuration(); ok {
-				firstTokenMs = d.Milliseconds()
-			}
+			firstTokenMs = firstTokenDuration.Milliseconds()
 		}
 		log.Infof("attempt %d/%d success: channel=%s(%d), key=%d, duration=%dms, first_token=%dms, sticky_updated=%t",
 			ra.iter.Index()+1, ra.iter.Len(),
@@ -467,6 +481,25 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 
 	// 使用完整的上游响应体进行智能错误分类
 	classification := errorclass.Classify(upstreamStatusCode, upstreamResponseBody)
+
+	// 获取首 token 延迟（如果有）
+	firstTokenDuration := time.Duration(0)
+	if d, ok := span.FirstTokenDuration(); ok {
+		firstTokenDuration = d
+	}
+
+	// 记录健康事件
+	if smartHealthEnabled() && healthManager != nil {
+		healthManager.RecordError(
+			ra.channel.ID,
+			ra.usedKey.ID,
+			ra.metrics.ActualModel,
+			&classification, // 传指针
+			upstreamStatusCode,
+			nil, // transportErr 在这里为 nil，在 forward() 中处理
+			firstTokenDuration,
+		)
+	}
 
 	// attempt 失败日志（第一阶段可观测性增强 + Phase 4 error_level）
 	log.Warnf("attempt %d/%d failed: channel=%s(%d), key=%d, duration=%dms, error_level=%s, error=%v",
@@ -743,6 +776,21 @@ func needsChatToCompactResponse(channelType llm.APIFormat, request *llm.Request)
 	return channelType == llm.APIFormatOpenAIChatCompletion && request != nil && request.RequestType == llm.RequestTypeCompact
 }
 
+func smartHealthEnabled() bool {
+	enabled, err := op.SettingGetBool(dbmodel.SettingKeySmartHealthEnabled)
+	return err == nil && enabled
+}
+
+func (ra *relayAttempt) firstTokenTimeout() time.Duration {
+	if ra.group.FirstTokenTimeOut > 0 {
+		return time.Duration(ra.group.FirstTokenTimeOut) * time.Second
+	}
+	if !smartHealthEnabled() || healthManager == nil {
+		return 0
+	}
+	return healthManager.GetTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
+}
+
 // forwardWithAdapter 用指定出站适配器执行一次完整的 pipeline 转发。
 // 抽出此方法是为了支持同一渠道内的端点级降级（responses/compact → responses → chat）复用同一套转发逻辑。
 // needsChatToCompact 标记是否需要将 Chat 形态响应转换为 Compact 格式（端点降级场景）。
@@ -762,9 +810,10 @@ func (ra *relayAttempt) forwardWithAdapter(
 	fwdCtx := ctx
 	stopFirstTokenGuard := func() {}
 	wantStream := ra.internalRequest.Stream != nil && *ra.internalRequest.Stream
-	if sec := ra.group.FirstTokenTimeOut; sec > 0 && wantStream {
+	firstTokenTimeout := ra.firstTokenTimeout()
+	if firstTokenTimeout > 0 && wantStream {
 		var release func()
-		fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, time.Duration(sec)*time.Second)
+		fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, firstTokenTimeout)
 		defer release()
 	}
 
@@ -788,7 +837,7 @@ func (ra *relayAttempt) forwardWithAdapter(
 	if err != nil {
 		// 等待响应头阶段触发首字超时：此时尚未写客户端，返回明确错误以便切换下一通道。
 		if errors.Is(context.Cause(fwdCtx), errFirstTokenTimeout) {
-			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, fmt.Errorf("first token timeout (%ds)", ra.group.FirstTokenTimeOut)
+			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, fmt.Errorf("first token timeout (%ds)", int(firstTokenTimeout.Seconds()))
 		}
 		return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, err
 	}
@@ -796,7 +845,7 @@ func (ra *relayAttempt) forwardWithAdapter(
 		return 0, nil, fmt.Errorf("empty pipeline result")
 	}
 	if result.Stream {
-		if err := ra.writeStream(fwdCtx, stopFirstTokenGuard, result.EventStream); err != nil {
+		if err := ra.writeStream(fwdCtx, stopFirstTokenGuard, firstTokenTimeout, result.EventStream); err != nil {
 			return http.StatusOK, nil, err
 		}
 		return http.StatusOK, nil, nil
@@ -928,7 +977,7 @@ func (ra *relayAttempt) applyRawPassthrough(outboundRequest *httpclient.Request)
 
 // writeStream 把 pipeline 输出的客户端格式流写回请求方，并保留首 token 超时切换通道的行为。
 // stopFirstTokenGuard 在收到首个 token 后调用，停止 forward 阶段建立的首字超时计时器。
-func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard func(), clientStream streams.Stream[*httpclient.StreamEvent]) error {
+func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard func(), firstTokenTimeout time.Duration, clientStream streams.Stream[*httpclient.StreamEvent]) error {
 	if clientStream == nil {
 		return fmt.Errorf("empty pipeline stream")
 	}
@@ -994,7 +1043,7 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 		}
 	}()
 
-	firstTokenTimeoutSec := ra.group.FirstTokenTimeOut
+	firstTokenTimeoutSec := int(firstTokenTimeout.Seconds())
 
 	for {
 		select {

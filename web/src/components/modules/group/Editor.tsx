@@ -221,6 +221,10 @@ function SortSection({
                 </button>
             </div>
 
+            <p className="px-3 pt-2 text-xs leading-5 text-muted-foreground">
+                {t('form.itemsHint')}
+            </p>
+
             <div className="flex-1 min-h-0">
                 <MemberList
                     members={members}

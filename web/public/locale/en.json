@@ -168,6 +168,11 @@
             "hint": "Empty = deny all, * = allow all",
             "example": "Only allow specific domains: https://example.com,https://example2.com"
         },
+        "smartHealth": {
+            "label": "Enable Smart Health System",
+            "description": "Automatically learns channel latency and stability, then adjusts first-token timeout and channel weight.",
+            "hint": "When enabled, group first-token timeout 0 uses automatic calculation; a positive value manually overrides that group."
+        },
         "circuitBreaker": {
             "title": "Circuit Breaker",
             "threshold": {
@@ -374,10 +379,11 @@
             "matchRegexPlaceholder": "Leave empty to use default fuzzy match by group name",
             "matchRegexInvalid": "Invalid regex",
             "firstTokenTimeOut": "First Token Timeout",
-            "firstTokenTimeOutHint": "Unit: seconds, only effective for streaming response, 0 = no limit",
+            "firstTokenTimeOutHint": "Seconds, streaming only. 0 uses the smart health system; a positive value manually overrides it.",
             "sessionKeepTime": "Session Keep Time",
             "sessionKeepTimeHint": "Unit: seconds, keeps using the same channel within a session, 0 = disabled",
-            "items": "Selected Models",
+            "items": "Channel List",
+            "itemsHint": "Ordering is only an initial reference. With Smart Health enabled, traffic is adjusted by live health; manual order mainly applies during cold start, health ties, or when Smart Health is disabled.",
             "addItem": "Add Model",
             "autoAdd": "Auto Add",
             "clear": "Clear",
