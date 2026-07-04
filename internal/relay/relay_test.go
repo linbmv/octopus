@@ -48,13 +48,14 @@ func TestShouldProbeUnhealthyCandidateEveryNthCheck(t *testing.T) {
 	atomic.StoreUint64(&healthRecoveryProbeCounter, 0)
 	defer atomic.StoreUint64(&healthRecoveryProbeCounter, 0)
 
-	for i := 1; i < healthRecoveryProbeEvery; i++ {
+	probeEvery := healthRecoveryProbeEvery()
+	for i := 1; i < probeEvery; i++ {
 		if shouldProbeUnhealthyCandidate(0.25) {
-			t.Fatalf("probe triggered at check %d, want only every %d", i, healthRecoveryProbeEvery)
+			t.Fatalf("probe triggered at check %d, want only every %d", i, probeEvery)
 		}
 	}
 	if !shouldProbeUnhealthyCandidate(0.25) {
-		t.Fatalf("probe not triggered at check %d", healthRecoveryProbeEvery)
+		t.Fatalf("probe not triggered at check %d", probeEvery)
 	}
 	if shouldProbeUnhealthyCandidate(0.8) {
 		t.Fatal("healthy candidate should not trigger recovery probe")

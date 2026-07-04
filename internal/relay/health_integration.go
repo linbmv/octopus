@@ -3,6 +3,7 @@ package relay
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -19,10 +20,9 @@ var healthPersistence *health.HealthPersistence
 var healthPersistenceMu sync.Mutex
 var healthRecoveryProbeCounter uint64
 
-const healthRecoveryProbeEvery = 20
-
 // InitHealthSystem 初始化健康系统
 func InitHealthSystem(config health.HealthConfig) {
+	config = applyHealthSettings(config)
 	healthManager = health.NewHealthManager(config)
 	healthMetricsOnce.Do(func() {
 		healthMetrics = health.NewHealthMetrics("octopus")
@@ -53,12 +53,10 @@ func StartHealthPersistence() error {
 	healthPersistenceMu.Lock()
 	defer healthPersistenceMu.Unlock()
 
-	if healthManager == nil {
-		InitHealthSystem(health.DefaultHealthConfig())
-	}
 	if healthPersistence != nil {
 		return nil
 	}
+	InitHealthSystem(health.DefaultHealthConfig())
 
 	persistence, err := health.NewHealthPersistence(health.DefaultPersistenceConfig(), healthManager)
 	if err != nil {
@@ -120,7 +118,19 @@ func shouldProbeUnhealthyCandidate(score float64) bool {
 	if score <= 0 || score >= 0.5 {
 		return false
 	}
-	return atomic.AddUint64(&healthRecoveryProbeCounter, 1)%healthRecoveryProbeEvery == 0
+	probeEvery := healthRecoveryProbeEvery()
+	if probeEvery <= 0 {
+		return false
+	}
+	return atomic.AddUint64(&healthRecoveryProbeCounter, 1)%uint64(probeEvery) == 0
+}
+
+func healthRecoveryProbeEvery() int {
+	value, err := op.SettingGetInt(dbmodel.SettingKeyHealthRecoveryProbeEvery)
+	if err != nil || value <= 0 {
+		return 20
+	}
+	return value
 }
 
 func healthWeightedBalancerEnabled() bool {
@@ -129,6 +139,19 @@ func healthWeightedBalancerEnabled() bool {
 	}
 	enabled, err := op.SettingGetBool(dbmodel.SettingKeyHealthWeightedBalancerEnabled)
 	return err == nil && enabled
+}
+
+func applyHealthSettings(config health.HealthConfig) health.HealthConfig {
+	if value, err := op.SettingGetInt(dbmodel.SettingKeyHealthMinAdaptiveTimeout); err == nil && value > 0 {
+		config.MinAdaptiveTimeout = time.Duration(value) * time.Second
+	}
+	if value, err := op.SettingGetInt(dbmodel.SettingKeyHealthSlowModelMinTimeout); err == nil && value > 0 {
+		config.SlowModelMinAdaptiveTimeout = time.Duration(value) * time.Second
+	}
+	if value, err := op.SettingGetInt(dbmodel.SettingKeyHealthTimeoutRateThreshold); err == nil && value > 0 {
+		config.TimeoutRateBackoffThreshold = float64(value) / 100
+	}
+	return config
 }
 
 // init 默认初始化

@@ -27,6 +27,7 @@ type HealthStatusResponse struct {
 	Score     float64             `json:"score"`
 	Stats     HealthStatsResponse `json:"stats"`
 	Timeout   int64               `json:"adaptive_timeout_ms"`
+	Policy    TimeoutPolicy       `json:"timeout_policy"`
 }
 
 // HealthStatsResponse 统计信息响应
@@ -77,6 +78,7 @@ func (api *HealthAPI) HandleGetAll(w http.ResponseWriter, r *http.Request) {
 			Score:     health.GetScore(),
 			Stats:     convertStats(stats),
 			Timeout:   health.GetTimeout().Milliseconds(),
+			Policy:    health.GetTimeoutPolicy(),
 		})
 	}
 
@@ -130,6 +132,7 @@ func (api *HealthAPI) HandleGetByChannel(w http.ResponseWriter, r *http.Request)
 			Score:     health.GetScore(),
 			Stats:     convertStats(stats),
 			Timeout:   health.GetTimeout().Milliseconds(),
+			Policy:    health.GetTimeoutPolicy(),
 		})
 	}
 
@@ -197,6 +200,7 @@ func (api *HealthAPI) HandleGetSpecific(w http.ResponseWriter, r *http.Request) 
 		Score:     health.GetScore(),
 		Stats:     convertStats(stats),
 		Timeout:   health.GetTimeout().Milliseconds(),
+		Policy:    health.GetTimeoutPolicy(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -15,13 +15,41 @@ func TestSettingValidateHealthWeightedBalancerEnabled(t *testing.T) {
 }
 
 func TestDefaultSettingsIncludeHealthWeightedBalancerEnabled(t *testing.T) {
+	want := map[SettingKey]string{
+		SettingKeyHealthWeightedBalancerEnabled: "true",
+		SettingKeyHealthMinAdaptiveTimeout:      "15",
+		SettingKeyHealthSlowModelMinTimeout:     "25",
+		SettingKeyHealthRecoveryProbeEvery:      "20",
+		SettingKeyHealthTimeoutRateThreshold:    "20",
+	}
 	for _, setting := range DefaultSettings() {
-		if setting.Key == SettingKeyHealthWeightedBalancerEnabled {
-			if setting.Value != "true" {
-				t.Fatalf("default value = %q, want true", setting.Value)
+		if value, ok := want[setting.Key]; ok {
+			if setting.Value != value {
+				t.Fatalf("%s default value = %q, want %q", setting.Key, setting.Value, value)
 			}
-			return
+			delete(want, setting.Key)
 		}
 	}
-	t.Fatal("health weighted balancer setting missing from defaults")
+	if len(want) > 0 {
+		t.Fatalf("missing defaults: %+v", want)
+	}
+}
+
+func TestSettingValidateHealthPolicyIntegers(t *testing.T) {
+	keys := []SettingKey{
+		SettingKeyHealthMinAdaptiveTimeout,
+		SettingKeyHealthSlowModelMinTimeout,
+		SettingKeyHealthRecoveryProbeEvery,
+		SettingKeyHealthTimeoutRateThreshold,
+	}
+	for _, key := range keys {
+		valid := Setting{Key: key, Value: "10"}
+		if err := valid.Validate(); err != nil {
+			t.Fatalf("%s valid integer error = %v", key, err)
+		}
+		invalid := Setting{Key: key, Value: "bad"}
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("%s invalid integer error = nil", key)
+		}
+	}
 }

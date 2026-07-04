@@ -145,6 +145,14 @@ type HealthConfig struct {
 	EstimatorConfig EstimatorConfig
 }
 
+type TimeoutPolicy struct {
+	Source             string  `json:"source"`
+	MinTimeoutMS       int64   `json:"min_timeout_ms"`
+	SlowModelProfile   bool    `json:"slow_model_profile"`
+	TimeoutRate        float64 `json:"timeout_rate"`
+	TimeoutRateBackoff bool    `json:"timeout_rate_backoff"`
+}
+
 // DefaultHealthConfig 默认配置
 func DefaultHealthConfig() HealthConfig {
 	return HealthConfig{
@@ -411,6 +419,31 @@ func (h *ChannelHealth) GetTimeout() time.Duration {
 	}
 
 	return timeout
+}
+
+func (h *ChannelHealth) GetTimeoutPolicy() TimeoutPolicy {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	slowModel := isSlowFirstTokenModel(h.Key.Model)
+	minTimeout := h.Config.MinAdaptiveTimeout
+	if slowModel && h.Config.SlowModelMinAdaptiveTimeout > minTimeout {
+		minTimeout = h.Config.SlowModelMinAdaptiveTimeout
+	}
+	timeoutRate := h.timeoutRateLocked()
+	backoff := timeoutRate >= h.Config.TimeoutRateBackoffThreshold && h.Config.TimeoutRateBackoffMultiplier > 0
+	source := "adaptive"
+	if h.Stats.TotalCount < int64(h.Config.MinSamplesForAdaptiveTimeout) {
+		source = "cold_start"
+	}
+
+	return TimeoutPolicy{
+		Source:             source,
+		MinTimeoutMS:       minTimeout.Milliseconds(),
+		SlowModelProfile:   slowModel,
+		TimeoutRate:        timeoutRate,
+		TimeoutRateBackoff: backoff,
+	}
 }
 
 func (h *ChannelHealth) timeoutRateLocked() float64 {

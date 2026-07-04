@@ -24,6 +24,10 @@ export const SettingKey = {
     CircuitBreakerMaxCooldown: 'circuit_breaker_max_cooldown',
     SmartHealthEnabled: 'smart_health_enabled',
     HealthWeightedBalancerEnabled: 'health_weighted_balancer_enabled',
+    HealthMinAdaptiveTimeout: 'health_min_adaptive_timeout',
+    HealthSlowModelMinTimeout: 'health_slow_model_min_timeout',
+    HealthRecoveryProbeEvery: 'health_recovery_probe_every',
+    HealthTimeoutRateThreshold: 'health_timeout_rate_threshold',
 } as const;
 
 /**

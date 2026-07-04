@@ -21,6 +21,10 @@ const (
 	SettingKeyCircuitBreakerMaxCooldown      SettingKey = "circuit_breaker_max_cooldown"       // 熔断最大冷却时间（秒），指数退避上限
 	SettingKeySmartHealthEnabled             SettingKey = "smart_health_enabled"               // 是否启用智能健康系统
 	SettingKeyHealthWeightedBalancerEnabled  SettingKey = "health_weighted_balancer_enabled"   // 是否启用健康权重参与加权调度
+	SettingKeyHealthMinAdaptiveTimeout       SettingKey = "health_min_adaptive_timeout"        // 自动首字超时下限（秒）
+	SettingKeyHealthSlowModelMinTimeout      SettingKey = "health_slow_model_min_timeout"      // 慢首字模型自动超时下限（秒）
+	SettingKeyHealthRecoveryProbeEvery       SettingKey = "health_recovery_probe_every"        // 低健康候选恢复探测频率（每 N 次）
+	SettingKeyHealthTimeoutRateThreshold     SettingKey = "health_timeout_rate_threshold"      // 自动超时率放宽阈值（百分比）
 	SettingKeyStickyHealthyFirstTokenTimeout SettingKey = "sticky_healthy_first_token_timeout" // 粘性健康首token阈值（秒），0=关闭健康粘性检查
 )
 
@@ -43,6 +47,10 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyCircuitBreakerMaxCooldown, Value: "600"},      // 默认最大冷却600秒（10分钟）
 		{Key: SettingKeySmartHealthEnabled, Value: "true"},            // 默认启用智能健康系统
 		{Key: SettingKeyHealthWeightedBalancerEnabled, Value: "true"}, // 默认启用健康权重参与加权调度
+		{Key: SettingKeyHealthMinAdaptiveTimeout, Value: "15"},        // 自动首字超时不低于15秒
+		{Key: SettingKeyHealthSlowModelMinTimeout, Value: "25"},       // thinking/opus等慢首字模型不低于25秒
+		{Key: SettingKeyHealthRecoveryProbeEvery, Value: "20"},        // 低健康候选每20次评估探测一次
+		{Key: SettingKeyHealthTimeoutRateThreshold, Value: "20"},      // 自动超时率>=20%时放宽超时
 		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"},   // 默认关闭健康粘性检查（0=任何成功都粘住）
 	}
 }
@@ -51,7 +59,8 @@ func (s *Setting) Validate() error {
 	switch s.Key {
 	case SettingKeyModelInfoUpdateInterval, SettingKeySyncLLMInterval, SettingKeyRelayLogKeepPeriod,
 		SettingKeyCircuitBreakerThreshold, SettingKeyCircuitBreakerCooldown, SettingKeyCircuitBreakerMaxCooldown,
-		SettingKeyStickyHealthyFirstTokenTimeout:
+		SettingKeyStickyHealthyFirstTokenTimeout, SettingKeyHealthMinAdaptiveTimeout, SettingKeyHealthSlowModelMinTimeout,
+		SettingKeyHealthRecoveryProbeEvery, SettingKeyHealthTimeoutRateThreshold:
 		_, err := strconv.Atoi(s.Value)
 		if err != nil {
 			return fmt.Errorf("model info update interval must be an integer")

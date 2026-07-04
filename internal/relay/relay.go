@@ -606,6 +606,17 @@ type firstTokenTimeoutConfig struct {
 	Source   firstTokenTimeoutSource
 }
 
+func (c firstTokenTimeoutConfig) Reason() string {
+	switch c.Source {
+	case firstTokenTimeoutManual:
+		return "manual_first_token_timeout"
+	case firstTokenTimeoutAdaptive:
+		return "auto_first_token_timeout"
+	default:
+		return "first_token_timeout"
+	}
+}
+
 func isFirstTokenTimeoutError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), errFirstTokenTimeout.Error())
 }
@@ -870,7 +881,7 @@ func (ra *relayAttempt) forwardWithAdapter(
 		// 等待响应头阶段触发首字超时：此时尚未写客户端，返回明确错误以便切换下一通道。
 		if errors.Is(context.Cause(fwdCtx), errFirstTokenTimeout) {
 			ra.recordFirstTokenTimeout(firstTokenTimeout)
-			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, fmt.Errorf("first token timeout (%ds)", int(firstTokenTimeout.Duration.Seconds()))
+			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, fmt.Errorf("%s (%ds)", firstTokenTimeout.Reason(), int(firstTokenTimeout.Duration.Seconds()))
 		}
 		return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, err
 	}
@@ -1095,10 +1106,10 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 			// 首字超时在收到首个 token 前触发：返回错误以切换下一通道。
 			// 其余取消（客户端断开、或首 token 之后的取消）按正常停止处理，不再切换通道。
 			if firstToken && errors.Is(context.Cause(ctx), errFirstTokenTimeout) {
-				log.Warnf("first token timeout (%ds), switching channel", firstTokenTimeoutSec)
+				log.Warnf("%s (%ds), switching channel", firstTokenTimeout.Reason(), firstTokenTimeoutSec)
 				ra.recordFirstTokenTimeout(firstTokenTimeout)
 				_ = clientStream.Close()
-				return fmt.Errorf("first token timeout (%ds)", firstTokenTimeoutSec)
+				return fmt.Errorf("%s (%ds)", firstTokenTimeout.Reason(), firstTokenTimeoutSec)
 			}
 			log.Infof("client disconnected, stopping stream")
 			_ = clientStream.Close()
