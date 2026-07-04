@@ -232,19 +232,8 @@ func (p *HealthPersistence) Load() error {
 			}
 		}
 
-		// 恢复统计（只恢复计数器，不恢复滑动窗口）
-		health.mu.Lock()
-		health.Stats.TotalCount = stateSnapshot.Stats.TotalCount
-		health.Stats.SuccessCount = stateSnapshot.Stats.SuccessCount
-		health.Stats.TimeoutCount = stateSnapshot.Stats.TimeoutCount
-		health.Stats.NetworkCount = stateSnapshot.Stats.NetworkCount
-		health.Stats.CancelCount = stateSnapshot.Stats.CancelCount
-		health.Stats.RateLimitCount = stateSnapshot.Stats.RateLimitCount
-		health.Stats.ModelErrorCount = stateSnapshot.Stats.ModelErrorCount
-		health.Stats.FormatCount = stateSnapshot.Stats.FormatCount
-		health.Stats.KeyErrorCount = stateSnapshot.Stats.KeyErrorCount
-		health.Stats.LastEventAt = stateSnapshot.Stats.LastEventAt
-		health.mu.Unlock()
+
+		health.RestoreStats(stateSnapshot.Stats, stateSnapshot.Score)
 
 		count++
 	}

@@ -252,6 +252,43 @@ func TestHealthPersistence_EstimatorRestore(t *testing.T) {
 	}
 }
 
+func TestHealthPersistence_RestoresHealthScore(t *testing.T) {
+	tmpDir := t.TempDir()
+	config := DefaultHealthConfig()
+	manager := NewHealthManager(config)
+
+	for i := 0; i < 10; i++ {
+		manager.RecordTimeout(1, 100, "gpt-4", 10*time.Second)
+	}
+	originalScore := manager.GetScore(1, 100, "gpt-4")
+	if originalScore >= 0.5 {
+		t.Fatalf("test setup score = %f, want degraded score", originalScore)
+	}
+
+	persistConfig := PersistenceConfig{Enabled: true, DataDir: tmpDir, Interval: time.Minute, MaxSnapshots: 3}
+	persistence, err := NewHealthPersistence(persistConfig, manager)
+	if err != nil {
+		t.Fatalf("NewHealthPersistence() error = %v", err)
+	}
+	if err := persistence.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	manager2 := NewHealthManager(config)
+	persistence2, err := NewHealthPersistence(persistConfig, manager2)
+	if err != nil {
+		t.Fatalf("NewHealthPersistence() error = %v", err)
+	}
+	if err := persistence2.Load(); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	restoredScore := manager2.GetScore(1, 100, "gpt-4")
+	if restoredScore >= 0.5 {
+		t.Fatalf("restored score = %f, want degraded score", restoredScore)
+	}
+}
+
 // TestHealthPersistence_NoSnapshotFound 测试没有快照时的行为
 func TestHealthPersistence_NoSnapshotFound(t *testing.T) {
 	tmpDir := t.TempDir()

@@ -70,6 +70,21 @@ func TestHealthManager_RecordError(t *testing.T) {
 	}
 }
 
+func TestHealthManager_RecordErrorNilClassification(t *testing.T) {
+	manager := NewHealthManager(DefaultHealthConfig())
+
+	manager.RecordError(1, 100, "gpt-4", nil, 0, nil, 0)
+
+	health, ok := manager.Get(HealthKey{ChannelID: 1, KeyID: 100, Model: "gpt-4"})
+	if !ok {
+		t.Fatal("expected health state")
+	}
+	stats := health.GetStats()
+	if stats.TotalCount != 1 || stats.SuccessRate != 0 {
+		t.Fatalf("stats = %+v, want one channel failure", stats)
+	}
+}
+
 // TestHealthManager_ClientCancelIgnored 测试客户端取消不惩罚渠道
 func TestHealthManager_ClientCancelIgnored(t *testing.T) {
 	config := DefaultHealthConfig()

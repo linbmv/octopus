@@ -405,3 +405,19 @@ func (h *ChannelHealth) GetStats() HealthStats {
 
 	return stats
 }
+
+// RestoreStats replaces persisted counters and estimator-derived values, then
+// recomputes derived score fields while holding the health lock.
+func (h *ChannelHealth) RestoreStats(stats HealthStats, score float64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	estimator := h.Stats.Estimator
+	h.Stats = stats
+	h.Stats.Estimator = estimator
+	if h.Stats.RecentResults == nil {
+		h.Stats.RecentResults = make([]bool, 0, h.Config.WindowSize)
+	}
+	h.Score = score
+	h.recomputeLocked()
+}

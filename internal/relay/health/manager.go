@@ -135,6 +135,10 @@ func (m *HealthManager) RecordError(
 		return
 	}
 
+	if classification == nil {
+		classification = &errorclass.Classification{Level: errorclass.ErrorLevelChannel, Reason: "missing error classification"}
+	}
+
 	// 处理 HTTP 响应错误
 	outcome := mapToOutcome(classification, statusCode)
 
