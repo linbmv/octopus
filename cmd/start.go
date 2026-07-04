@@ -4,6 +4,7 @@ import (
 	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/server"
 	"github.com/bestruirui/octopus/internal/task"
 	"github.com/bestruirui/octopus/internal/utils/log"
@@ -40,6 +41,12 @@ var startCmd = &cobra.Command{
 			log.Errorf("user init error: %v", err)
 			return
 		}
+
+		if err := relay.StartHealthPersistence(); err != nil {
+			log.Errorf("health persistence init error: %v", err)
+			return
+		}
+		shutdown.Register(relay.StopHealthPersistence)
 
 		if err := server.Start(); err != nil {
 			log.Errorf("server start error: %v", err)

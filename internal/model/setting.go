@@ -20,6 +20,7 @@ const (
 	SettingKeyCircuitBreakerCooldown         SettingKey = "circuit_breaker_cooldown"           // 熔断基础冷却时间（秒）
 	SettingKeyCircuitBreakerMaxCooldown      SettingKey = "circuit_breaker_max_cooldown"       // 熔断最大冷却时间（秒），指数退避上限
 	SettingKeySmartHealthEnabled             SettingKey = "smart_health_enabled"               // 是否启用智能健康系统
+	SettingKeyHealthWeightedBalancerEnabled  SettingKey = "health_weighted_balancer_enabled"   // 是否启用健康权重参与加权调度
 	SettingKeyStickyHealthyFirstTokenTimeout SettingKey = "sticky_healthy_first_token_timeout" // 粘性健康首token阈值（秒），0=关闭健康粘性检查
 )
 
@@ -31,17 +32,18 @@ type Setting struct {
 func DefaultSettings() []Setting {
 	return []Setting{
 		{Key: SettingKeyProxyURL, Value: ""},
-		{Key: SettingKeyStatsSaveInterval, Value: "10"},             // 默认10分钟保存一次统计信息
-		{Key: SettingKeyCORSAllowOrigins, Value: ""},                // CORS 默认不允许跨域，设置为 "*" 才允许所有来源
-		{Key: SettingKeyModelInfoUpdateInterval, Value: "24"},       // 默认24小时更新一次模型信息
-		{Key: SettingKeySyncLLMInterval, Value: "24"},               // 默认24小时同步一次LLM
-		{Key: SettingKeyRelayLogKeepPeriod, Value: "7"},             // 默认日志保存7天
-		{Key: SettingKeyRelayLogKeepEnabled, Value: "true"},         // 默认保留历史日志
-		{Key: SettingKeyCircuitBreakerThreshold, Value: "5"},        // 默认连续失败5次触发熔断
-		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},        // 默认基础冷却60秒
-		{Key: SettingKeyCircuitBreakerMaxCooldown, Value: "600"},    // 默认最大冷却600秒（10分钟）
-		{Key: SettingKeySmartHealthEnabled, Value: "true"},          // 默认启用智能健康系统
-		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"}, // 默认关闭健康粘性检查（0=任何成功都粘住）
+		{Key: SettingKeyStatsSaveInterval, Value: "10"},               // 默认10分钟保存一次统计信息
+		{Key: SettingKeyCORSAllowOrigins, Value: ""},                  // CORS 默认不允许跨域，设置为 "*" 才允许所有来源
+		{Key: SettingKeyModelInfoUpdateInterval, Value: "24"},         // 默认24小时更新一次模型信息
+		{Key: SettingKeySyncLLMInterval, Value: "24"},                 // 默认24小时同步一次LLM
+		{Key: SettingKeyRelayLogKeepPeriod, Value: "7"},               // 默认日志保存7天
+		{Key: SettingKeyRelayLogKeepEnabled, Value: "true"},           // 默认保留历史日志
+		{Key: SettingKeyCircuitBreakerThreshold, Value: "5"},          // 默认连续失败5次触发熔断
+		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},          // 默认基础冷却60秒
+		{Key: SettingKeyCircuitBreakerMaxCooldown, Value: "600"},      // 默认最大冷却600秒（10分钟）
+		{Key: SettingKeySmartHealthEnabled, Value: "true"},            // 默认启用智能健康系统
+		{Key: SettingKeyHealthWeightedBalancerEnabled, Value: "true"}, // 默认启用健康权重参与加权调度
+		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"},   // 默认关闭健康粘性检查（0=任何成功都粘住）
 	}
 }
 
@@ -55,7 +57,7 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("model info update interval must be an integer")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeySmartHealthEnabled:
+	case SettingKeyRelayLogKeepEnabled, SettingKeySmartHealthEnabled, SettingKeyHealthWeightedBalancerEnabled:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("%s must be true or false", s.Key)
 		}

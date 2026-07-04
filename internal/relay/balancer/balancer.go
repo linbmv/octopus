@@ -13,6 +13,39 @@ import (
 
 var roundRobinCounter uint64
 
+// HealthWeightFunc returns a multiplicative health factor for a weighted
+// candidate. A value <= 0 keeps the candidate selectable with a tiny weight so
+// a bad health sample cannot permanently starve recovery probes.
+type HealthWeightFunc func(item model.GroupItem) float64
+
+var healthWeightFunc atomic.Value
+
+// SetHealthWeightFunc wires optional health-aware weighting into the weighted
+// balancer without making the balancer package depend on relay/runtime state.
+func SetHealthWeightFunc(fn HealthWeightFunc) {
+	if fn == nil {
+		healthWeightFunc.Store(HealthWeightFunc(nil))
+		return
+	}
+	healthWeightFunc.Store(fn)
+}
+
+func healthWeight(item model.GroupItem) float64 {
+	value := healthWeightFunc.Load()
+	if value == nil {
+		return 1
+	}
+	fn, ok := value.(HealthWeightFunc)
+	if !ok || fn == nil {
+		return 1
+	}
+	weight := fn(item)
+	if weight <= 0 {
+		return 0.01
+	}
+	return weight
+}
+
 // Balancer 根据负载均衡模式选择通道
 type Balancer interface {
 	// Candidates 返回按策略排序的候选列表
@@ -99,15 +132,15 @@ func (b *Weighted) Candidates(items []model.GroupItem) []model.GroupItem {
 		return result
 	}
 
-	totalWeight := 0
-	weights := make([]int, n)
+	totalWeight := 0.0
+	weights := make([]float64, n)
 	for i, item := range items {
 		w := item.Weight
 		if w <= 0 {
 			w = 1
 		}
-		weights[i] = w
-		totalWeight += w
+		weights[i] = float64(w) * healthWeight(item)
+		totalWeight += weights[i]
 	}
 	if totalWeight <= 0 {
 		return sortByPriority(items)
@@ -124,17 +157,18 @@ func (b *Weighted) Candidates(items []model.GroupItem) []model.GroupItem {
 	}
 
 	selectedIdx := 0
-	selectedWeight := 0
+	selectedWeight := 0.0
 	for i, item := range items {
 		itemKey := weightedItemKey(item)
-		currentWeights[itemKey] += weights[i]
+		currentWeights[itemKey] += int(weights[i] * 1000)
 		current := currentWeights[itemKey]
-		if i == 0 || current > selectedWeight || (current == selectedWeight && item.ID < items[selectedIdx].ID) {
+		currentFloat := float64(current)
+		if i == 0 || currentFloat > selectedWeight || (currentFloat == selectedWeight && item.ID < items[selectedIdx].ID) {
 			selectedIdx = i
-			selectedWeight = current
+			selectedWeight = currentFloat
 		}
 	}
-	currentWeights[weightedItemKey(items[selectedIdx])] -= totalWeight
+	currentWeights[weightedItemKey(items[selectedIdx])] -= int(totalWeight * 1000)
 
 	result := make([]model.GroupItem, n)
 	result[0] = items[selectedIdx]

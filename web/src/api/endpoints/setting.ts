@@ -23,6 +23,7 @@ export const SettingKey = {
     CircuitBreakerCooldown: 'circuit_breaker_cooldown',
     CircuitBreakerMaxCooldown: 'circuit_breaker_max_cooldown',
     SmartHealthEnabled: 'smart_health_enabled',
+    HealthWeightedBalancerEnabled: 'health_weighted_balancer_enabled',
 } as const;
 
 /**

@@ -477,7 +477,9 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 		WaitTime:      span.Duration().Milliseconds(),
 		RequestFailed: 1,
 	})
-	balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+	if !ra.isAdaptiveFirstTokenTimeout(fwdErr) {
+		balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+	}
 
 	// 使用完整的上游响应体进行智能错误分类。
 	// 本地首字超时不是上游 2xx 成功，即使 pipeline 已经建立了流响应，也必须按渠道级超时处理。
@@ -590,6 +592,19 @@ func parseRequest(c *gin.Context, inboundType llm.APIFormat, inAdapter transform
 
 // errFirstTokenTimeout 标记首字超时触发的 context 取消原因，用于和客户端断开等其他取消区分。
 var errFirstTokenTimeout = errors.New("first token timeout")
+
+type firstTokenTimeoutSource int
+
+const (
+	firstTokenTimeoutDisabled firstTokenTimeoutSource = iota
+	firstTokenTimeoutManual
+	firstTokenTimeoutAdaptive
+)
+
+type firstTokenTimeoutConfig struct {
+	Duration time.Duration
+	Source   firstTokenTimeoutSource
+}
 
 func isFirstTokenTimeoutError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), errFirstTokenTimeout.Error())
@@ -789,17 +804,23 @@ func smartHealthEnabled() bool {
 	return err == nil && enabled
 }
 
-func (ra *relayAttempt) firstTokenTimeout() time.Duration {
+func (ra *relayAttempt) firstTokenTimeout() firstTokenTimeoutConfig {
 	if ra.group.FirstTokenTimeOut > 0 {
-		return time.Duration(ra.group.FirstTokenTimeOut) * time.Second
+		return firstTokenTimeoutConfig{
+			Duration: time.Duration(ra.group.FirstTokenTimeOut) * time.Second,
+			Source:   firstTokenTimeoutManual,
+		}
 	}
 	if !smartHealthEnabled() || healthManager == nil {
-		return 0
+		return firstTokenTimeoutConfig{}
 	}
 	if !healthManager.HasAdaptiveTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel) {
-		return 0
+		return firstTokenTimeoutConfig{}
 	}
-	return healthManager.GetTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
+	return firstTokenTimeoutConfig{
+		Duration: healthManager.GetTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel),
+		Source:   firstTokenTimeoutAdaptive,
+	}
 }
 
 // forwardWithAdapter 用指定出站适配器执行一次完整的 pipeline 转发。
@@ -822,9 +843,9 @@ func (ra *relayAttempt) forwardWithAdapter(
 	stopFirstTokenGuard := func() {}
 	wantStream := ra.internalRequest.Stream != nil && *ra.internalRequest.Stream
 	firstTokenTimeout := ra.firstTokenTimeout()
-	if firstTokenTimeout > 0 && wantStream {
+	if firstTokenTimeout.Duration > 0 && wantStream {
 		var release func()
-		fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, firstTokenTimeout)
+		fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, firstTokenTimeout.Duration)
 		defer release()
 	}
 
@@ -849,7 +870,7 @@ func (ra *relayAttempt) forwardWithAdapter(
 		// 等待响应头阶段触发首字超时：此时尚未写客户端，返回明确错误以便切换下一通道。
 		if errors.Is(context.Cause(fwdCtx), errFirstTokenTimeout) {
 			ra.recordFirstTokenTimeout(firstTokenTimeout)
-			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, fmt.Errorf("first token timeout (%ds)", int(firstTokenTimeout.Seconds()))
+			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, fmt.Errorf("first token timeout (%ds)", int(firstTokenTimeout.Duration.Seconds()))
 		}
 		return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, err
 	}
@@ -892,11 +913,15 @@ func (ra *relayAttempt) forwardWithAdapter(
 	return statusCode, body, nil
 }
 
-func (ra *relayAttempt) recordFirstTokenTimeout(timeout time.Duration) {
-	if timeout <= 0 || !smartHealthEnabled() || healthManager == nil {
+func (ra *relayAttempt) recordFirstTokenTimeout(timeout firstTokenTimeoutConfig) {
+	if timeout.Source != firstTokenTimeoutAdaptive || timeout.Duration <= 0 || !smartHealthEnabled() || healthManager == nil {
 		return
 	}
-	healthManager.RecordTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel, timeout)
+	healthManager.RecordTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel, timeout.Duration)
+}
+
+func (ra *relayAttempt) isAdaptiveFirstTokenTimeout(err error) bool {
+	return isFirstTokenTimeoutError(err) && ra.firstTokenTimeout().Source == firstTokenTimeoutAdaptive
 }
 
 func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.Request) {
@@ -996,7 +1021,7 @@ func (ra *relayAttempt) applyRawPassthrough(outboundRequest *httpclient.Request)
 
 // writeStream 把 pipeline 输出的客户端格式流写回请求方，并保留首 token 超时切换通道的行为。
 // stopFirstTokenGuard 在收到首个 token 后调用，停止 forward 阶段建立的首字超时计时器。
-func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard func(), firstTokenTimeout time.Duration, clientStream streams.Stream[*httpclient.StreamEvent]) error {
+func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard func(), firstTokenTimeout firstTokenTimeoutConfig, clientStream streams.Stream[*httpclient.StreamEvent]) error {
 	if clientStream == nil {
 		return fmt.Errorf("empty pipeline stream")
 	}
@@ -1062,7 +1087,7 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 		}
 	}()
 
-	firstTokenTimeoutSec := int(firstTokenTimeout.Seconds())
+	firstTokenTimeoutSec := int(firstTokenTimeout.Duration.Seconds())
 
 	for {
 		select {

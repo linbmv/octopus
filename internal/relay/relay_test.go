@@ -29,6 +29,20 @@ func newTestAttempt(channel *dbmodel.Channel) *relayAttempt {
 	}
 }
 
+func TestFirstTokenTimeoutManualSourceTakesPrecedence(t *testing.T) {
+	ra := newTestAttempt(&dbmodel.Channel{ID: 1})
+	ra.group = dbmodel.Group{FirstTokenTimeOut: 12}
+	ra.usedKey = dbmodel.ChannelKey{ID: 10}
+
+	got := ra.firstTokenTimeout()
+	if got.Source != firstTokenTimeoutManual {
+		t.Fatalf("timeout source = %v, want manual", got.Source)
+	}
+	if got.Duration != 12*time.Second {
+		t.Fatalf("timeout duration = %v, want 12s", got.Duration)
+	}
+}
+
 func TestApplyChannelRequestOptionsOverridesJSONBody(t *testing.T) {
 	override := `{"temperature":0.5,"top_p":0.9}`
 	ra := newTestAttempt(&dbmodel.Channel{ParamOverride: &override})
