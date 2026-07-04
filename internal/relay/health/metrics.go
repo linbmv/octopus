@@ -15,10 +15,10 @@ type HealthMetrics struct {
 	// 成功率
 	successRate *prometheus.GaugeVec
 
-	// 请求计数
-	totalRequests   *prometheus.CounterVec
-	successRequests *prometheus.CounterVec
-	failedRequests  *prometheus.CounterVec
+	// 请求计数快照
+	totalRequests   *prometheus.GaugeVec
+	successRequests *prometheus.GaugeVec
+	failedRequests  *prometheus.GaugeVec
 
 	// 延迟分位数
 	p50Latency *prometheus.GaugeVec
@@ -31,13 +31,13 @@ type HealthMetrics struct {
 	// 自适应超时
 	adaptiveTimeout *prometheus.GaugeVec
 
-	// 事件类型计数
-	timeoutCount               *prometheus.CounterVec
+	// 事件类型计数快照
+	timeoutCount               *prometheus.GaugeVec
 	autoFirstTokenTimeoutCount *prometheus.GaugeVec
-	networkErrCount            *prometheus.CounterVec
-	rateLimitCount             *prometheus.CounterVec
-	modelErrCount              *prometheus.CounterVec
-	keyErrCount                *prometheus.CounterVec
+	networkErrCount            *prometheus.GaugeVec
+	rateLimitCount             *prometheus.GaugeVec
+	modelErrCount              *prometheus.GaugeVec
+	keyErrCount                *prometheus.GaugeVec
 
 	// 连续计数器
 	consecutiveSuccess *prometheus.GaugeVec
@@ -71,32 +71,32 @@ func NewHealthMetrics(namespace string) *HealthMetrics {
 			[]string{"channel_id", "key_id", "model"},
 		),
 
-		totalRequests: promauto.NewCounterVec(
-			prometheus.CounterOpts{
+		totalRequests: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "requests_total",
-				Help:      "Total number of requests",
+				Name:      "requests_count",
+				Help:      "Current health snapshot total request count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
 
-		successRequests: promauto.NewCounterVec(
-			prometheus.CounterOpts{
+		successRequests: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "requests_success_total",
-				Help:      "Total number of successful requests",
+				Name:      "requests_success_count",
+				Help:      "Current health snapshot successful request count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
 
-		failedRequests: promauto.NewCounterVec(
-			prometheus.CounterOpts{
+		failedRequests: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "requests_failed_total",
-				Help:      "Total number of failed requests",
+				Name:      "requests_failed_count",
+				Help:      "Current health snapshot failed request count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
@@ -151,12 +151,12 @@ func NewHealthMetrics(namespace string) *HealthMetrics {
 			[]string{"channel_id", "key_id", "model"},
 		),
 
-		timeoutCount: promauto.NewCounterVec(
-			prometheus.CounterOpts{
+		timeoutCount: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "timeout_total",
-				Help:      "Total number of timeout events",
+				Name:      "timeout_count",
+				Help:      "Current health snapshot timeout event count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
@@ -165,48 +165,48 @@ func NewHealthMetrics(namespace string) *HealthMetrics {
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "auto_first_token_timeout_total",
-				Help:      "Total number of automatic adaptive first-token timeout events",
+				Name:      "auto_first_token_timeout_count",
+				Help:      "Current health snapshot automatic adaptive first-token timeout count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
 
-		networkErrCount: promauto.NewCounterVec(
-			prometheus.CounterOpts{
+		networkErrCount: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "network_error_total",
-				Help:      "Total number of network errors",
+				Name:      "network_error_count",
+				Help:      "Current health snapshot network error count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
 
-		rateLimitCount: promauto.NewCounterVec(
-			prometheus.CounterOpts{
+		rateLimitCount: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "rate_limit_total",
-				Help:      "Total number of rate limit events",
+				Name:      "rate_limit_count",
+				Help:      "Current health snapshot rate limit event count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
 
-		modelErrCount: promauto.NewCounterVec(
-			prometheus.CounterOpts{
+		modelErrCount: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "model_error_total",
-				Help:      "Total number of model errors",
+				Name:      "model_error_count",
+				Help:      "Current health snapshot model error count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
 
-		keyErrCount: promauto.NewCounterVec(
-			prometheus.CounterOpts{
+		keyErrCount: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Subsystem: "health",
-				Name:      "key_error_total",
-				Help:      "Total number of key-level errors",
+				Name:      "key_error_count",
+				Help:      "Current health snapshot key-level error count",
 			},
 			[]string{"channel_id", "key_id", "model"},
 		),
@@ -253,11 +253,10 @@ func (m *HealthMetrics) Update(key HealthKey, health *ChannelHealth) {
 	m.healthScore.With(labels).Set(score)
 	m.successRate.With(labels).Set(stats.SuccessRate)
 
-	// 请求计数（使用 Add 而不是 Set，因为 Counter 只能增加）
-	// 注意：这里需要计算增量，但为了简化，我们使用 Set 的变通方法
-	m.totalRequests.With(labels).Add(0)   // 初始化
-	m.successRequests.With(labels).Add(0) // 初始化
-	m.failedRequests.With(labels).Add(0)  // 初始化
+	// 请求计数快照
+	m.totalRequests.With(labels).Set(float64(stats.TotalCount))
+	m.successRequests.With(labels).Set(float64(stats.SuccessCount))
+	m.failedRequests.With(labels).Set(float64(stats.TotalCount - stats.SuccessCount))
 
 	// 延迟分位数
 	m.p50Latency.With(labels).Set(float64(stats.FirstTokenP50.Milliseconds()))
@@ -270,13 +269,13 @@ func (m *HealthMetrics) Update(key HealthKey, health *ChannelHealth) {
 	// 自适应超时
 	m.adaptiveTimeout.With(labels).Set(float64(timeout.Milliseconds()))
 
-	// 事件类型计数
-	m.timeoutCount.With(labels).Add(0) // 初始化
+	// 事件类型计数快照
+	m.timeoutCount.With(labels).Set(float64(stats.TimeoutCount))
 	m.autoFirstTokenTimeoutCount.With(labels).Set(float64(stats.AutoFirstTokenTimeoutCount))
-	m.networkErrCount.With(labels).Add(0) // 初始化
-	m.rateLimitCount.With(labels).Add(0)  // 初始化
-	m.modelErrCount.With(labels).Add(0)   // 初始化
-	m.keyErrCount.With(labels).Add(0)     // 初始化
+	m.networkErrCount.With(labels).Set(float64(stats.NetworkCount))
+	m.rateLimitCount.With(labels).Set(float64(stats.RateLimitCount))
+	m.modelErrCount.With(labels).Set(float64(stats.ModelErrorCount))
+	m.keyErrCount.With(labels).Set(float64(stats.KeyErrorCount))
 
 	// 连续计数器
 	m.consecutiveSuccess.With(labels).Set(float64(stats.ConsecutiveSuccess))
