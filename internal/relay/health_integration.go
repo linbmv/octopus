@@ -1,8 +1,6 @@
 package relay
 
 import (
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -136,62 +134,6 @@ func shouldProbeUnhealthyCandidate(score float64) bool {
 		return false
 	}
 	return healthLastRecoveryProbeUnix.CompareAndSwap(last, now)
-}
-
-func healthRecoveryProbeEvery() int {
-	value, err := op.SettingGetInt(dbmodel.SettingKeyHealthRecoveryProbeEvery)
-	if err != nil || value <= 0 {
-		return 20
-	}
-	return value
-}
-
-func healthRecoveryProbeInterval() time.Duration {
-	value, err := op.SettingGetInt(dbmodel.SettingKeyHealthRecoveryProbeInterval)
-	if err != nil || value <= 0 {
-		return 5 * time.Minute
-	}
-	return time.Duration(value) * time.Second
-}
-
-func healthWeightedBalancerEnabled() bool {
-	if !smartHealthEnabled() {
-		return false
-	}
-	enabled, err := op.SettingGetBool(dbmodel.SettingKeyHealthWeightedBalancerEnabled)
-	return err == nil && enabled
-}
-
-func applyHealthSettings(config health.HealthConfig) health.HealthConfig {
-	if value, err := op.SettingGetInt(dbmodel.SettingKeyHealthMinAdaptiveTimeout); err == nil && value > 0 {
-		config.MinAdaptiveTimeout = time.Duration(value) * time.Second
-	}
-	if value, err := op.SettingGetInt(dbmodel.SettingKeyHealthSlowModelMinTimeout); err == nil && value > 0 {
-		config.SlowModelMinAdaptiveTimeout = time.Duration(value) * time.Second
-	}
-	if value, err := op.SettingGetInt(dbmodel.SettingKeyHealthTimeoutRateThreshold); err == nil && value > 0 {
-		config.TimeoutRateBackoffThreshold = float64(value) / 100
-	}
-	if value, err := op.SettingGetString(dbmodel.SettingKeyHealthSlowModelKeywords); err == nil {
-		keywords := strings.Split(value, ",")
-		for i := range keywords {
-			keywords[i] = strings.TrimSpace(keywords[i])
-		}
-		config.SlowModelKeywords = keywords
-	}
-	if value, err := op.SettingGetBool(dbmodel.SettingKeyHealthShadowMode); err == nil {
-		config.ShadowMode = value
-	}
-	if value, err := op.SettingGetString(dbmodel.SettingKeyHealthMaxMultiplierStack); err == nil {
-		if floatVal, parseErr := parseFloat(value); parseErr == nil && floatVal > 0 {
-			config.MaxMultiplierStack = floatVal
-		}
-	}
-	return config
-}
-
-func parseFloat(s string) (float64, error) {
-	return strconv.ParseFloat(s, 64)
 }
 
 // init 默认初始化

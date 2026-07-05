@@ -7,9 +7,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	dbmodel "github.com/bestruirui/octopus/internal/model"
-	"github.com/bestruirui/octopus/internal/op"
 )
 
 // errFirstTokenTimeout 标记首字超时触发的 context 取消原因，用于和客户端断开等其他取消区分。
@@ -79,11 +76,6 @@ func newFirstTokenGuard(parent context.Context, timeout time.Duration) (ctx cont
 		cancel(nil)
 	}
 	return cctx, stop, release
-}
-
-func smartHealthEnabled() bool {
-	enabled, err := op.SettingGetBool(dbmodel.SettingKeySmartHealthEnabled)
-	return err == nil && enabled
 }
 
 func (ra *relayAttempt) firstTokenTimeout() firstTokenTimeoutConfig {

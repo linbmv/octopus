@@ -73,6 +73,16 @@ func TestFirstTokenTimeoutManualSourceTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestHealthPolicyDefaultsPreserveRecoveryProbeSettings(t *testing.T) {
+	policy := currentHealthPolicy()
+	if policy.RecoveryProbeEvery != 20 {
+		t.Fatalf("RecoveryProbeEvery = %d, want 20", policy.RecoveryProbeEvery)
+	}
+	if policy.RecoveryProbeInterval != 5*time.Minute {
+		t.Fatalf("RecoveryProbeInterval = %v, want 5m", policy.RecoveryProbeInterval)
+	}
+}
+
 func TestShouldProbeUnhealthyCandidateEveryNthCheck(t *testing.T) {
 	atomic.StoreUint64(&healthRecoveryProbeCounter, 0)
 	healthLastRecoveryProbeUnix.Store(time.Now().Unix())
