@@ -237,6 +237,21 @@ func TestRelayAttemptCanRetryNextKeyOnlyForKeyLevelStatuses(t *testing.T) {
 	}
 }
 
+func TestIsRequestContextCanceledRequiresCanceledRequestContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if !isRequestContextCanceled(ctx, context.Canceled) {
+		t.Fatal("canceled request context should be treated as request cancellation")
+	}
+	if isRequestContextCanceled(context.Background(), context.Canceled) {
+		t.Fatal("plain upstream context.Canceled without a canceled request context should not be treated as request cancellation")
+	}
+	if isRequestContextCanceled(ctx, nil) {
+		t.Fatal("nil error should not be treated as request cancellation")
+	}
+}
+
 func TestRelayAttemptSwitchToNextKeyRebuildsOutbound(t *testing.T) {
 	ra := newTestAttempt(&dbmodel.Channel{
 		Type: llm.APIFormatOpenAIChatCompletion,

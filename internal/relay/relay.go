@@ -470,6 +470,15 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 		return false, nil, nil
 	}
 
+	if isRequestContextCanceled(ra.c.Request.Context(), fwdErr) {
+		span.End(dbmodel.AttemptFailed, fwdErr.Error())
+		log.Infof("attempt %d/%d canceled by request context: channel=%s(%d), key=%d, duration=%dms, error=%v",
+			ra.iter.Index()+1, ra.iter.Len(),
+			ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
+			span.Duration().Milliseconds(), fwdErr)
+		return ra.c.Writer.Written(), upstreamResponseBody, fwdErr
+	}
+
 	recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
 	op.ChannelKeyUpdate(ra.usedKey)
 	span.End(dbmodel.AttemptFailed, fwdErr.Error())
@@ -514,6 +523,16 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 		span.Duration().Milliseconds(), classification.Level, fwdErr)
 
 	return ra.c.Writer.Written(), upstreamResponseBody, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
+}
+
+func isRequestContextCanceled(ctx context.Context, err error) bool {
+	if err == nil || ctx == nil || ctx.Err() == nil {
+		return false
+	}
+	return errors.Is(ctx.Err(), context.Canceled) ||
+		errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 func (ra *relayAttempt) canRetryNextKey(err error, upstreamResponseBody []byte) bool {
