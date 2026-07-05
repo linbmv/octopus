@@ -48,13 +48,15 @@ var startCmd = &cobra.Command{
 		}
 		shutdown.Register(relay.StopHealthPersistence)
 
+		task.Init()
+		shutdown.Register(task.Close)
+
 		if err := server.Start(); err != nil {
 			log.Errorf("server start error: %v", err)
 			return
 		}
 		shutdown.Register(server.Close)
 
-		task.Init()
 		go task.RUN()
 	},
 }

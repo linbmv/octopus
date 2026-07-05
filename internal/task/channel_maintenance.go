@@ -14,11 +14,14 @@ import (
 const channelMaintenanceQueueSize = 64
 
 var (
-	channelMaintenanceOnce    sync.Once
-	channelMaintenanceQueue   chan model.Channel
-	channelMaintenancePending = make(map[int]struct{})
-	channelMaintenanceMu      sync.Mutex
-	channelMaintenanceRunner  = runChannelMaintenance
+	channelMaintenanceOnce     sync.Once
+	channelMaintenanceStopOnce sync.Once
+	channelMaintenanceStop     chan struct{}
+	channelMaintenanceDone     chan struct{}
+	channelMaintenanceQueue    chan model.Channel
+	channelMaintenancePending  = make(map[int]struct{})
+	channelMaintenanceMu       sync.Mutex
+	channelMaintenanceRunner   = runChannelMaintenance
 )
 
 func SubmitChannelMaintenance(channel model.Channel) bool {
@@ -29,6 +32,8 @@ func SubmitChannelMaintenance(channel model.Channel) bool {
 
 	channelMaintenanceOnce.Do(func() {
 		channelMaintenanceQueue = make(chan model.Channel, channelMaintenanceQueueSize)
+		channelMaintenanceStop = make(chan struct{})
+		channelMaintenanceDone = make(chan struct{})
 		go channelMaintenanceWorker()
 	})
 
@@ -54,11 +59,38 @@ func SubmitChannelMaintenance(channel model.Channel) bool {
 }
 
 func channelMaintenanceWorker() {
-	for channel := range channelMaintenanceQueue {
-		channelMaintenanceRunner(channel)
-		channelMaintenanceMu.Lock()
-		delete(channelMaintenancePending, channel.ID)
-		channelMaintenanceMu.Unlock()
+	defer close(channelMaintenanceDone)
+	for {
+		select {
+		case channel := <-channelMaintenanceQueue:
+			channelMaintenanceRunner(channel)
+			channelMaintenanceMu.Lock()
+			delete(channelMaintenancePending, channel.ID)
+			channelMaintenanceMu.Unlock()
+		case <-channelMaintenanceStop:
+			return
+		}
+	}
+}
+
+func stopChannelMaintenance(ctx context.Context) error {
+	if channelMaintenanceStop == nil || channelMaintenanceDone == nil {
+		return nil
+	}
+	select {
+	case <-channelMaintenanceDone:
+		return nil
+	default:
+	}
+
+	channelMaintenanceStopOnce.Do(func() {
+		close(channelMaintenanceStop)
+	})
+	select {
+	case <-channelMaintenanceDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

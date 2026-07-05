@@ -1,6 +1,8 @@
 package task
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,6 +91,27 @@ func RUN() {
 
 	// 阻塞主协程
 	select {}
+}
+
+func Close() error {
+	tasksMu.Lock()
+	entries := make([]*taskEntry, 0, len(tasks))
+	for name, entry := range tasks {
+		entries = append(entries, entry)
+		delete(tasks, name)
+	}
+	tasksMu.Unlock()
+
+	for _, entry := range entries {
+		close(entry.stopCh)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := stopChannelMaintenance(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
 }
 
 func runTask(entry *taskEntry) {
