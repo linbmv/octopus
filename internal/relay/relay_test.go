@@ -211,6 +211,9 @@ func TestRelayAttemptCanRetryNextKeyOnlyForKeyLevelStatuses(t *testing.T) {
 	if !ra.canRetryNextKey(errors.New("forbidden"), nil) {
 		t.Fatal("403 should retry next key")
 	}
+	if ra.canRetryNextKey(errors.New("client restricted"), []byte(`{"code":"channel:client_restricted","error":"This channel does not allow the current client"}`)) {
+		t.Fatal("403 client_restricted should not retry next key")
+	}
 	ra.usedKey.StatusCode = http.StatusBadGateway
 	if ra.canRetryNextKey(errors.New("bad gateway"), nil) {
 		t.Fatal("502 should not retry next key")

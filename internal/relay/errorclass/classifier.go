@@ -47,6 +47,8 @@ type statusCodeMeta struct {
 	Level ErrorLevel
 }
 
+const maxErrorBodyScanBytes = 8192
+
 // statusCodeMetaMap 状态码元数据映射表
 // 设计原则：表驱动替代分散的 switch/map，提高可维护性
 var statusCodeMetaMap = map[int]statusCodeMeta{
@@ -121,6 +123,11 @@ func ClassifyWithHeaders(statusCode int, headers http.Header, responseBody []byt
 		return classify400Error(responseBody)
 	}
 
+	// 403 错误：根据响应体区分 key 权限与渠道/客户端限制
+	if statusCode == http.StatusForbidden {
+		return classify403Error(responseBody)
+	}
+
 	// 404 错误：根据响应体智能分类
 	if statusCode == http.StatusNotFound {
 		return classify404Error(responseBody)
@@ -149,6 +156,58 @@ func Classify(statusCode int, responseBody []byte) Classification {
 	return ClassifyWithHeaders(statusCode, nil, responseBody)
 }
 
+func lowerScanBody(responseBody []byte) string {
+	if len(responseBody) == 0 {
+		return ""
+	}
+	scanBody := responseBody
+	if len(scanBody) > maxErrorBodyScanBytes {
+		scanBody = scanBody[:maxErrorBodyScanBytes]
+	}
+	return strings.ToLower(string(scanBody))
+}
+
+func bodyContainsAny(body string, markers ...string) bool {
+	for _, marker := range markers {
+		if strings.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// classify403Error 根据响应体内容智能分类 403 错误
+//   - key 权限/额度类 403 保持 Key 级，允许换同渠道其他 key；
+//   - 渠道限制当前客户端、IP 或探测请求风控时视为 Channel 级，避免同渠道所有 key 被反复打爆。
+func classify403Error(responseBody []byte) Classification {
+	bodyLower := lowerScanBody(responseBody)
+	if bodyContainsAny(bodyLower,
+		"channel:client_restricted",
+		"client_restricted",
+		"does not allow the current client",
+		"current client",
+		"ip banned",
+		"ip ban",
+		"ip restricted",
+		"ip blocked",
+		"probe request",
+		"meaningless content",
+		"探测请求",
+		"无意义内容",
+		"封禁ip",
+	) {
+		return Classification{
+			Level:  ErrorLevelChannel,
+			Reason: "403 channel/client restriction",
+		}
+	}
+
+	return Classification{
+		Level:  ErrorLevelKey,
+		Reason: "403 forbidden",
+	}
+}
+
 // classify404Error 根据响应体内容智能分类 404 错误
 // 设计原则：404 本身是异常情况，只有明确的客户端错误才不切换
 //   - 模型不存在（客户端级）：明确的 model_not_found 或 does not exist
@@ -161,13 +220,7 @@ func classify404Error(responseBody []byte) Classification {
 		}
 	}
 
-	// 大响应体优化：只扫描前 8KB，避免对 10MB HTML 错误页做全量转换
-	const maxScanBytes = 8192
-	scanBody := responseBody
-	if len(scanBody) > maxScanBytes {
-		scanBody = scanBody[:maxScanBytes]
-	}
-	bodyLower := strings.ToLower(string(scanBody))
+	bodyLower := lowerScanBody(responseBody)
 
 	// 仅当明确是"模型不存在"时才视为客户端错误
 	if strings.Contains(bodyLower, "model_not_found") ||
@@ -197,13 +250,20 @@ func classify503Error(responseBody []byte) Classification {
 		}
 	}
 
-	// 大响应体优化：只扫描前 8KB
-	const maxScanBytes = 8192
-	scanBody := responseBody
-	if len(scanBody) > maxScanBytes {
-		scanBody = scanBody[:maxScanBytes]
+	bodyLower := lowerScanBody(responseBody)
+
+	if bodyContainsAny(bodyLower,
+		"no_available_account",
+		"no available account",
+		"no available accounts",
+		"无可用账号",
+		"没有可用账号",
+	) {
+		return Classification{
+			Level:  ErrorLevelChannel,
+			Reason: "503 no available upstream account",
+		}
 	}
-	bodyLower := strings.ToLower(string(scanBody))
 
 	// 识别上游返回的 model_not_found / invalid_model / model_not_supported 等权限相关错误
 	// 同时支持英文通用表述和中文错误信息
@@ -255,6 +315,24 @@ func classify429Error(headers http.Header, responseBody []byte) Classification {
 					Reason: "429 rate limit (scope: " + scope + ")",
 				}
 			}
+		}
+	}
+
+	bodyLower := lowerScanBody(responseBody)
+	if bodyContainsAny(bodyLower,
+		"service unavailable",
+		"overloaded",
+		"temporarily unavailable",
+		"upstream unavailable",
+		"global rate limit",
+		"ip rate limit",
+		"全局限流",
+		"ip限流",
+		"服务不可用",
+	) {
+		return Classification{
+			Level:  ErrorLevelChannel,
+			Reason: "429 upstream/global limit",
 		}
 	}
 
@@ -314,13 +392,7 @@ func classify400Error(responseBody []byte) Classification {
 		}
 	}
 
-	// 大响应体优化：只扫描前 8KB
-	const maxScanBytes = 8192
-	scanBody := responseBody
-	if len(scanBody) > maxScanBytes {
-		scanBody = scanBody[:maxScanBytes]
-	}
-	bodyLower := strings.ToLower(string(scanBody))
+	bodyLower := lowerScanBody(responseBody)
 
 	// 识别伪装成 400 的权限/配额错误
 	if strings.Contains(bodyLower, "quota") ||

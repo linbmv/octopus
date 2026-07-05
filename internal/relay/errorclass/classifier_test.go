@@ -36,9 +36,27 @@ func TestClassifyStatusCodes(t *testing.T) {
 			wantLevel:  ErrorLevelKey,
 		},
 		{
+			name:         "403 client restricted (channel error)",
+			statusCode:   403,
+			responseBody: []byte(`{"error":"This channel does not allow the current client","code":"channel:client_restricted"}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
+			name:         "403 probe/access denied (channel error)",
+			statusCode:   403,
+			responseBody: []byte(`{"error":"请勿发送探测请求和无意义内容，多次发送探测请求将封禁IP。","code":"access_denied"}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
 			name:       "429 Too Many Requests",
 			statusCode: 429,
 			wantLevel:  ErrorLevelKey,
+		},
+		{
+			name:         "429 service unavailable body (channel error)",
+			statusCode:   429,
+			responseBody: []byte(`{"error":"Service Unavailable","type":"api_error"}`),
+			wantLevel:    ErrorLevelChannel,
 		},
 
 		// === 渠道级错误 ===
@@ -143,6 +161,12 @@ func TestClassifyStatusCodes(t *testing.T) {
 			wantLevel:    ErrorLevelKey,
 		},
 		{
+			name:         "503 + no_available_account (channel error)",
+			statusCode:   503,
+			responseBody: []byte(`{"error":"无可用账号，请稍后重试","code":"no_available_account"}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
 			name:         "503 generic timeout (channel error)",
 			statusCode:   503,
 			responseBody: []byte(`{"error": "upstream timeout"}`),
@@ -197,6 +221,18 @@ func TestCanRetryNextKey(t *testing.T) {
 			want:       true,
 		},
 		{
+			name:         "403 client restricted should NOT retry next key",
+			statusCode:   403,
+			responseBody: []byte(`{"code":"channel:client_restricted","error":"This channel does not allow the current client"}`),
+			want:         false,
+		},
+		{
+			name:         "429 service unavailable should NOT retry next key",
+			statusCode:   429,
+			responseBody: []byte(`{"error":"Service Unavailable"}`),
+			want:         false,
+		},
+		{
 			name:       "429 should retry next key",
 			statusCode: 429,
 			want:       true,
@@ -212,6 +248,12 @@ func TestCanRetryNextKey(t *testing.T) {
 			statusCode:   503,
 			responseBody: []byte(`{"error": "分组 Gemini 下模型无可用渠道"}`),
 			want:         true,
+		},
+		{
+			name:         "503 no_available_account should NOT retry next key",
+			statusCode:   503,
+			responseBody: []byte(`{"code":"no_available_account","error":"无可用账号，请稍后重试"}`),
+			want:         false,
 		},
 		{
 			name:       "500 should NOT retry next key",
@@ -502,8 +544,6 @@ func TestParseRetryAfterSeconds(t *testing.T) {
 	}
 }
 
-
-
 // TestClassifyWithHeadersCaseInsensitive tests case-insensitive header matching
 func TestClassifyWithHeadersCaseInsensitive(t *testing.T) {
 	tests := []struct {
@@ -556,19 +596,19 @@ func TestLargeResponseBodyPerformance(t *testing.T) {
 // TestHTTPDateParsing tests HTTP-date format in Retry-After header
 func TestHTTPDateParsing(t *testing.T) {
 	tests := []struct {
-		name      string
+		name       string
 		retryAfter string
-		wantLevel ErrorLevel
+		wantLevel  ErrorLevel
 	}{
 		{
-			name:      "future HTTP-date (should be channel-level if > 60s)",
+			name:       "future HTTP-date (should be channel-level if > 60s)",
 			retryAfter: "Wed, 21 Oct 2099 07:28:00 GMT",
-			wantLevel: ErrorLevelChannel,
+			wantLevel:  ErrorLevelChannel,
 		},
 		{
-			name:      "past HTTP-date (should be key-level, treated as 0)",
+			name:       "past HTTP-date (should be key-level, treated as 0)",
 			retryAfter: "Wed, 21 Oct 2000 07:28:00 GMT",
-			wantLevel: ErrorLevelKey,
+			wantLevel:  ErrorLevelKey,
 		},
 	}
 
