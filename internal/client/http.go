@@ -124,7 +124,7 @@ func newHTTPClientNoProxy() (*http.Client, error) {
 		return nil, err
 	}
 	cloned.Proxy = nil
-	return &http.Client{Transport: cloned}, nil
+	return &http.Client{Transport: &userAgentTransport{base: cloned}}, nil
 }
 
 func newHTTPClientCustomProxy(proxyURLStr string) (*http.Client, error) {
@@ -154,5 +154,21 @@ func newHTTPClientCustomProxy(proxyURLStr string) (*http.Client, error) {
 		return nil, fmt.Errorf("unsupported proxy scheme: %s", proxyURL.Scheme)
 	}
 
-	return &http.Client{Transport: cloned}, nil
+	return &http.Client{Transport: &userAgentTransport{base: cloned}}, nil
+}
+
+// userAgentTransport wraps an http.RoundTripper and overrides User-Agent header.
+// This prevents upstream channels from blocking based on SDK-specific User-Agent values.
+type userAgentTransport struct {
+	base http.RoundTripper
+}
+
+func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone the request to avoid modifying the original
+	reqClone := req.Clone(req.Context())
+
+	// Override User-Agent to a neutral value that won't be blocked by upstream channels
+	reqClone.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Octopus/1.0)")
+
+	return t.base.RoundTrip(reqClone)
 }
