@@ -14,6 +14,7 @@ import { toast } from '@/components/common/Toast';
 import { useTranslations } from 'next-intl';
 import { useEffect, useRef, useState } from 'react';
 import { RefreshCw, X, Plus } from 'lucide-react';
+import { BaseUrlsSection, ChannelKeysSection, CustomHeadersSection } from './FormSections';
 
 export interface ChannelKeyFormItem {
     id?: number;
@@ -272,103 +273,20 @@ export function ChannelForm({
                 </div>
             </div>
 
-            <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-card-foreground">
-                        {t('baseUrls')} {formData.base_urls.length > 0 ? `(${formData.base_urls.length})` : ''}
-                    </label>
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleAddBaseUrl}
-                        className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
-                    >
-                        <Plus className="h-3 w-3 mr-1" />
-                        {t('add')}
-                    </Button>
-                </div>
-                <div className="space-y-2">
-                    {(formData.base_urls ?? []).map((u, idx) => (
-                        <div key={`baseurl-${idx}`} className="flex items-center gap-2">
-                            <Input
-                                id={`${idPrefix}-base-${idx}`}
-                                type="url"
-                                value={u.url}
-                                onChange={(e) => handleUpdateBaseUrl(idx, { url: e.target.value })}
-                                placeholder={t('baseUrlUrl')}
-                                required={idx === 0}
-                                className="rounded-xl flex-1"
-                            />
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleRemoveBaseUrl(idx)}
-                                disabled={(formData.base_urls ?? []).length <= 1}
-                                className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive disabled:opacity-40 hover:bg-transparent"
-                                title="Remove"
-                            >
-                                <X className="h-4 w-4" />
-                            </Button>
-                        </div>
-                    ))}
-                </div>
-            </div>
+            <BaseUrlsSection
+                idPrefix={idPrefix}
+                baseUrls={formData.base_urls}
+                onAdd={handleAddBaseUrl}
+                onUpdate={handleUpdateBaseUrl}
+                onRemove={handleRemoveBaseUrl}
+            />
 
-            <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-card-foreground">
-                        {t('apiKey')} {formData.keys.length > 0 ? `(${formData.keys.length})` : ''}
-                    </label>
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleAddKey}
-                        className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
-                    >
-                        <Plus className="h-3 w-3 mr-1" />
-                        {t('add')}
-                    </Button>
-                </div>
-                <div className="space-y-2">
-                    {(formData.keys ?? []).map((k, idx) => (
-                        <div key={k.id ?? `new-${idx}`} className="flex items-center gap-2">
-                            <Input
-                                type="text"
-                                value={k.channel_key}
-                                onChange={(e) => handleUpdateKey(idx, { channel_key: e.target.value })}
-                                placeholder={t('apiKey')}
-                                required={idx === 0}
-                                className="rounded-xl flex-1"
-                            />
-                            <Input
-                                type="text"
-                                value={k.remark ?? ''}
-                                onChange={(e) => handleUpdateKey(idx, { remark: e.target.value })}
-                                placeholder={t('remark')}
-                                className="rounded-xl w-32"
-                            />
-                            <Switch
-                                checked={k.enabled}
-                                onCheckedChange={(checked) => handleUpdateKey(idx, { enabled: checked })}
-                            />
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleRemoveKey(idx)}
-                                disabled={(formData.keys ?? []).length <= 1}
-                                className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive hover:bg-transparent disabled:opacity-40"
-                                title="Remove"
-                            >
-                                <X className="h-4 w-4" />
-                            </Button>
-                        </div>
-                    ))}
-                </div>
-            </div>
+            <ChannelKeysSection
+                keys={formData.keys}
+                onAdd={handleAddKey}
+                onUpdate={handleUpdateKey}
+                onRemove={handleRemoveKey}
+            />
 
             <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -544,54 +462,12 @@ export function ChannelForm({
                             </div>
                         </div>
 
-                        <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                                <label className="text-sm font-medium text-card-foreground">
-                                    {t('customHeader')} {formData.custom_header.length > 0 ? `(${formData.custom_header.length})` : ''}
-                                </label>
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={handleAddHeader}
-                                    className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
-                                >
-                                    <Plus className="h-3 w-3 mr-1" />
-                                    {t('customHeaderAdd')}
-                                </Button>
-                            </div>
-                            <div className="space-y-2">
-                                {(formData.custom_header ?? []).map((h, idx) => (
-                                    <div key={`hdr-${idx}`} className="flex items-center gap-2">
-                                        <Input
-                                            type="text"
-                                            value={h.header_key}
-                                            onChange={(e) => handleUpdateHeader(idx, { header_key: e.target.value })}
-                                            placeholder={t('customHeaderKey')}
-                                            className="rounded-xl flex-1"
-                                        />
-                                        <Input
-                                            type="text"
-                                            value={h.header_value}
-                                            onChange={(e) => handleUpdateHeader(idx, { header_value: e.target.value })}
-                                            placeholder={t('customHeaderValue')}
-                                            className="rounded-xl flex-1"
-                                        />
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => handleRemoveHeader(idx)}
-                                            disabled={(formData.custom_header ?? []).length <= 1}
-                                            className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive hover:bg-transparent disabled:opacity-40"
-                                            title="Remove"
-                                        >
-                                            <X className="h-4 w-4" />
-                                        </Button>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
+                        <CustomHeadersSection
+                            headers={formData.custom_header}
+                            onAdd={handleAddHeader}
+                            onUpdate={handleUpdateHeader}
+                            onRemove={handleRemoveHeader}
+                        />
 
                         <div className="space-y-2">
                             <label htmlFor={`${idPrefix}-match-regex`} className="text-sm font-medium text-card-foreground">
