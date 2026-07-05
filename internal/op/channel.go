@@ -16,10 +16,37 @@ var channelCache = cache.New[int, model.Channel](16)
 var channelKeyCache = cache.New[int, model.ChannelKey](16)
 var channelKeyCacheNeedUpdate = make(map[int]struct{})
 var channelKeyCacheNeedUpdateLock sync.Mutex
+var channelService = NewChannelService(channelCache, channelKeyCache)
+
+type ChannelService struct {
+	channels    cache.Cache[int, model.Channel]
+	channelKeys cache.Cache[int, model.ChannelKey]
+}
+
+func NewChannelService(channels cache.Cache[int, model.Channel], channelKeys cache.Cache[int, model.ChannelKey]) *ChannelService {
+	if channels == nil {
+		channels = cache.New[int, model.Channel](16)
+	}
+	if channelKeys == nil {
+		channelKeys = cache.New[int, model.ChannelKey](16)
+	}
+	return &ChannelService{
+		channels:    channels,
+		channelKeys: channelKeys,
+	}
+}
+
+func DefaultChannelService() *ChannelService {
+	return channelService
+}
 
 func ChannelList(ctx context.Context) ([]model.Channel, error) {
-	channels := make([]model.Channel, 0, channelCache.Len())
-	for _, channel := range channelCache.GetAll() {
+	return channelService.List(ctx)
+}
+
+func (s *ChannelService) List(ctx context.Context) ([]model.Channel, error) {
+	channels := make([]model.Channel, 0, s.channels.Len())
+	for _, channel := range s.channels.GetAll() {
 		channels = append(channels, channel)
 	}
 	return channels, nil
@@ -354,8 +381,12 @@ func ChannelDel(id int, ctx context.Context) error {
 }
 
 func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
+	return channelService.LLMList(ctx)
+}
+
+func (s *ChannelService) LLMList(ctx context.Context) ([]model.LLMChannel, error) {
 	models := []model.LLMChannel{}
-	for _, channel := range channelCache.GetAll() {
+	for _, channel := range s.channels.GetAll() {
 		modelNames := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel)
 		for _, modelName := range modelNames {
 			if modelName == "" {
@@ -377,7 +408,11 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 }
 
 func ChannelGet(id int, ctx context.Context) (*model.Channel, error) {
-	channel, ok := channelCache.Get(id)
+	return channelService.Get(id, ctx)
+}
+
+func (s *ChannelService) Get(id int, ctx context.Context) (*model.Channel, error) {
+	channel, ok := s.channels.Get(id)
 	if !ok {
 		return nil, fmt.Errorf("channel not found")
 	}

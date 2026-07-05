@@ -5,7 +5,50 @@ import (
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/utils/cache"
 )
+
+func TestChannelServiceReadMethodsUseInjectedCache(t *testing.T) {
+	channels := cache.New[int, model.Channel](1)
+	keys := cache.New[int, model.ChannelKey](1)
+	channels.Set(7, model.Channel{
+		ID:          7,
+		Name:        "",
+		Enabled:     true,
+		Model:       "gpt-4",
+		CustomModel: "gpt-4o",
+	})
+	service := NewChannelService(channels, keys)
+
+	channel, err := service.Get(7, context.Background())
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if channel.ID != 7 {
+		t.Fatalf("Get ID = %d, want 7", channel.ID)
+	}
+	channel.Name = "mutated"
+	again, err := service.Get(7, context.Background())
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if again.Name != "" {
+		t.Fatal("Get should return a copy of cached channel")
+	}
+
+	llmChannels, err := service.LLMList(context.Background())
+	if err != nil {
+		t.Fatalf("LLMList returned error: %v", err)
+	}
+	if len(llmChannels) != 2 {
+		t.Fatalf("LLMList length = %d, want 2", len(llmChannels))
+	}
+	for _, item := range llmChannels {
+		if item.ChannelName != "Channel 7" {
+			t.Fatalf("ChannelName = %q, want fallback name", item.ChannelName)
+		}
+	}
+}
 
 func TestChannelLLMListFallbacksEmptyChannelName(t *testing.T) {
 	// 模拟一个 name 为空的渠道（可能是旧数据或约束失效）
