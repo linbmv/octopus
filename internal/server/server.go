@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/relay"
@@ -18,6 +20,7 @@ import (
 )
 
 var httpSrv http.Server
+var serverErrCh chan error
 
 func Start() error {
 	if conf.IsDebug() {
@@ -43,16 +46,26 @@ func Start() error {
 
 	httpSrv.Addr = fmt.Sprintf("%s:%d", conf.AppConfig.Server.Host, conf.AppConfig.Server.Port)
 	httpSrv.Handler = r
+	serverErrCh = make(chan error, 1)
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Errorf("http server listen and serve error: %v", err)
+			serverErrCh <- err
 		}
 	}()
+
+	select {
+	case err := <-serverErrCh:
+		return err
+	case <-time.After(100 * time.Millisecond):
+	}
 	return nil
 }
 
 func Close() error {
-	return httpSrv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return httpSrv.Shutdown(ctx)
 }
 
 func registerRelayRoutes(r *gin.Engine) {

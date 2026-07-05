@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/gin-gonic/gin"
 )
@@ -23,6 +24,8 @@ func RequireJSON() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, conf.MaxJSONRequestBodyBytes)
 
 		c.Next()
 	}

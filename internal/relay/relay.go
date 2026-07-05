@@ -803,18 +803,7 @@ func (ra *relayAttempt) canDowngradeCompactResponsesFallback(fwdErr error) bool 
 	if ra.canDowngradeCompactEndpoint(fwdErr) {
 		return true
 	}
-	if ra.internalRequest.RequestType != llm.RequestTypeCompact {
-		return false
-	}
-	switch ra.channel.Type {
-	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
-	default:
-		return false
-	}
-	if ra.c.Writer.Written() {
-		return false
-	}
-	return isCompactResponsesFallbackIncompatibleError(fwdErr) || isCompactManualFallbackError(fwdErr)
+	return false
 }
 
 func needsChatToCompactResponse(channelType llm.APIFormat, request *llm.Request) bool {
@@ -1125,7 +1114,7 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 		select {
 		case <-ctx.Done():
 			// 首字超时在收到首个 token 前触发：返回错误以切换下一通道。
-			// 其余取消（客户端断开、或首 token 之后的取消）按正常停止处理，不再切换通道。
+			// 客户端断开不是上游成功，必须向外返回取消错误，避免刷新 sticky、熔断成功态和健康成功样本。
 			if firstToken && errors.Is(context.Cause(ctx), errFirstTokenTimeout) {
 				timeoutErr := firstTokenTimeout.Error(firstTokenTimeoutPhaseStreamFirstEvent)
 				log.Warnf("%v, switching channel", timeoutErr)
@@ -1135,7 +1124,7 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 			}
 			log.Infof("client disconnected, stopping stream")
 			_ = clientStream.Close()
-			return nil
+			return context.Canceled
 		case r, ok := <-results:
 			if !ok {
 				log.Infof("stream end")
@@ -1596,14 +1585,16 @@ func (c *chatToCompactMiddleware) OnOutboundLlmResponse(ctx context.Context, res
 	}
 	// Chat 端点返回的是 Choices 结构，需要转换为 Compact 结构
 	if response.Compact == nil && len(response.Choices) > 0 {
-		// 从第一个 Choice 提取内容
-		firstChoice := response.Choices[0]
 		output := []llm.Message{}
-		if firstChoice.Message != nil {
-			output = append(output, *firstChoice.Message)
+		for _, choice := range response.Choices {
+			if choice.Message != nil && messageHasCompactionContent(*choice.Message) {
+				output = append(output, *choice.Message)
+			}
+		}
+		if len(output) == 0 {
+			return nil, fmt.Errorf("compact manual fallback returned no compaction output")
 		}
 
-		// 构造 Compact 响应
 		response.Compact = &llm.CompactResponse{
 			ID:        response.ID,
 			CreatedAt: response.Created,
@@ -1611,18 +1602,34 @@ func (c *chatToCompactMiddleware) OnOutboundLlmResponse(ctx context.Context, res
 			Output:    output,
 		}
 	}
-	if response.Compact == nil {
-		response.Compact = &llm.CompactResponse{
-			ID:        response.ID,
-			CreatedAt: response.Created,
-			Object:    "response.compaction",
-			Output:    []llm.Message{},
-		}
+	if response.Compact == nil || !compactResponseHasCompactionOutput(response.Compact) {
+		return nil, fmt.Errorf("compact manual fallback returned no compaction output")
 	}
 	response.RequestType = llm.RequestTypeCompact
 	response.APIFormat = llm.APIFormatOpenAIResponseCompact
 
 	return response, nil
+}
+
+func compactResponseHasCompactionOutput(compact *llm.CompactResponse) bool {
+	if compact == nil {
+		return false
+	}
+	for _, message := range compact.Output {
+		if messageHasCompactionContent(message) {
+			return true
+		}
+	}
+	return false
+}
+
+func messageHasCompactionContent(message llm.Message) bool {
+	for _, part := range message.Content.MultipleContent {
+		if part.Compact != nil && (part.Type == "compaction" || part.Type == "compaction_summary") {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *chatToCompactMiddleware) OnOutboundLlmStream(ctx context.Context, stream streams.Stream[*llm.Response]) (streams.Stream[*llm.Response], error) {

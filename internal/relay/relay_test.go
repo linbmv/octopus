@@ -19,6 +19,34 @@ import (
 	"github.com/looplj/axonhub/llm/httpclient"
 )
 
+type fakeStream struct {
+	events []*httpclient.StreamEvent
+	index  int
+	closed bool
+}
+
+func (s *fakeStream) Next() bool {
+	if s.index >= len(s.events) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *fakeStream) Current() *httpclient.StreamEvent {
+	if s.index == 0 || s.index > len(s.events) {
+		return nil
+	}
+	return s.events[s.index-1]
+}
+
+func (s *fakeStream) Err() error { return nil }
+
+func (s *fakeStream) Close() error {
+	s.closed = true
+	return nil
+}
+
 // newTestAttempt 构造一个仅持有 metrics 与 channel 的 relayAttempt，
 // 用于在不触发负载均衡循环和真实 HTTP 转发的前提下验证通道级副作用。
 func newTestAttempt(channel *dbmodel.Channel) *relayAttempt {
@@ -601,6 +629,33 @@ func TestStreamAggregationFeedsMetricsUsage(t *testing.T) {
 	}
 	if len(m.InternalResponse) == 0 {
 		t.Fatal("InternalResponse 应保存聚合后的响应体")
+	}
+}
+
+func TestWriteStreamReturnsCanceledOnClientDisconnectAfterFirstToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+
+	stream := &fakeStream{events: []*httpclient.StreamEvent{
+		{Data: []byte(`{"choices":[{"delta":{"content":"hello"}}]}`)},
+	}}
+	ra := &relayAttempt{
+		relayRun: &relayRun{
+			c:       ginCtx,
+			metrics: &RelayMetrics{},
+		},
+	}
+
+	cancel(context.Canceled)
+	err := ra.writeStream(ctx, func() {}, firstTokenTimeoutConfig{}, stream)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("writeStream error = %v, want context.Canceled", err)
+	}
+	if !stream.closed {
+		t.Fatal("stream should be closed after client disconnect")
 	}
 }
 

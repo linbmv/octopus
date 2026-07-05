@@ -9,6 +9,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/price"
@@ -211,9 +212,9 @@ func (m *RelayMetrics) saveLog(ctx context.Context, err error, duration time.Dur
 		relayLog.Cost = m.Stats.InputCost + m.Stats.OutputCost
 	}
 
-	relayLog.RequestContent = m.requestContent()
+	relayLog.RequestContent = truncateLogContent(m.requestContent())
 	if len(m.InternalResponse) > 0 {
-		relayLog.ResponseContent = string(m.InternalResponse)
+		relayLog.ResponseContent = truncateLogContent(string(m.InternalResponse))
 	}
 	if err != nil {
 		relayLog.Error = err.Error()
@@ -222,6 +223,13 @@ func (m *RelayMetrics) saveLog(ctx context.Context, err error, duration time.Dur
 	if logErr := op.RelayLogAdd(ctx, relayLog); logErr != nil {
 		log.Warnf("failed to save relay log: %v", logErr)
 	}
+}
+
+func truncateLogContent(content string) string {
+	if len(content) <= conf.MaxRelayLogContentBytes {
+		return content
+	}
+	return content[:conf.MaxRelayLogContentBytes] + "\n[truncated]"
 }
 
 func (m *RelayMetrics) requestContent() string {

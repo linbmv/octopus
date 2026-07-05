@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/server/middleware"
@@ -112,9 +113,13 @@ func importDB(c *gin.Context) {
 			return
 		}
 		defer f.Close()
-		body, err := io.ReadAll(f)
+		body, err := io.ReadAll(io.LimitReader(f, conf.MaxDBImportBytes+1))
 		if err != nil {
 			resp.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		if int64(len(body)) > conf.MaxDBImportBytes {
+			resp.Error(c, http.StatusRequestEntityTooLarge, "import file too large")
 			return
 		}
 		if err := decodeDBDump(body, &dump); err != nil {
@@ -122,9 +127,14 @@ func importDB(c *gin.Context) {
 			return
 		}
 	} else {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, conf.MaxDBImportBytes)
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			resp.Error(c, http.StatusBadRequest, err.Error())
+			statusCode := http.StatusBadRequest
+			if strings.Contains(err.Error(), "http: request body too large") {
+				statusCode = http.StatusRequestEntityTooLarge
+			}
+			resp.Error(c, statusCode, err.Error())
 			return
 		}
 		if err := decodeDBDump(body, &dump); err != nil {
