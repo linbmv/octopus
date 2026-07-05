@@ -248,6 +248,21 @@ func TestRelayAttemptCanRetryNextKeyOnlyForKeyLevelStatuses(t *testing.T) {
 	}
 }
 
+func TestRelayErrorDecisionRetriesOnlyKeyLevelFailures(t *testing.T) {
+	keyDecision := decideRelayError(http.StatusTooManyRequests, nil, errors.New("upstream failed"))
+	if !keyDecision.RetryNextKey {
+		t.Fatal("429 key-level failure should retry next key")
+	}
+
+	timeoutDecision := decideRelayError(http.StatusOK, nil, firstTokenTimeoutConfig{Duration: time.Second}.Error(firstTokenTimeoutPhaseWaitingHeaders))
+	if timeoutDecision.RetryNextKey {
+		t.Fatal("first token timeout should not retry next key")
+	}
+	if timeoutDecision.Classification.Level.String() != "channel" {
+		t.Fatalf("first token timeout level = %s, want channel", timeoutDecision.Classification.Level)
+	}
+}
+
 func TestIsRequestContextCanceledRequiresCanceledRequestContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

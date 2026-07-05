@@ -15,7 +15,6 @@ import (
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
-	"github.com/bestruirui/octopus/internal/relay/errorclass"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -160,12 +159,8 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 		balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 	}
 
-	// 使用完整的上游响应体进行智能错误分类。
-	// 本地首字超时不是上游 2xx 成功，即使 pipeline 已经建立了流响应，也必须按渠道级超时处理。
-	classification := errorclass.Classify(upstreamStatusCode, upstreamResponseBody)
-	if isFirstTokenTimeoutError(fwdErr) {
-		classification = errorclass.Classification{Level: errorclass.ErrorLevelChannel, Reason: "first token timeout"}
-	}
+	// 使用完整的上游响应体进行智能错误决策。
+	decision := decideRelayError(upstreamStatusCode, upstreamResponseBody, fwdErr)
 
 	// 获取首 token 延迟（如果有）
 	firstTokenDuration := time.Duration(0)
@@ -179,7 +174,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 			ra.channel.ID,
 			ra.usedKey.ID,
 			ra.metrics.ActualModel,
-			&classification,
+			&decision.Classification,
 			upstreamStatusCode,
 			nil,
 			firstTokenDuration,
@@ -190,7 +185,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 	log.Warnf("attempt %d/%d failed: channel=%s(%d), key=%d, duration=%dms, error_level=%s, error=%v",
 		ra.iter.Index()+1, ra.iter.Len(),
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
-		span.Duration().Milliseconds(), classification.Level, fwdErr)
+		span.Duration().Milliseconds(), decision.Classification.Level, fwdErr)
 
 	return ra.c.Writer.Written(), upstreamResponseBody, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
 }
@@ -210,8 +205,7 @@ func (ra *relayAttempt) canRetryNextKey(err error, upstreamResponseBody []byte) 
 		return false
 	}
 
-	// 使用统一的错误分类器判断是否为 key 级错误，传入完整的上游响应体
-	return errorclass.CanRetryNextKey(ra.usedKey.StatusCode, upstreamResponseBody)
+	return decideRelayError(ra.usedKey.StatusCode, upstreamResponseBody, err).RetryNextKey
 }
 
 func (ra *relayAttempt) switchToNextKey() bool {

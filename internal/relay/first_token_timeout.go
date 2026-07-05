@@ -48,7 +48,14 @@ func (c firstTokenTimeoutConfig) Error(phase firstTokenTimeoutPhase) error {
 }
 
 func isFirstTokenTimeoutError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), errFirstTokenTimeout.Error())
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, errFirstTokenTimeout.Error()) ||
+		strings.Contains(msg, "first_token_timeout") ||
+		strings.Contains(msg, "manual_first_token_timeout") ||
+		strings.Contains(msg, "auto_first_token_timeout")
 }
 
 // newFirstTokenGuard 构造首字超时守卫：
