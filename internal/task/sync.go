@@ -170,6 +170,11 @@ func syncCompactGroupStrategies(ctx context.Context) {
 		)
 	}()
 
+	if !compactStrategyProbeEnabled() {
+		log.Infof("compact strategy probe skipped: disabled")
+		return
+	}
+
 	groups, err := op.GroupList(ctx)
 	if err != nil {
 		log.Warnf("failed to list groups for compact strategy probe: %v", err)
@@ -203,6 +208,11 @@ func syncCompactGroupStrategies(ctx context.Context) {
 	for _, group := range probeGroups {
 		probeCompactGroupStrategies(ctx, group, probeResults, setupErrors, &summary)
 	}
+}
+
+func compactStrategyProbeEnabled() bool {
+	enabled, err := op.SettingGetBool(model.SettingKeyCompactStrategyProbeEnabled)
+	return err == nil && enabled
 }
 
 // collectCompactProbeJobs flattens all group items into a deduplicated job list:

@@ -32,6 +32,7 @@ export const SettingKey = {
     HealthSlowModelKeywords: 'health_slow_model_keywords',
     HealthShadowMode: 'health_shadow_mode',
     HealthMaxMultiplierStack: 'health_max_multiplier_stack',
+    CompactStrategyProbeEnabled: 'compact_strategy_probe_enabled',
 } as const;
 
 /**

@@ -30,6 +30,7 @@ const (
 	SettingKeyHealthShadowMode               SettingKey = "health_shadow_mode"                 // 自动超时 shadow 模式（只记录不执行）
 	SettingKeyHealthMaxMultiplierStack       SettingKey = "health_max_multiplier_stack"        // multiplier 叠加上限（浮点数，0=无限制）
 	SettingKeyStickyHealthyFirstTokenTimeout SettingKey = "sticky_healthy_first_token_timeout" // 粘性健康首token阈值（秒），0=关闭健康粘性检查
+	SettingKeyCompactStrategyProbeEnabled    SettingKey = "compact_strategy_probe_enabled"     // 是否在模型同步时主动探测 compact 策略
 )
 
 type Setting struct {
@@ -60,6 +61,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyHealthShadowMode, Value: "false"},           // shadow mode 默认关闭
 		{Key: SettingKeyHealthMaxMultiplierStack, Value: "3.0"},     // multiplier 叠加上限 3.0x
 		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"}, // 默认不启用粘性健康检查
+		{Key: SettingKeyCompactStrategyProbeEnabled, Value: "false"},
 	}
 }
 
@@ -74,7 +76,8 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("model info update interval must be an integer")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeySmartHealthEnabled, SettingKeyHealthWeightedBalancerEnabled, SettingKeyHealthShadowMode:
+	case SettingKeyRelayLogKeepEnabled, SettingKeySmartHealthEnabled, SettingKeyHealthWeightedBalancerEnabled,
+		SettingKeyHealthShadowMode, SettingKeyCompactStrategyProbeEnabled:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("%s must be true or false", s.Key)
 		}

@@ -16,6 +16,8 @@ import (
 )
 
 const compactProbeTimeout = 15 * time.Second
+const compactProbeHandoffText = "Project handoff: The current objective is to keep routing reliable while avoiding provider abuse triggers. Constraint: preserve retry fallback behavior for real user requests. Next step: summarize the routing risk and the mitigation."
+const compactProbeSummaryInstruction = "Write a concise continuation summary for this handoff."
 
 type CompactProbeResult struct {
 	Strategy model.CompactStrategy
@@ -114,15 +116,15 @@ func compactProbeRequest(strategy model.CompactStrategy, probeModel string) (str
 	case model.CompactStrategyOfficial:
 		body, err := json.Marshal(map[string]any{
 			"model":             probeModel,
-			"input":             compactProbeResponsesInput("hello"),
-			"instructions":      "Summarize the conversation in one short sentence.",
+			"input":             compactProbeResponsesInput(compactProbeHandoffText),
+			"instructions":      compactProbeSummaryInstruction,
 			"max_output_tokens": 16,
 		})
 		return "/responses/compact", body, err
 	case model.CompactStrategyResponsesManual:
 		body, err := json.Marshal(map[string]any{
 			"model":             probeModel,
-			"input":             compactProbeResponsesInput("Reply with ok."),
+			"input":             compactProbeResponsesInput(compactProbeHandoffText),
 			"store":             false,
 			"max_output_tokens": 16,
 		})
@@ -130,7 +132,7 @@ func compactProbeRequest(strategy model.CompactStrategy, probeModel string) (str
 	case model.CompactStrategyChatManual:
 		body, err := json.Marshal(map[string]any{
 			"model":      probeModel,
-			"messages":   []map[string]string{{"role": "user", "content": "Reply with ok."}},
+			"messages":   []map[string]string{{"role": "user", "content": compactProbeSummaryInstruction + " " + compactProbeHandoffText}},
 			"stream":     false,
 			"max_tokens": 16,
 		})

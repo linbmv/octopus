@@ -2,9 +2,10 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useTranslations } from 'next-intl';
-import { RefreshCw, Clock } from 'lucide-react';
+import { RefreshCw, Clock, Radar } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { useSettingList, useSetSetting, SettingKey } from '@/api/endpoints/setting';
 import { useLastSyncTime, useSyncChannel } from '@/api/endpoints/channel';
 import { toast } from '@/components/common/Toast';
@@ -17,14 +18,21 @@ export function SettingLLMSync() {
     const { data: lastSyncTime } = useLastSyncTime();
 
     const [syncInterval, setSyncInterval] = useState('');
+    const [compactProbeEnabled, setCompactProbeEnabled] = useState(false);
     const initialSyncInterval = useRef('');
+    const initialCompactProbeEnabled = useRef('false');
 
     useEffect(() => {
         if (settings) {
             const interval = settings.find(s => s.key === SettingKey.SyncLLMInterval);
+            const compactProbe = settings.find(s => s.key === SettingKey.CompactStrategyProbeEnabled);
             if (interval) {
                 queueMicrotask(() => setSyncInterval(interval.value));
                 initialSyncInterval.current = interval.value;
+            }
+            if (compactProbe) {
+                queueMicrotask(() => setCompactProbeEnabled(compactProbe.value === 'true'));
+                initialCompactProbeEnabled.current = compactProbe.value;
             }
         }
     }, [settings]);
@@ -35,9 +43,19 @@ export function SettingLLMSync() {
         setSetting.mutate({ key, value }, {
             onSuccess: () => {
                 toast.success(t('saved'));
-                initialSyncInterval.current = value;
+                if (key === SettingKey.SyncLLMInterval) {
+                    initialSyncInterval.current = value;
+                } else if (key === SettingKey.CompactStrategyProbeEnabled) {
+                    initialCompactProbeEnabled.current = value;
+                }
             }
         });
+    };
+
+    const handleCompactProbeToggle = (enabled: boolean) => {
+        const value = String(enabled);
+        setCompactProbeEnabled(enabled);
+        handleSave(SettingKey.CompactStrategyProbeEnabled, value, initialCompactProbeEnabled.current);
     };
 
     const handleManualSync = () => {
@@ -81,6 +99,24 @@ export function SettingLLMSync() {
                 />
             </div>
 
+            {/* Compact 策略探测 */}
+            <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
+                    <Radar className="h-5 w-5 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0">
+                        <span className="text-sm font-medium">{t('llmSync.compactProbe.label')}</span>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                            {t('llmSync.compactProbe.description')}
+                        </p>
+                    </div>
+                </div>
+                <Switch
+                    checked={compactProbeEnabled}
+                    onCheckedChange={handleCompactProbeToggle}
+                    aria-label={t('llmSync.compactProbe.label')}
+                />
+            </div>
+
             {/* 手动同步 */}
             <div className="flex items-center justify-between gap-4">
                 <div className="flex flex-col gap-1">
@@ -105,4 +141,3 @@ export function SettingLLMSync() {
         </div>
     );
 }
-
