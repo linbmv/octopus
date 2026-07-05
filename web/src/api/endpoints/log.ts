@@ -84,6 +84,7 @@ export function useClearLogs() {
 }
 
 const logsInfiniteQueryKey = (pageSize: number) => ['logs', 'infinite', pageSize] as const;
+const realtimeLogBufferLimit = 100;
 
 /**
  * 日志管理 Hook
@@ -183,7 +184,8 @@ export function useLogs(options: { pageSize?: number } = {}) {
                                 if (exists) return old;
 
                                 const firstPage = old.pages[0] ?? [];
-                                return { ...old, pages: [[log, ...firstPage], ...old.pages.slice(1)] };
+                                const nextFirstPage = [log, ...firstPage].slice(0, Math.max(pageSize, realtimeLogBufferLimit));
+                                return { ...old, pages: [nextFirstPage, ...old.pages.slice(1)] };
                             }
                         );
                     } catch (e) {
