@@ -2,7 +2,9 @@ package op
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/db"
@@ -12,6 +14,145 @@ import (
 )
 
 const dbDumpVersion = 1
+
+func DBExportAllStream(ctx context.Context, w io.Writer, includeLogs, includeStats bool) error {
+	conn := db.GetDB().WithContext(ctx)
+	wroteField := false
+
+	if _, err := io.WriteString(w, "{"); err != nil {
+		return err
+	}
+	if err := writeDBDumpJSONField(w, &wroteField, "version", dbDumpVersion); err != nil {
+		return err
+	}
+	if err := writeDBDumpJSONField(w, &wroteField, "exported_at", time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := writeDBDumpJSONField(w, &wroteField, "include_logs", includeLogs); err != nil {
+		return err
+	}
+	if err := writeDBDumpJSONField(w, &wroteField, "include_stats", includeStats); err != nil {
+		return err
+	}
+
+	if err := streamDBDumpTable[model.Channel](conn, w, &wroteField, "channels", "channels"); err != nil {
+		return err
+	}
+	if err := streamDBDumpTable[model.ChannelKey](conn, w, &wroteField, "channel_keys", "channel_keys"); err != nil {
+		return err
+	}
+	if err := streamDBDumpTable[model.Group](conn, w, &wroteField, "groups", "groups"); err != nil {
+		return err
+	}
+	if err := streamDBDumpTable[model.GroupItem](conn, w, &wroteField, "group_items", "group_items"); err != nil {
+		return err
+	}
+	if err := streamDBDumpTable[model.LLMInfo](conn, w, &wroteField, "llm_infos", "llm_infos"); err != nil {
+		return err
+	}
+	if err := streamDBDumpTable[model.APIKey](conn, w, &wroteField, "api_keys", "api_keys"); err != nil {
+		return err
+	}
+	if err := streamDBDumpTable[model.Setting](conn, w, &wroteField, "settings", "settings"); err != nil {
+		return err
+	}
+
+	if includeStats {
+		if err := streamDBDumpTable[model.StatsTotal](conn, w, &wroteField, "stats_total", "stats_total"); err != nil {
+			return err
+		}
+		if err := streamDBDumpTable[model.StatsDaily](conn, w, &wroteField, "stats_daily", "stats_daily"); err != nil {
+			return err
+		}
+		if err := streamDBDumpTable[model.StatsHourly](conn, w, &wroteField, "stats_hourly", "stats_hourly"); err != nil {
+			return err
+		}
+		if err := streamDBDumpTable[model.StatsModel](conn, w, &wroteField, "stats_model", "stats_model"); err != nil {
+			return err
+		}
+		if err := streamDBDumpTable[model.StatsChannel](conn, w, &wroteField, "stats_channel", "stats_channel"); err != nil {
+			return err
+		}
+		if err := streamDBDumpTable[model.StatsAPIKey](conn, w, &wroteField, "stats_api_key", "stats_api_key"); err != nil {
+			return err
+		}
+	}
+
+	if includeLogs {
+		if err := streamDBDumpTable[model.RelayLog](conn, w, &wroteField, "relay_logs", "relay_logs"); err != nil {
+			return err
+		}
+	}
+
+	_, err := io.WriteString(w, "}")
+	return err
+}
+
+func writeDBDumpJSONField(w io.Writer, wroteField *bool, name string, value any) error {
+	if err := writeDBDumpFieldPrefix(w, wroteField, name); err != nil {
+		return err
+	}
+	return json.NewEncoder(w).Encode(value)
+}
+
+func streamDBDumpTable[T any](conn *gorm.DB, w io.Writer, wroteField *bool, name, table string) error {
+	if err := writeDBDumpFieldPrefix(w, wroteField, name); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, "["); err != nil {
+		return err
+	}
+
+	rows, err := conn.Model(new(T)).Rows()
+	if err != nil {
+		return fmt.Errorf("export %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	encoder := json.NewEncoder(w)
+	firstRow := true
+	for rows.Next() {
+		var item T
+		if err := conn.ScanRows(rows, &item); err != nil {
+			return fmt.Errorf("export %s: %w", table, err)
+		}
+		if !firstRow {
+			if _, err := io.WriteString(w, ","); err != nil {
+				return err
+			}
+		}
+		firstRow = false
+		if err := encoder.Encode(item); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("export %s: %w", table, err)
+	}
+
+	_, err = io.WriteString(w, "]")
+	return err
+}
+
+func writeDBDumpFieldPrefix(w io.Writer, wroteField *bool, name string) error {
+	if *wroteField {
+		if _, err := io.WriteString(w, ","); err != nil {
+			return err
+		}
+	}
+	fieldName, err := json.Marshal(name)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(fieldName); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, ":"); err != nil {
+		return err
+	}
+	*wroteField = true
+	return nil
+}
 
 func DBExportAll(ctx context.Context, includeLogs, includeStats bool) (*model.DBDump, error) {
 	conn := db.GetDB().WithContext(ctx)

@@ -86,15 +86,13 @@ func exportDB(c *gin.Context) {
 	includeLogs, _ := strconv.ParseBool(c.DefaultQuery("include_logs", "false"))
 	includeStats, _ := strconv.ParseBool(c.DefaultQuery("include_stats", "false"))
 
-	dump, err := op.DBExportAll(c.Request.Context(), includeLogs, includeStats)
-	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	c.Header("Content-Type", "application/json")
 	c.Header("Content-Disposition", "attachment; filename=\"octopus-export-"+time.Now().Format("20060102150405")+".json\"")
-	c.JSON(http.StatusOK, dump)
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	if err := op.DBExportAllStream(c.Request.Context(), c.Writer, includeLogs, includeStats); err != nil {
+		_ = c.Error(err)
+	}
 }
 
 func importDB(c *gin.Context) {
