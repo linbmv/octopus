@@ -16,20 +16,51 @@ import (
 
 var groupCache = cache.New[int, model.Group](16)
 var groupMap = cache.New[string, model.Group](16)
+var groupService = NewGroupService(groupCache, groupMap)
 
 const maxGroupNestDepth = 3
 
+type GroupService struct {
+	groups      cache.Cache[int, model.Group]
+	groupsByKey cache.Cache[string, model.Group]
+}
+
+func NewGroupService(groups cache.Cache[int, model.Group], groupsByKey cache.Cache[string, model.Group]) *GroupService {
+	if groups == nil {
+		groups = cache.New[int, model.Group](16)
+	}
+	if groupsByKey == nil {
+		groupsByKey = cache.New[string, model.Group](16)
+	}
+	return &GroupService{
+		groups:      groups,
+		groupsByKey: groupsByKey,
+	}
+}
+
+func DefaultGroupService() *GroupService {
+	return groupService
+}
+
 func GroupList(ctx context.Context) ([]model.Group, error) {
-	groups := make([]model.Group, 0, groupCache.Len())
-	for _, group := range groupCache.GetAll() {
+	return groupService.List(ctx)
+}
+
+func (s *GroupService) List(ctx context.Context) ([]model.Group, error) {
+	groups := make([]model.Group, 0, s.groups.Len())
+	for _, group := range s.groups.GetAll() {
 		groups = append(groups, group)
 	}
 	return groups, nil
 }
 
 func GroupListModel(ctx context.Context) ([]string, error) {
+	return groupService.ListModel(ctx)
+}
+
+func (s *GroupService) ListModel(ctx context.Context) ([]string, error) {
 	models := []string{}
-	for _, group := range groupCache.GetAll() {
+	for _, group := range s.groups.GetAll() {
 		// 临时禁用的分组不对外暴露为可用模型。
 		if !group.Enabled {
 			continue
@@ -40,7 +71,11 @@ func GroupListModel(ctx context.Context) ([]string, error) {
 }
 
 func GroupGet(id int, ctx context.Context) (*model.Group, error) {
-	group, ok := groupCache.Get(id)
+	return groupService.Get(id, ctx)
+}
+
+func (s *GroupService) Get(id int, ctx context.Context) (*model.Group, error) {
+	group, ok := s.groups.Get(id)
 	if !ok {
 		return nil, fmt.Errorf("group not found")
 	}
@@ -48,12 +83,16 @@ func GroupGet(id int, ctx context.Context) (*model.Group, error) {
 }
 
 func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
-	group, ok := groupMap.Get(name)
+	return groupService.GetEnabledMap(name, ctx)
+}
+
+func (s *GroupService) GetEnabledMap(name string, ctx context.Context) (model.Group, error) {
+	group, ok := s.groupsByKey.Get(name)
 	if !ok {
 		// 尝试后备查找：去掉常见后缀
 		fallbackName := stripModelSuffix(name)
 		if fallbackName != name {
-			group, ok = groupMap.Get(fallbackName)
+			group, ok = s.groupsByKey.Get(fallbackName)
 			if ok {
 				// 找到后备模型，继续处理
 				goto processGroup
@@ -67,11 +106,15 @@ processGroup:
 }
 
 func GroupGetEnabledTree(name string, ctx context.Context) (model.Group, error) {
-	group, ok := groupMap.Get(name)
+	return groupService.GetEnabledTree(name, ctx)
+}
+
+func (s *GroupService) GetEnabledTree(name string, ctx context.Context) (model.Group, error) {
+	group, ok := s.groupsByKey.Get(name)
 	if !ok {
 		fallbackName := stripModelSuffix(name)
 		if fallbackName != name {
-			group, ok = groupMap.Get(fallbackName)
+			group, ok = s.groupsByKey.Get(fallbackName)
 			if ok {
 				goto processGroup
 			}
@@ -86,7 +129,11 @@ processGroup:
 
 // GroupGetEnabledByID 根据分组 ID 获取启用的分组，并递归展开嵌套分组成员
 func GroupGetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
-	group, ok := groupCache.Get(id)
+	return groupService.GetEnabledByID(id, ctx)
+}
+
+func (s *GroupService) GetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
+	group, ok := s.groups.Get(id)
 	if !ok {
 		return nil, fmt.Errorf("group not found")
 	}
@@ -98,7 +145,11 @@ func GroupGetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
 }
 
 func GroupGetEnabledTreeByID(id int, ctx context.Context) (*model.Group, error) {
-	group, ok := groupCache.Get(id)
+	return groupService.GetEnabledTreeByID(id, ctx)
+}
+
+func (s *GroupService) GetEnabledTreeByID(id int, ctx context.Context) (*model.Group, error) {
+	group, ok := s.groups.Get(id)
 	if !ok {
 		return nil, fmt.Errorf("group not found")
 	}

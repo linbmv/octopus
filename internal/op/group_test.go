@@ -7,6 +7,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/utils/cache"
 )
 
 func initTestDB(t *testing.T) {
@@ -110,6 +111,50 @@ func TestStripModelSuffix(t *testing.T) {
 				t.Errorf("stripModelSuffix(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestGroupServiceReadMethodsUseInjectedCache(t *testing.T) {
+	groups := cache.New[int, model.Group](1)
+	groupsByKey := cache.New[string, model.Group](1)
+	enabled := model.Group{ID: 1, Name: "enabled", Enabled: true}
+	disabled := model.Group{ID: 2, Name: "disabled", Enabled: false}
+	groups.Set(enabled.ID, enabled)
+	groups.Set(disabled.ID, disabled)
+	groupsByKey.Set(enabled.Name, enabled)
+	groupsByKey.Set(disabled.Name, disabled)
+
+	service := NewGroupService(groups, groupsByKey)
+	got, err := service.Get(enabled.ID, context.Background())
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.Name != enabled.Name {
+		t.Fatalf("Get name = %q, want %q", got.Name, enabled.Name)
+	}
+	got.Name = "mutated"
+	again, err := service.Get(enabled.ID, context.Background())
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if again.Name != enabled.Name {
+		t.Fatal("Get should return a copy of cached group")
+	}
+
+	models, err := service.ListModel(context.Background())
+	if err != nil {
+		t.Fatalf("ListModel returned error: %v", err)
+	}
+	if len(models) != 1 || models[0] != enabled.Name {
+		t.Fatalf("ListModel = %#v, want only enabled group", models)
+	}
+
+	expanded, err := service.GetEnabledMap(disabled.Name, context.Background())
+	if err != nil {
+		t.Fatalf("GetEnabledMap returned error: %v", err)
+	}
+	if len(expanded.Items) != 0 {
+		t.Fatal("disabled group should return no enabled items")
 	}
 }
 
