@@ -42,6 +42,11 @@ func getNowVersion(c *gin.Context) {
 }
 
 func updateFunc(c *gin.Context) {
+	if !update.IsSelfUpdateEnabled() {
+		resp.Error(c, http.StatusForbidden, "self update is disabled")
+		return
+	}
+
 	err := update.UpdateCore()
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())

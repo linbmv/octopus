@@ -32,6 +32,11 @@ type LatestInfo struct {
 
 var github_pat = os.Getenv(strings.ToUpper(conf.APP_NAME) + "_GITHUB_PAT")
 
+func IsSelfUpdateEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(strings.ToUpper(conf.APP_NAME) + "_SELF_UPDATE_ENABLED")))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
 // doRequestWithFallback performs an HTTP GET request, first without proxy, then with proxy if failed.
 func doRequestWithFallback(url string) ([]byte, error) {
 	data, err := doRequest(url, false)
