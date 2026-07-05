@@ -20,7 +20,8 @@ import {
 } from '@/api/endpoints/apikey';
 import { toast } from '@/components/common/Toast';
 import type { ApiError } from '@/api/types';
-import { APIKeyForm, type APIKeyFormValues } from './APIKeyForm';
+import { APIKeyForm } from './APIKeyForm';
+import { type APIKeyFormValues } from './useAPIKeyFormState';
 import { APIKeyStatsCard } from './APIKeyStatsCard';
 import { APIKeyKeyItem } from './APIKeyKeyItem';
 
