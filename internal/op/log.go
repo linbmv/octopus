@@ -20,12 +20,17 @@ var relayLogCache = make([]model.RelayLog, 0, relayLogMaxSize)
 var relayLogCacheLock sync.Mutex
 
 var relayLogFlushLock sync.Mutex
+var relayLogFlushSignal = make(chan struct{}, 1)
 
 var relayLogSubscribers = make(map[chan model.RelayLog]struct{})
 var relayLogSubscribersLock sync.RWMutex
 
 var relayLogStreamTokens = make(map[string]struct{})
 var relayLogStreamTokensLock sync.RWMutex
+
+func init() {
+	go relayLogFlushWorker()
+}
 
 func RelayLogStreamTokenCreate() (string, error) {
 	bytes := make([]byte, 32)
@@ -114,6 +119,23 @@ func relayLogFlushToDB(ctx context.Context) error {
 	return nil
 }
 
+func signalRelayLogFlush() {
+	select {
+	case relayLogFlushSignal <- struct{}{}:
+	default:
+	}
+}
+
+func relayLogFlushWorker() {
+	for range relayLogFlushSignal {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := relayLogFlushToDB(ctx); err != nil {
+			log.Errorf("relay log async flush error: %v", err)
+		}
+		cancel()
+	}
+}
+
 func RelayLogAdd(ctx context.Context, relayLog model.RelayLog) error {
 	enabled, err := SettingGetBool(model.SettingKeyRelayLogKeepEnabled)
 	if err != nil {
@@ -131,7 +153,8 @@ func RelayLogAdd(ctx context.Context, relayLog model.RelayLog) error {
 	if len(relayLogCache) >= maxSize {
 		if enabled {
 			relayLogCacheLock.Unlock()
-			return relayLogFlushToDB(ctx)
+			signalRelayLogFlush()
+			return nil
 		}
 		// 如果未启用日志保存，移除最旧的日志，保留最新的日志用于实时查询
 		// 重建底层数组而不是 reslice，避免数组持续引用旧日志的 Request/ResponseContent 导致内存无法回收

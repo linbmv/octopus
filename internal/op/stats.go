@@ -35,6 +35,11 @@ var statsModelCacheNeedUpdateLock sync.Mutex
 var statsAPIKeyCache = cache.New[int, model.StatsAPIKey](16)
 var statsAPIKeyCacheNeedUpdate = make(map[int]struct{})
 var statsAPIKeyCacheNeedUpdateLock sync.Mutex
+var statsSaveSignal = make(chan model.StatsDaily, 16)
+
+func init() {
+	go statsSaveWorker()
+}
 
 func StatsSaveDBTask() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -199,6 +204,30 @@ func statsSaveDBWithDailyOverride(ctx context.Context, dailyOverride model.Stats
 	return persistStatsSnapshots(ctx, totalSnap, dailyOverride, hourlyAll, channelIDs, modelIDs, apiKeyIDs)
 }
 
+func signalStatsSave(daily model.StatsDaily) {
+	if daily.Date == "" {
+		return
+	}
+
+	select {
+	case statsSaveSignal <- daily:
+	default:
+		go func() {
+			statsSaveSignal <- daily
+		}()
+	}
+}
+
+func statsSaveWorker() {
+	for daily := range statsSaveSignal {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		if err := statsSaveDBWithDailyOverride(ctx, daily); err != nil {
+			log.Errorf("stats async save error: %v", err)
+		}
+		cancel()
+	}
+}
+
 func StatsDailyUpdate(ctx context.Context, metrics model.StatsMetrics) error {
 	today := time.Now().Format("20060102")
 
@@ -214,7 +243,8 @@ func StatsDailyUpdate(ctx context.Context, metrics model.StatsMetrics) error {
 	statsDailyCache.StatsMetrics.Add(metrics)
 	statsDailyCacheLock.Unlock()
 
-	return statsSaveDBWithDailyOverride(ctx, prevDaily)
+	signalStatsSave(prevDaily)
+	return nil
 }
 
 func StatsTotalUpdate(metrics model.StatsMetrics) error {
