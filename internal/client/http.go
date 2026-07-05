@@ -167,8 +167,9 @@ func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// Clone the request to avoid modifying the original
 	reqClone := req.Clone(req.Context())
 
-	// Override User-Agent to a neutral value that won't be blocked by upstream channels
-	reqClone.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Octopus/1.0)")
+	// Override User-Agent to a standard browser value that won't be blocked by upstream channels
+	// Use a common Chrome on Windows User-Agent to avoid detection
+	reqClone.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 	return t.base.RoundTrip(reqClone)
 }
