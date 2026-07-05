@@ -73,3 +73,33 @@ func TestStatsServiceDailyUpdateSignalsPreviousDay(t *testing.T) {
 		t.Fatalf("unexpected new daily snapshot: %#v", got)
 	}
 }
+
+func TestStatsServiceDrainPendingDailySnapshots(t *testing.T) {
+	service := NewStatsService()
+	service.saveSignal <- model.StatsDaily{
+		Date:         "20000101",
+		StatsMetrics: model.StatsMetrics{RequestSuccess: 2},
+	}
+	service.saveSignal <- model.StatsDaily{}
+	service.saveSignal <- model.StatsDaily{
+		Date:         "20000102",
+		StatsMetrics: model.StatsMetrics{RequestSuccess: 3},
+	}
+
+	got := service.drainPendingDailySnapshots()
+	if len(got) != 2 {
+		t.Fatalf("drained %d snapshots, want 2: %#v", len(got), got)
+	}
+	if got[0].Date != "20000101" || got[0].RequestSuccess != 2 {
+		t.Fatalf("unexpected first snapshot: %#v", got[0])
+	}
+	if got[1].Date != "20000102" || got[1].RequestSuccess != 3 {
+		t.Fatalf("unexpected second snapshot: %#v", got[1])
+	}
+
+	select {
+	case leftover := <-service.saveSignal:
+		t.Fatalf("expected queue to be drained, got %#v", leftover)
+	default:
+	}
+}

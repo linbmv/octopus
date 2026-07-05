@@ -17,8 +17,12 @@ type taskEntry struct {
 	runOnStart bool
 	ticker     *time.Ticker
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 	updateCh   chan time.Duration
 	running    atomic.Bool
+	mu         sync.Mutex
+	stopping   bool
+	wg         sync.WaitGroup
 }
 
 var (
@@ -67,7 +71,7 @@ func Update(name string, interval time.Duration) {
 	if interval <= 0 {
 		delete(tasks, name)
 		tasksMu.Unlock()
-		close(entry.stopCh)
+		entry.stop()
 		log.Infof("task %s removed: interval is 0", name)
 		return
 	}
@@ -83,17 +87,23 @@ func Update(name string, interval time.Duration) {
 
 // RUN 启动所有注册的任务
 func RUN() {
+	var wg sync.WaitGroup
 	tasksMu.RLock()
 	for _, entry := range tasks {
-		go runTask(entry)
+		wg.Add(1)
+		go func(entry *taskEntry) {
+			defer wg.Done()
+			runTask(entry)
+		}(entry)
 	}
 	tasksMu.RUnlock()
-
-	// 阻塞主协程
-	select {}
+	wg.Wait()
 }
 
 func Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	tasksMu.Lock()
 	entries := make([]*taskEntry, 0, len(tasks))
 	for name, entry := range tasks {
@@ -103,15 +113,17 @@ func Close() error {
 	tasksMu.Unlock()
 
 	for _, entry := range entries {
-		close(entry.stopCh)
+		entry.stop()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := stopChannelMaintenance(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	var closeErr error
+	if err := waitTaskEntries(ctx, entries); err != nil {
+		closeErr = err
+	}
+	if err := stopChannelMaintenance(ctx); err != nil && !errors.Is(err, context.Canceled) && closeErr == nil {
 		return err
 	}
-	return nil
+	return closeErr
 }
 
 func runTask(entry *taskEntry) {
@@ -138,12 +150,51 @@ func runTask(entry *taskEntry) {
 }
 
 func (entry *taskEntry) runOnce() {
+	entry.mu.Lock()
+	if entry.stopping {
+		entry.mu.Unlock()
+		return
+	}
 	if !entry.running.CompareAndSwap(false, true) {
+		entry.mu.Unlock()
 		log.Warnf("task %s still running, skipping this tick", entry.name)
 		return
 	}
+	entry.wg.Add(1)
+	entry.mu.Unlock()
+
 	go func() {
+		defer entry.wg.Done()
 		defer entry.running.Store(false)
 		entry.fn()
 	}()
+}
+
+func (entry *taskEntry) stop() {
+	entry.mu.Lock()
+	entry.stopping = true
+	entry.mu.Unlock()
+	entry.stopOnce.Do(func() {
+		close(entry.stopCh)
+	})
+}
+
+func waitTaskEntries(ctx context.Context, entries []*taskEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		for _, entry := range entries {
+			entry.wg.Wait()
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

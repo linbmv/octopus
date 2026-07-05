@@ -157,6 +157,12 @@ func StatsSaveDB(ctx context.Context) error {
 }
 
 func (s *StatsService) SaveDB(ctx context.Context) error {
+	for _, daily := range s.drainPendingDailySnapshots() {
+		if err := s.saveDBWithDailyOverride(ctx, daily); err != nil {
+			return err
+		}
+	}
+
 	totalSnap := s.totalSnapshot()
 	if totalSnap.ID == 0 {
 		totalSnap.ID = 1
@@ -263,6 +269,20 @@ func (s *StatsService) signalSave(daily model.StatsDaily) {
 	case s.saveSignal <- daily:
 	default:
 		log.Warnf("stats async save queue full, dropping daily snapshot: date=%s", daily.Date)
+	}
+}
+
+func (s *StatsService) drainPendingDailySnapshots() []model.StatsDaily {
+	var snapshots []model.StatsDaily
+	for {
+		select {
+		case daily := <-s.saveSignal:
+			if daily.Date != "" {
+				snapshots = append(snapshots, daily)
+			}
+		default:
+			return snapshots
+		}
 	}
 }
 
