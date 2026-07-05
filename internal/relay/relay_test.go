@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/conf"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/gin-gonic/gin"
@@ -647,6 +648,43 @@ func TestStreamAggregationFeedsMetricsUsage(t *testing.T) {
 	}
 	if len(m.InternalResponse) == 0 {
 		t.Fatal("InternalResponse 应保存聚合后的响应体")
+	}
+}
+
+func TestStreamLogCollectorKeepsShortStreamAggregatable(t *testing.T) {
+	collector := newStreamLogCollector()
+	collector.Add(&httpclient.StreamEvent{Data: []byte(`{"choices":[{"delta":{"content":"hi"}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`)})
+
+	if collector.Truncated() {
+		t.Fatal("short stream should not be truncated")
+	}
+	if len(collector.Events()) != 1 {
+		t.Fatalf("events length = %d, want 1", len(collector.Events()))
+	}
+	if collector.Usage() == nil || collector.Usage().PromptTokens != 4 || collector.Usage().CompletionTokens != 2 {
+		t.Fatalf("usage not tracked: %+v", collector.Usage())
+	}
+}
+
+func TestStreamLogCollectorBoundsLongStreamAndKeepsUsage(t *testing.T) {
+	collector := newStreamLogCollector()
+	collector.Add(&httpclient.StreamEvent{Data: []byte(`{"choices":[{"delta":{"content":"` + strings.Repeat("x", conf.MaxRelayLogContentBytes) + `"}}]}`)})
+	collector.Add(&httpclient.StreamEvent{Data: []byte(`{"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}`)})
+
+	if !collector.Truncated() {
+		t.Fatal("long stream should be truncated")
+	}
+	if len(collector.Events()) != 0 {
+		t.Fatalf("truncated collector should release retained events, got %d", len(collector.Events()))
+	}
+	if len(collector.TruncatedBody()) > conf.MaxRelayLogContentBytes {
+		t.Fatalf("truncated body length = %d, want <= %d", len(collector.TruncatedBody()), conf.MaxRelayLogContentBytes)
+	}
+	if !strings.Contains(string(collector.TruncatedBody()), streamLogTruncatedMarker) {
+		t.Fatalf("truncated body missing marker")
+	}
+	if collector.Usage() == nil || collector.Usage().PromptTokens != 11 || collector.Usage().CompletionTokens != 7 {
+		t.Fatalf("usage from post-truncation event not tracked: %+v", collector.Usage())
 	}
 }
 

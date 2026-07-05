@@ -1081,7 +1081,7 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 	ra.c.Header("X-Accel-Buffering", "no")
 
 	firstToken := true
-	responseEvents := make([]*httpclient.StreamEvent, 0, 8)
+	responseLog := newStreamLogCollector()
 	type sseReadResult struct {
 		event *httpclient.StreamEvent
 		err   error
@@ -1147,12 +1147,17 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 		case r, ok := <-results:
 			if !ok {
 				log.Infof("stream end")
-				if len(responseEvents) == 0 {
+				if responseLog.Empty() {
+					return nil
+				}
+				if responseLog.Truncated() {
+					ra.metrics.InternalResponse = responseLog.TruncatedBody()
+					ra.metrics.RecordUsage(responseLog.Usage())
 					return nil
 				}
 				// 客户端请求流式时，pipeline 只负责边转边写，不会自动生成完整响应体。
 				// 这里复用同一个 inbound 聚合器把已经写给客户端的事件合成最终 body，日志只落一次最终响应。
-				responseBody, meta, err := ra.inAdapter.AggregateStreamChunks(context.WithoutCancel(ctx), responseEvents)
+				responseBody, meta, err := ra.inAdapter.AggregateStreamChunks(context.WithoutCancel(ctx), responseLog.Events())
 				if err != nil {
 					log.Warnf("failed to aggregate stream response for log: %v", err)
 					return nil
@@ -1169,9 +1174,9 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 			if r.event == nil || len(r.event.Data) == 0 {
 				continue
 			}
-			// 这里只临时保存 pipeline 已经转换好的客户端格式事件，正常结束后聚合成最终响应体用于日志；不会把分片逐条落库。
+			// 这里只保存有限大小的客户端格式事件，正常短流结束后聚合成最终响应体用于日志；长流超过上限后只保留截断内容。
 			event := r.event
-			responseEvents = append(responseEvents, event)
+			responseLog.Add(event)
 			if firstToken {
 				now := time.Now()
 				ra.metrics.FirstTokenTime = now
