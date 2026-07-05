@@ -36,6 +36,8 @@ var startCmd = &cobra.Command{
 			return
 		}
 		shutdown.Register(op.SaveCache)
+		op.StartAsyncWorkers()
+		shutdown.Register(op.StopAsyncWorkers)
 
 		if err := op.UserInit(); err != nil {
 			log.Errorf("user init error: %v", err)

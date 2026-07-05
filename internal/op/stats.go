@@ -36,10 +36,9 @@ var statsAPIKeyCache = cache.New[int, model.StatsAPIKey](16)
 var statsAPIKeyCacheNeedUpdate = make(map[int]struct{})
 var statsAPIKeyCacheNeedUpdateLock sync.Mutex
 var statsSaveSignal = make(chan model.StatsDaily, 16)
-
-func init() {
-	go statsSaveWorker()
-}
+var statsSaveWorkerLock sync.Mutex
+var statsSaveWorkerStop chan struct{}
+var statsSaveWorkerDone chan struct{}
 
 func StatsSaveDBTask() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -212,19 +211,58 @@ func signalStatsSave(daily model.StatsDaily) {
 	select {
 	case statsSaveSignal <- daily:
 	default:
-		go func() {
-			statsSaveSignal <- daily
-		}()
+		log.Warnf("stats async save queue full, dropping daily snapshot: date=%s", daily.Date)
 	}
 }
 
-func statsSaveWorker() {
-	for daily := range statsSaveSignal {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		if err := statsSaveDBWithDailyOverride(ctx, daily); err != nil {
-			log.Errorf("stats async save error: %v", err)
+func startStatsSaveWorker() {
+	statsSaveWorkerLock.Lock()
+	defer statsSaveWorkerLock.Unlock()
+	if statsSaveWorkerStop != nil {
+		return
+	}
+
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	statsSaveWorkerStop = stopCh
+	statsSaveWorkerDone = doneCh
+	go statsSaveWorker(stopCh, doneCh)
+}
+
+func stopStatsSaveWorker(ctx context.Context) error {
+	statsSaveWorkerLock.Lock()
+	stopCh := statsSaveWorkerStop
+	doneCh := statsSaveWorkerDone
+	if stopCh == nil || doneCh == nil {
+		statsSaveWorkerLock.Unlock()
+		return nil
+	}
+	statsSaveWorkerStop = nil
+	statsSaveWorkerDone = nil
+	close(stopCh)
+	statsSaveWorkerLock.Unlock()
+
+	select {
+	case <-doneCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func statsSaveWorker(stopCh <-chan struct{}, doneCh chan<- struct{}) {
+	defer close(doneCh)
+	for {
+		select {
+		case daily := <-statsSaveSignal:
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			if err := statsSaveDBWithDailyOverride(ctx, daily); err != nil {
+				log.Errorf("stats async save error: %v", err)
+			}
+			cancel()
+		case <-stopCh:
+			return
 		}
-		cancel()
 	}
 }
 

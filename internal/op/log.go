@@ -21,16 +21,15 @@ var relayLogCacheLock sync.Mutex
 
 var relayLogFlushLock sync.Mutex
 var relayLogFlushSignal = make(chan struct{}, 1)
+var relayLogFlushWorkerLock sync.Mutex
+var relayLogFlushWorkerStop chan struct{}
+var relayLogFlushWorkerDone chan struct{}
 
 var relayLogSubscribers = make(map[chan model.RelayLog]struct{})
 var relayLogSubscribersLock sync.RWMutex
 
 var relayLogStreamTokens = make(map[string]struct{})
 var relayLogStreamTokensLock sync.RWMutex
-
-func init() {
-	go relayLogFlushWorker()
-}
 
 func RelayLogStreamTokenCreate() (string, error) {
 	bytes := make([]byte, 32)
@@ -126,13 +125,54 @@ func signalRelayLogFlush() {
 	}
 }
 
-func relayLogFlushWorker() {
-	for range relayLogFlushSignal {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := relayLogFlushToDB(ctx); err != nil {
-			log.Errorf("relay log async flush error: %v", err)
+func startRelayLogFlushWorker() {
+	relayLogFlushWorkerLock.Lock()
+	defer relayLogFlushWorkerLock.Unlock()
+	if relayLogFlushWorkerStop != nil {
+		return
+	}
+
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	relayLogFlushWorkerStop = stopCh
+	relayLogFlushWorkerDone = doneCh
+	go relayLogFlushWorker(stopCh, doneCh)
+}
+
+func stopRelayLogFlushWorker(ctx context.Context) error {
+	relayLogFlushWorkerLock.Lock()
+	stopCh := relayLogFlushWorkerStop
+	doneCh := relayLogFlushWorkerDone
+	if stopCh == nil || doneCh == nil {
+		relayLogFlushWorkerLock.Unlock()
+		return nil
+	}
+	relayLogFlushWorkerStop = nil
+	relayLogFlushWorkerDone = nil
+	close(stopCh)
+	relayLogFlushWorkerLock.Unlock()
+
+	select {
+	case <-doneCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func relayLogFlushWorker(stopCh <-chan struct{}, doneCh chan<- struct{}) {
+	defer close(doneCh)
+	for {
+		select {
+		case <-relayLogFlushSignal:
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := relayLogFlushToDB(ctx); err != nil {
+				log.Errorf("relay log async flush error: %v", err)
+			}
+			cancel()
+		case <-stopCh:
+			return
 		}
-		cancel()
 	}
 }
 
