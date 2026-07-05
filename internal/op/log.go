@@ -16,68 +16,106 @@ import (
 const relayLogMaxSize = 20
 const relayLogMaxSizeNoDB = 100 // 当不保存到数据库时，允许更大的缓存用于实时查询
 
-var relayLogCache = make([]model.RelayLog, 0, relayLogMaxSize)
-var relayLogCacheLock sync.Mutex
+var relayLogService = NewRelayLogService()
 
-var relayLogFlushLock sync.Mutex
-var relayLogFlushSignal = make(chan struct{}, 1)
-var relayLogFlushWorkerLock sync.Mutex
-var relayLogFlushWorkerStop chan struct{}
-var relayLogFlushWorkerDone chan struct{}
+type RelayLogService struct {
+	cache   []model.RelayLog
+	cacheMu sync.Mutex
 
-var relayLogSubscribers = make(map[chan model.RelayLog]struct{})
-var relayLogSubscribersLock sync.RWMutex
+	flushMu     sync.Mutex
+	flushSignal chan struct{}
 
-var relayLogStreamTokens = make(map[string]struct{})
-var relayLogStreamTokensLock sync.RWMutex
+	workerMu   sync.Mutex
+	workerStop chan struct{}
+	workerDone chan struct{}
+
+	subscribers   map[chan model.RelayLog]struct{}
+	subscribersMu sync.RWMutex
+
+	streamTokens   map[string]struct{}
+	streamTokensMu sync.RWMutex
+}
+
+func NewRelayLogService() *RelayLogService {
+	return &RelayLogService{
+		cache:        make([]model.RelayLog, 0, relayLogMaxSize),
+		flushSignal:  make(chan struct{}, 1),
+		subscribers:  make(map[chan model.RelayLog]struct{}),
+		streamTokens: make(map[string]struct{}),
+	}
+}
+
+func DefaultRelayLogService() *RelayLogService {
+	return relayLogService
+}
 
 func RelayLogStreamTokenCreate() (string, error) {
+	return relayLogService.StreamTokenCreate()
+}
+
+func (s *RelayLogService) StreamTokenCreate() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(bytes)
 
-	relayLogStreamTokensLock.Lock()
-	relayLogStreamTokens[token] = struct{}{}
-	relayLogStreamTokensLock.Unlock()
+	s.streamTokensMu.Lock()
+	s.streamTokens[token] = struct{}{}
+	s.streamTokensMu.Unlock()
 
 	return token, nil
 }
 
 func RelayLogStreamTokenVerify(token string) bool {
-	relayLogStreamTokensLock.RLock()
-	_, ok := relayLogStreamTokens[token]
-	relayLogStreamTokensLock.RUnlock()
+	return relayLogService.StreamTokenVerify(token)
+}
+
+func (s *RelayLogService) StreamTokenVerify(token string) bool {
+	s.streamTokensMu.RLock()
+	defer s.streamTokensMu.RUnlock()
+	_, ok := s.streamTokens[token]
 	return ok
 }
 
 func RelayLogStreamTokenRevoke(token string) {
-	relayLogStreamTokensLock.Lock()
-	delete(relayLogStreamTokens, token)
-	relayLogStreamTokensLock.Unlock()
+	relayLogService.StreamTokenRevoke(token)
+}
+
+func (s *RelayLogService) StreamTokenRevoke(token string) {
+	s.streamTokensMu.Lock()
+	delete(s.streamTokens, token)
+	s.streamTokensMu.Unlock()
 }
 
 func RelayLogSubscribe() chan model.RelayLog {
+	return relayLogService.Subscribe()
+}
+
+func (s *RelayLogService) Subscribe() chan model.RelayLog {
 	ch := make(chan model.RelayLog, 10)
-	relayLogSubscribersLock.Lock()
-	relayLogSubscribers[ch] = struct{}{}
-	relayLogSubscribersLock.Unlock()
+	s.subscribersMu.Lock()
+	s.subscribers[ch] = struct{}{}
+	s.subscribersMu.Unlock()
 	return ch
 }
 
 func RelayLogUnsubscribe(ch chan model.RelayLog) {
-	relayLogSubscribersLock.Lock()
-	delete(relayLogSubscribers, ch)
-	relayLogSubscribersLock.Unlock()
+	relayLogService.Unsubscribe(ch)
+}
+
+func (s *RelayLogService) Unsubscribe(ch chan model.RelayLog) {
+	s.subscribersMu.Lock()
+	delete(s.subscribers, ch)
+	s.subscribersMu.Unlock()
 	close(ch)
 }
 
-func notifySubscribers(relayLog model.RelayLog) {
-	relayLogSubscribersLock.RLock()
-	defer relayLogSubscribersLock.RUnlock()
+func (s *RelayLogService) notifySubscribers(relayLog model.RelayLog) {
+	s.subscribersMu.RLock()
+	defer s.subscribersMu.RUnlock()
 
-	for ch := range relayLogSubscribers {
+	for ch := range s.subscribers {
 		select {
 		case ch <- relayLog:
 		default:
@@ -85,72 +123,80 @@ func notifySubscribers(relayLog model.RelayLog) {
 	}
 }
 
-func relayLogFlushToDB(ctx context.Context) error {
-	relayLogFlushLock.Lock()
-	defer relayLogFlushLock.Unlock()
+func (s *RelayLogService) flushToDB(ctx context.Context) error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 
-	relayLogCacheLock.Lock()
-	if len(relayLogCache) == 0 {
-		relayLogCacheLock.Unlock()
+	s.cacheMu.Lock()
+	if len(s.cache) == 0 {
+		s.cacheMu.Unlock()
 		return nil
 	}
-	batch := make([]model.RelayLog, len(relayLogCache))
-	copy(batch, relayLogCache)
+	batch := make([]model.RelayLog, len(s.cache))
+	copy(batch, s.cache)
 	flushedUpto := len(batch)
-	relayLogCacheLock.Unlock()
+	s.cacheMu.Unlock()
 
 	result := db.GetDB().WithContext(ctx).Create(&batch)
 	if result.Error != nil {
 		return result.Error
 	}
 
-	relayLogCacheLock.Lock()
-	if len(relayLogCache) >= flushedUpto {
-		relayLogCache = relayLogCache[flushedUpto:]
+	s.cacheMu.Lock()
+	if len(s.cache) >= flushedUpto {
+		s.cache = s.cache[flushedUpto:]
 	} else {
-		relayLogCache = relayLogCache[:0]
+		s.cache = s.cache[:0]
 	}
-	if len(relayLogCache) == 0 {
-		relayLogCache = make([]model.RelayLog, 0, relayLogMaxSize)
+	if len(s.cache) == 0 {
+		s.cache = make([]model.RelayLog, 0, relayLogMaxSize)
 	}
-	relayLogCacheLock.Unlock()
+	s.cacheMu.Unlock()
 
 	return nil
 }
 
-func signalRelayLogFlush() {
+func (s *RelayLogService) signalFlush() {
 	select {
-	case relayLogFlushSignal <- struct{}{}:
+	case s.flushSignal <- struct{}{}:
 	default:
 	}
 }
 
 func startRelayLogFlushWorker() {
-	relayLogFlushWorkerLock.Lock()
-	defer relayLogFlushWorkerLock.Unlock()
-	if relayLogFlushWorkerStop != nil {
+	relayLogService.StartFlushWorker()
+}
+
+func (s *RelayLogService) StartFlushWorker() {
+	s.workerMu.Lock()
+	defer s.workerMu.Unlock()
+	if s.workerStop != nil {
 		return
 	}
 
 	stopCh := make(chan struct{})
 	doneCh := make(chan struct{})
-	relayLogFlushWorkerStop = stopCh
-	relayLogFlushWorkerDone = doneCh
-	go relayLogFlushWorker(stopCh, doneCh)
+	s.workerStop = stopCh
+	s.workerDone = doneCh
+	go s.flushWorker(stopCh, doneCh)
 }
 
 func stopRelayLogFlushWorker(ctx context.Context) error {
-	relayLogFlushWorkerLock.Lock()
-	stopCh := relayLogFlushWorkerStop
-	doneCh := relayLogFlushWorkerDone
+	return relayLogService.StopFlushWorker(ctx)
+}
+
+func (s *RelayLogService) StopFlushWorker(ctx context.Context) error {
+	s.workerMu.Lock()
+	stopCh := s.workerStop
+	doneCh := s.workerDone
 	if stopCh == nil || doneCh == nil {
-		relayLogFlushWorkerLock.Unlock()
+		s.workerMu.Unlock()
 		return nil
 	}
-	relayLogFlushWorkerStop = nil
-	relayLogFlushWorkerDone = nil
+	s.workerStop = nil
+	s.workerDone = nil
 	close(stopCh)
-	relayLogFlushWorkerLock.Unlock()
+	s.workerMu.Unlock()
 
 	select {
 	case <-doneCh:
@@ -160,13 +206,13 @@ func stopRelayLogFlushWorker(ctx context.Context) error {
 	}
 }
 
-func relayLogFlushWorker(stopCh <-chan struct{}, doneCh chan<- struct{}) {
+func (s *RelayLogService) flushWorker(stopCh <-chan struct{}, doneCh chan<- struct{}) {
 	defer close(doneCh)
 	for {
 		select {
-		case <-relayLogFlushSignal:
+		case <-s.flushSignal:
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if err := relayLogFlushToDB(ctx); err != nil {
+			if err := s.flushToDB(ctx); err != nil {
 				log.Errorf("relay log async flush error: %v", err)
 			}
 			cancel()
@@ -177,6 +223,10 @@ func relayLogFlushWorker(stopCh <-chan struct{}, doneCh chan<- struct{}) {
 }
 
 func RelayLogAdd(ctx context.Context, relayLog model.RelayLog) error {
+	return relayLogService.Add(ctx, relayLog)
+}
+
+func (s *RelayLogService) Add(ctx context.Context, relayLog model.RelayLog) error {
 	enabled, err := SettingGetBool(model.SettingKeyRelayLogKeepEnabled)
 	if err != nil {
 		return err
@@ -186,30 +236,34 @@ func RelayLogAdd(ctx context.Context, relayLog model.RelayLog) error {
 		maxSize = relayLogMaxSizeNoDB
 	}
 	relayLog.ID = snowflake.GenerateID()
-	go notifySubscribers(relayLog)
+	go s.notifySubscribers(relayLog)
 
-	relayLogCacheLock.Lock()
-	relayLogCache = append(relayLogCache, relayLog)
-	if len(relayLogCache) >= maxSize {
+	s.cacheMu.Lock()
+	s.cache = append(s.cache, relayLog)
+	if len(s.cache) >= maxSize {
 		if enabled {
-			relayLogCacheLock.Unlock()
-			signalRelayLogFlush()
+			s.cacheMu.Unlock()
+			s.signalFlush()
 			return nil
 		}
 		// 如果未启用日志保存，移除最旧的日志，保留最新的日志用于实时查询
 		// 重建底层数组而不是 reslice，避免数组持续引用旧日志的 Request/ResponseContent 导致内存无法回收
 		keepSize := maxSize / 2
-		if len(relayLogCache) > keepSize {
+		if len(s.cache) > keepSize {
 			newCache := make([]model.RelayLog, keepSize, maxSize)
-			copy(newCache, relayLogCache[len(relayLogCache)-keepSize:])
-			relayLogCache = newCache
+			copy(newCache, s.cache[len(s.cache)-keepSize:])
+			s.cache = newCache
 		}
 	}
-	relayLogCacheLock.Unlock()
+	s.cacheMu.Unlock()
 	return nil
 }
 
 func RelayLogSaveDBTask(ctx context.Context) error {
+	return relayLogService.SaveDBTask(ctx)
+}
+
+func (s *RelayLogService) SaveDBTask(ctx context.Context) error {
 	log.Debugf("relay log save db task started")
 	startTime := time.Now()
 	defer func() {
@@ -221,26 +275,26 @@ func RelayLogSaveDBTask(ctx context.Context) error {
 	}
 
 	if enabled {
-		if err := relayLogFlushToDB(ctx); err != nil {
+		if err := s.flushToDB(ctx); err != nil {
 			return err
 		}
-		return relayLogCleanup(ctx)
+		return s.cleanup(ctx)
 	}
 
 	// 如果未启用日志保存，检查缓存大小，如果超过限制则清理旧日志
-	relayLogCacheLock.Lock()
-	if len(relayLogCache) > relayLogMaxSizeNoDB {
+	s.cacheMu.Lock()
+	if len(s.cache) > relayLogMaxSizeNoDB {
 		keepSize := relayLogMaxSizeNoDB / 2
 		newCache := make([]model.RelayLog, keepSize, relayLogMaxSizeNoDB)
-		copy(newCache, relayLogCache[len(relayLogCache)-keepSize:])
-		relayLogCache = newCache
+		copy(newCache, s.cache[len(s.cache)-keepSize:])
+		s.cache = newCache
 	}
-	relayLogCacheLock.Unlock()
+	s.cacheMu.Unlock()
 
 	return nil
 }
 
-func relayLogCleanup(ctx context.Context) error {
+func (s *RelayLogService) cleanup(ctx context.Context) error {
 	keepPeriod, err := SettingGetInt(model.SettingKeyRelayLogKeepPeriod)
 	if err != nil {
 		return err
@@ -257,6 +311,10 @@ func relayLogCleanup(ctx context.Context) error {
 // RelayLogList 查询日志列表，支持可选的时间范围过滤
 // startTime 和 endTime 为 nil 时表示不限制时间范围
 func RelayLogList(ctx context.Context, startTime, endTime *int, page, pageSize int) ([]model.RelayLog, error) {
+	return relayLogService.List(ctx, startTime, endTime, page, pageSize)
+}
+
+func (s *RelayLogService) List(ctx context.Context, startTime, endTime *int, page, pageSize int) ([]model.RelayLog, error) {
 	enabled, err := SettingGetBool(model.SettingKeyRelayLogKeepEnabled)
 	if err != nil {
 		return nil, err
@@ -264,9 +322,9 @@ func RelayLogList(ctx context.Context, startTime, endTime *int, page, pageSize i
 	hasTimeFilter := startTime != nil && endTime != nil
 
 	// 获取缓存中符合条件的日志
-	relayLogCacheLock.Lock()
+	s.cacheMu.Lock()
 	var cachedLogs []model.RelayLog
-	for _, log := range relayLogCache {
+	for _, log := range s.cache {
 		if hasTimeFilter {
 			if log.Time >= int64(*startTime) && log.Time <= int64(*endTime) {
 				cachedLogs = append(cachedLogs, log)
@@ -275,7 +333,7 @@ func RelayLogList(ctx context.Context, startTime, endTime *int, page, pageSize i
 			cachedLogs = append(cachedLogs, log)
 		}
 	}
-	relayLogCacheLock.Unlock()
+	s.cacheMu.Unlock()
 
 	// 反转缓存日志顺序（原本新的在末尾，反转后新的在前面，方便分页）
 	for i, j := 0, len(cachedLogs)-1; i < j; i, j = i+1, j-1 {
@@ -322,8 +380,12 @@ func RelayLogList(ctx context.Context, startTime, endTime *int, page, pageSize i
 }
 
 func RelayLogClear(ctx context.Context) error {
-	relayLogCacheLock.Lock()
-	relayLogCache = make([]model.RelayLog, 0, relayLogMaxSize)
-	relayLogCacheLock.Unlock()
+	return relayLogService.Clear(ctx)
+}
+
+func (s *RelayLogService) Clear(ctx context.Context) error {
+	s.cacheMu.Lock()
+	s.cache = make([]model.RelayLog, 0, relayLogMaxSize)
+	s.cacheMu.Unlock()
 	return db.GetDB().WithContext(ctx).Where("1 = 1").Delete(&model.RelayLog{}).Error
 }
