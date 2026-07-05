@@ -1,11 +1,8 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 	"strconv"
-	"strings"
-	"time"
 
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
@@ -82,15 +79,7 @@ func createChannel(c *gin.Context) {
 	}
 	stats := op.StatsChannelGet(channel.ID)
 	channel.Stats = &stats
-	go func(channel *model.Channel) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		modelStr := channel.Model + "," + channel.CustomModel
-		modelArray := strings.Split(modelStr, ",")
-		helper.LLMPriceAddToDB(modelArray, ctx)
-		helper.ChannelBaseUrlDelayUpdate(channel, ctx)
-		helper.ChannelAutoGroup(channel, ctx)
-	}(&channel)
+	task.SubmitChannelMaintenance(channel)
 	resp.Success(c, channel)
 }
 
@@ -107,15 +96,7 @@ func updateChannel(c *gin.Context) {
 	}
 	stats := op.StatsChannelGet(channel.ID)
 	channel.Stats = &stats
-	go func(channel *model.Channel) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		modelStr := channel.Model + "," + channel.CustomModel
-		modelArray := strings.Split(modelStr, ",")
-		helper.LLMPriceAddToDB(modelArray, ctx)
-		helper.ChannelBaseUrlDelayUpdate(channel, ctx)
-		helper.ChannelAutoGroup(channel, ctx)
-	}(channel)
+	task.SubmitChannelMaintenance(*channel)
 	resp.Success(c, channel)
 }
 
