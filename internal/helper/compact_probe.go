@@ -16,7 +16,7 @@ import (
 )
 
 const compactProbeTimeout = 15 * time.Second
-const compactProbeHandoffText = "Project handoff: The current objective is to keep routing reliable while avoiding provider abuse triggers. Constraint: preserve retry fallback behavior for real user requests. Next step: summarize the routing risk and the mitigation."
+const compactProbeHandoffText = "Project handoff: The current objective is to keep routing reliable while avoiding provider abuse triggers. Constraint: preserve routing reliability for real user requests. Next step: summarize the routing risk and the mitigation."
 const compactProbeSummaryInstruction = "Write a concise continuation summary for this handoff."
 
 type CompactProbeResult struct {
@@ -121,22 +121,6 @@ func compactProbeRequest(strategy model.CompactStrategy, probeModel string) (str
 			"max_output_tokens": 16,
 		})
 		return "/responses/compact", body, err
-	case model.CompactStrategyResponsesManual:
-		body, err := json.Marshal(map[string]any{
-			"model":             probeModel,
-			"input":             compactProbeResponsesInput(compactProbeHandoffText),
-			"store":             false,
-			"max_output_tokens": 16,
-		})
-		return "/responses", body, err
-	case model.CompactStrategyChatManual:
-		body, err := json.Marshal(map[string]any{
-			"model":      probeModel,
-			"messages":   []map[string]string{{"role": "user", "content": compactProbeSummaryInstruction + " " + compactProbeHandoffText}},
-			"stream":     false,
-			"max_tokens": 16,
-		})
-		return "/chat/completions", body, err
 	default:
 		return "", nil, fmt.Errorf("unknown compact probe strategy: %s", strategy)
 	}
@@ -187,18 +171,7 @@ func compactProbeErrorSnippet(value string) string {
 }
 
 func canTryNextCompactProbeStrategy(strategy model.CompactStrategy, err error) bool {
-	switch strategy {
-	case model.CompactStrategyOfficial:
-		return isCompactProbeEndpointUnsupported(err) ||
-			isCompactProbeResponsesIncompatible(err) ||
-			isCompactProbeRetryable(err)
-	case model.CompactStrategyResponsesManual:
-		return isCompactProbeEndpointUnsupported(err) ||
-			isCompactProbeResponsesIncompatible(err) ||
-			isCompactProbeRetryable(err)
-	default:
-		return false
-	}
+	return false
 }
 
 func isCompactProbeDefinitiveIncompatibility(err error) bool {

@@ -14,10 +14,8 @@ import (
 type compactStrategy string
 
 const (
-	compactStrategyOfficial        compactStrategy = compactStrategy(dbmodel.CompactStrategyOfficial)
-	compactStrategyResponsesManual compactStrategy = compactStrategy(dbmodel.CompactStrategyResponsesManual)
-	compactStrategyChatManual      compactStrategy = compactStrategy(dbmodel.CompactStrategyChatManual)
-	compactStrategyIncompatible    compactStrategy = compactStrategy(dbmodel.CompactStrategyIncompatible)
+	compactStrategyOfficial     compactStrategy = compactStrategy(dbmodel.CompactStrategyOfficial)
+	compactStrategyIncompatible compactStrategy = compactStrategy(dbmodel.CompactStrategyIncompatible)
 )
 
 type compactStrategyCacheKey struct {
@@ -71,11 +69,11 @@ func (ra *relayAttempt) compactStrategyCacheKey() compactStrategyCacheKey {
 //     compactStrategyCacheTTL so a stale entry cannot permanently shadow a
 //     newer probe result;
 //  2. the DB-persisted groupItem.CompactStrategy, refreshed by the 24h
-//     background probe, used as the fallback when the in-memory entry is
+//     background probe, used when the in-memory entry is
 //     missing or expired.
 //
 // An empty strategy (never probed / unknown) reports hasCached=false so the
-// caller runs the full fallback chain.
+// caller can evaluate the supported strategy list from scratch.
 func (ra *relayAttempt) cachedCompactStrategy() (compactStrategy, bool) {
 	cacheKey := ra.compactStrategyCacheKey()
 	value, ok := compactStrategyCache.Load(cacheKey)
@@ -115,14 +113,14 @@ func (ra *relayAttempt) rememberCompactStrategy(ctx context.Context, strategy co
 }
 
 func compactStrategyOrder(channelType llm.APIFormat, cached compactStrategy, hasCached bool) []compactStrategy {
-	// Canonical full order lives in model.CompactStrategyOrder; relay only applies
-	// request-time truncation when it has a usable cached strategy.
+	// Canonical order lives in model.CompactStrategyOrder; relay only applies
+	// request-time truncation when it has a usable cached official strategy.
 	base := compactStrategySlice(dbmodel.CompactStrategyOrder(channelType))
 	if len(base) == 0 {
 		return nil
 	}
 
-	if hasCached && cached != compactStrategyIncompatible {
+	if hasCached && cached == compactStrategyOfficial {
 		for idx, strategy := range base {
 			if strategy == cached {
 				return base[idx:]

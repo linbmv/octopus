@@ -408,7 +408,7 @@ func TestFetchModelsAnthropicFallsBackToOpenAIWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestProbeCompactStrategyFallsBackToResponsesManual(t *testing.T) {
+func TestProbeCompactStrategyStopsWhenOfficialEndpointUnsupported(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -419,7 +419,7 @@ func TestProbeCompactStrategyFallsBackToResponsesManual(t *testing.T) {
 		case "/v1/responses/compact":
 			http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
 		case "/v1/responses":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "resp_1"})
+			t.Fatalf("compact probe must not call non-compact Responses endpoint")
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -427,10 +427,10 @@ func TestProbeCompactStrategyFallsBackToResponsesManual(t *testing.T) {
 	defer server.Close()
 
 	result := ProbeCompactStrategy(context.Background(), testChannel(server.URL, llm.APIFormatOpenAIResponse), "gpt-4o")
-	if result.Strategy != model.CompactStrategyResponsesManual {
-		t.Fatalf("Strategy = %q, 期望 %q, error=%s", result.Strategy, model.CompactStrategyResponsesManual, result.Error)
+	if result.Strategy != model.CompactStrategyIncompatible {
+		t.Fatalf("Strategy = %q, 期望 %q, error=%s", result.Strategy, model.CompactStrategyIncompatible, result.Error)
 	}
-	want := []string{"/v1/responses/compact", "/v1/responses"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
 	}
@@ -441,7 +441,7 @@ func TestProbeCompactStrategyFallsBackToResponsesManual(t *testing.T) {
 	}
 }
 
-func TestProbeCompactStrategyFallsBackToChatManual(t *testing.T) {
+func TestProbeCompactStrategyDoesNotCallChatEndpoint(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -449,10 +449,9 @@ func TestProbeCompactStrategyFallsBackToChatManual(t *testing.T) {
 		case "/v1/responses/compact":
 			http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
 		case "/v1/responses":
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"message":"invalid codex request (request id: x)","code":"invalid_responses_request","type":"new_api_error"}}`))
+			t.Fatalf("compact probe must not call non-compact Responses endpoint")
 		case "/v1/chat/completions":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "chatcmpl_1"})
+			t.Fatalf("compact probe must not call Chat endpoint")
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -460,10 +459,10 @@ func TestProbeCompactStrategyFallsBackToChatManual(t *testing.T) {
 	defer server.Close()
 
 	result := ProbeCompactStrategy(context.Background(), testChannel(server.URL, llm.APIFormatOpenAIResponse), "gpt-4o")
-	if result.Strategy != model.CompactStrategyChatManual {
-		t.Fatalf("Strategy = %q, 期望 %q, error=%s", result.Strategy, model.CompactStrategyChatManual, result.Error)
+	if result.Strategy != model.CompactStrategyIncompatible {
+		t.Fatalf("Strategy = %q, 期望 %q, error=%s", result.Strategy, model.CompactStrategyIncompatible, result.Error)
 	}
-	want := []string{"/v1/responses/compact", "/v1/responses", "/v1/chat/completions"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
 	}
@@ -489,7 +488,7 @@ func TestProbeCompactStrategyMarksIncompatibleWhenAllStrategiesAreDefinitivelyUn
 	if result.Error == "" {
 		t.Fatal("incompatible 结果应保留错误信息")
 	}
-	want := []string{"/v1/responses/compact", "/v1/responses", "/v1/chat/completions"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("请求路径序列 = %v, 期望 %v", paths, want)
 	}

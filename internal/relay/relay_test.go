@@ -359,17 +359,17 @@ func TestMiddlewareName(t *testing.T) {
 
 func TestCompactGroupItemRankPlacesIncompatibleLast(t *testing.T) {
 	channel := &dbmodel.Channel{Type: llm.APIFormatOpenAIResponse}
-	usable := dbmodel.GroupItem{CompactStrategy: dbmodel.CompactStrategyChatManual}
+	official := dbmodel.GroupItem{CompactStrategy: dbmodel.CompactStrategyOfficial}
 	unknown := dbmodel.GroupItem{}
 	incompatible := dbmodel.GroupItem{CompactStrategy: dbmodel.CompactStrategyIncompatible}
 
-	if got, want := compactGroupItemRank(usable, nil), 2; got != want {
-		t.Fatalf("chat_manual rank = %d, want %d", got, want)
+	if got, want := compactGroupItemRank(official, nil), 0; got != want {
+		t.Fatalf("official rank = %d, want %d", got, want)
 	}
 	if got, want := compactGroupItemRank(unknown, channel), 3; got != want {
 		t.Fatalf("unknown OpenAI rank = %d, want %d", got, want)
 	}
-	if got := compactGroupItemRank(incompatible, nil); got <= compactGroupItemRank(unknown, nil) || got <= compactGroupItemRank(usable, nil) {
+	if got := compactGroupItemRank(incompatible, nil); got <= compactGroupItemRank(unknown, nil) || got <= compactGroupItemRank(official, nil) {
 		t.Fatalf("incompatible rank = %d, want lower priority than unknown/useful ranks", got)
 	}
 }
@@ -404,7 +404,7 @@ func TestCompactCandidateOrderingPlacesIncompatibleAfterUsable(t *testing.T) {
 
 func TestCompactStrategyOrderTreatsIncompatibleAsUncached(t *testing.T) {
 	got := compactStrategyOrder(llm.APIFormatOpenAIResponse, compactStrategyIncompatible, true)
-	want := []compactStrategy{compactStrategyOfficial, compactStrategyResponsesManual, compactStrategyChatManual}
+	want := []compactStrategy{compactStrategyOfficial}
 	if len(got) != len(want) {
 		t.Fatalf("order length = %d, want %d: %#v", len(got), len(want), got)
 	}

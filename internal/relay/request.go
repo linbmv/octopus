@@ -126,8 +126,6 @@ func compactCandidateRanks(group dbmodel.Group, ctx context.Context) map[int]int
 		}
 		switch item.CompactStrategy {
 		case dbmodel.CompactStrategyOfficial,
-			dbmodel.CompactStrategyResponsesManual,
-			dbmodel.CompactStrategyChatManual,
 			dbmodel.CompactStrategyIncompatible:
 			ranks[item.ID] = compactGroupItemRank(item, nil)
 			continue
@@ -147,10 +145,6 @@ func compactGroupItemRank(item dbmodel.GroupItem, channel *dbmodel.Channel) int 
 	switch item.CompactStrategy {
 	case dbmodel.CompactStrategyOfficial:
 		return 0
-	case dbmodel.CompactStrategyResponsesManual:
-		return 1
-	case dbmodel.CompactStrategyChatManual:
-		return 2
 	case dbmodel.CompactStrategyIncompatible:
 		return 6
 	}
@@ -158,8 +152,7 @@ func compactGroupItemRank(item dbmodel.GroupItem, channel *dbmodel.Channel) int 
 		return 5
 	}
 	switch channel.Type {
-	case llm.APIFormatOpenAIChatCompletion,
-		llm.APIFormatOpenAIResponse,
+	case llm.APIFormatOpenAIResponse,
 		llm.APIFormatOpenAIResponseCompact:
 		return 3
 	default:

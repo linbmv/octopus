@@ -1,15 +1,21 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type NavItem = 'home' | 'channel' | 'group' | 'model' | 'log' | 'health' | 'setting'
+export type NavItem = 'home' | 'channel' | 'group' | 'model' | 'log' | 'setting'
 
-const NAV_ORDER: NavItem[] = ['home', 'channel', 'group', 'model', 'log', 'health', 'setting']
+const NAV_ORDER: NavItem[] = ['home', 'channel', 'group', 'model', 'log', 'setting']
 
 interface NavState {
     activeItem: NavItem
     prevItem: NavItem | null
     direction: number
     setActiveItem: (item: NavItem) => void
+}
+
+type PersistedNavState = Partial<Pick<NavState, 'activeItem' | 'prevItem' | 'direction'>>
+
+function isNavItem(value: unknown): value is NavItem {
+    return typeof value === 'string' && (NAV_ORDER as readonly string[]).includes(value)
 }
 
 export const useNavStore = create<NavState>()(
@@ -33,6 +39,15 @@ export const useNavStore = create<NavState>()(
         }),
         {
             name: 'nav-storage',
+            version: 1,
+            migrate: (persistedState) => {
+                const state = (persistedState ?? {}) as PersistedNavState
+                return {
+                    activeItem: isNavItem(state.activeItem) ? state.activeItem : 'home',
+                    prevItem: isNavItem(state.prevItem) ? state.prevItem : null,
+                    direction: typeof state.direction === 'number' ? state.direction : 0,
+                }
+            },
         }
     )
 )

@@ -5,6 +5,8 @@
 - Go 1.26+
 - 运行中的 Octopus 实例
 
+> 健康状态接口是运维/调试接口，不作为 Web 主导航功能暴露。完整接口说明见 [health-operations-api.md](./health-operations-api.md)。
+
 ## ⚡ 快速启动（3 步）
 
 ### 1. 确认健康系统已集成
@@ -29,20 +31,20 @@ go test ./internal/relay/health -v
 ./octopus serve
 
 # 验证健康系统运行
-curl http://localhost:8080/health/status
+curl http://localhost:8080/api/v1/health/status
 ```
 
 ### 3. 查看健康状态
 
 ```bash
 # 查看所有渠道健康状态
-curl http://localhost:8080/health/status | jq
+curl http://localhost:8080/api/v1/health/status | jq
 
 # 查看特定渠道
-curl "http://localhost:8080/health/status?channel_id=1" | jq
+curl "http://localhost:8080/api/v1/health/status/channel?channel_id=1" | jq
 
 # 查看 Prometheus 指标
-curl http://localhost:9090/metrics | grep octopus_health
+curl http://localhost:8080/api/v1/health/metrics | grep octopus_health
 ```
 
 ---
@@ -93,7 +95,7 @@ tail -f logs/octopus.log | grep health
 #### 3.1 验证 API
 ```bash
 # 健康状态
-curl http://localhost:8080/health/status
+curl http://localhost:8080/api/v1/health/status
 
 # 应该返回
 {
@@ -117,7 +119,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 #### 3.3 查看健康状态
 ```bash
 # 再次查询，应该有数据了
-curl http://localhost:8080/health/status | jq
+curl http://localhost:8080/api/v1/health/status | jq
 
 # 应该返回
 {
@@ -203,26 +205,26 @@ octopus_health_cv > 0.8
 
 ```bash
 # 全部状态
-curl http://localhost:8080/health/status
+curl http://localhost:8080/api/v1/health/status
 
 # 特定渠道
-curl "http://localhost:8080/health/status?channel_id=1"
+curl "http://localhost:8080/api/v1/health/status/channel?channel_id=1"
 
 # 特定 (channel, key, model)
-curl "http://localhost:8080/health/status/specific?channel_id=1&key_id=100&model=gpt-4"
+curl "http://localhost:8080/api/v1/health/status/specific?channel_id=1&key_id=100&model=gpt-4"
 ```
 
 ### 管理操作
 
 ```bash
 # 禁用健康系统
-curl -X POST http://localhost:8080/health/disable
+curl -X POST http://localhost:8080/api/v1/health/disable
 
 # 启用健康系统
-curl -X POST http://localhost:8080/health/enable
+curl -X POST http://localhost:8080/api/v1/health/enable
 
 # 重置所有状态
-curl -X POST http://localhost:8080/health/reset
+curl -X POST http://localhost:8080/api/v1/health/reset
 ```
 
 ### 持久化管理
@@ -246,7 +248,7 @@ kill -TERM $(pgrep octopus)  # 优雅关闭会自动保存
 
 ### 问题 1: 健康状态为空
 
-**症状**: `curl /health/status` 返回 `count: 0`
+**症状**: `curl /api/v1/health/status` 返回 `count: 0`
 
 **原因**: 没有请求通过 relay
 
@@ -266,7 +268,7 @@ kill -TERM $(pgrep octopus)  # 优雅关闭会自动保存
 2. 发送更多请求累积样本
 3. 查询统计：
    ```bash
-   curl /health/status | jq '.states[0].stats.total_count'
+   curl /api/v1/health/status | jq '.states[0].stats.total_count'
    ```
 
 ### 问题 3: 误杀率过高

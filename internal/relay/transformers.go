@@ -77,17 +77,12 @@ func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key s
 		}
 	case llm.RequestTypeCompact:
 		switch channelType {
-		case llm.APIFormatOpenAIChatCompletion:
-			// OpenAI Chat 渠道：Compact 直接走 /v1/chat/completions。
-			// 请求类型降级 + Compact.Input→Messages 搬运在 requestForOutboundPipeline 中完成。
-			return openai.NewOutboundTransformer(baseURL, key)
 		case llm.APIFormatOpenAIResponse,
 			llm.APIFormatOpenAIResponseCompact:
-			// OpenAI Responses 出站统一使用 Responses transformer；
-			// Compact 的 official/manual 策略由 relayAttempt.forwardCompact 在运行时选择。
+			// Compact 只承接官方 /v1/responses/compact 远程压缩入口。
 			return responses.NewOutboundTransformer(baseURL, key)
 		default:
-			// 仅 OpenAI Chat/Response 类型承接 Compact；其它协议渠道跳过，交给故障转移。
+			// 非官方 Responses 渠道不处理 Compact；让客户端自行走本地 compact。
 			return nil, fmt.Errorf("channel type %s is not compatible with %s request", channelType, requestType)
 		}
 	case llm.RequestTypeChat:

@@ -55,7 +55,7 @@ type HealthStatsResponse struct {
 }
 
 // HandleGetAll 获取所有健康状态
-// GET /health/status
+// GET /api/v1/health/status
 func (api *HealthAPI) HandleGetAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -90,15 +90,14 @@ func (api *HealthAPI) HandleGetAll(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleGetByChannel 获取指定渠道的健康状态
-// GET /health/status/{channel_id}
+// GET /api/v1/health/status/channel?channel_id=1
 func (api *HealthAPI) HandleGetByChannel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 从 URL 路径解析 channel_id
-	// 注意：这里假设使用简单的路径解析，实际项目中应该使用路由器
+	// 从查询参数解析 channel_id。
 	channelIDStr := r.URL.Query().Get("channel_id")
 	if channelIDStr == "" {
 		http.Error(w, "Missing channel_id parameter", http.StatusBadRequest)
@@ -150,7 +149,7 @@ func (api *HealthAPI) HandleGetByChannel(w http.ResponseWriter, r *http.Request)
 }
 
 // HandleGetSpecific 获取特定渠道+Key+Model的健康状态
-// GET /health/status/specific?channel_id=1&key_id=100&model=gpt-4
+// GET /api/v1/health/status/specific?channel_id=1&key_id=100&model=gpt-4
 func (api *HealthAPI) HandleGetSpecific(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -208,7 +207,7 @@ func (api *HealthAPI) HandleGetSpecific(w http.ResponseWriter, r *http.Request) 
 }
 
 // HandleReset 重置健康状态
-// POST /health/reset
+// POST /api/v1/health/reset
 func (api *HealthAPI) HandleReset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -225,7 +224,7 @@ func (api *HealthAPI) HandleReset(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleEnable 启用健康系统
-// POST /health/enable
+// POST /api/v1/health/enable
 func (api *HealthAPI) HandleEnable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -242,7 +241,7 @@ func (api *HealthAPI) HandleEnable(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleDisable 禁用健康系统
-// POST /health/disable
+// POST /api/v1/health/disable
 func (api *HealthAPI) HandleDisable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

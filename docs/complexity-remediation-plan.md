@@ -4,7 +4,7 @@
 
 Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数核心模块集中：
 
-- 后端 `internal/relay/relay.go` 承担入站解析、候选选择、重试、compact fallback、raw passthrough、流式转发、指标、日志等多类职责。
+- 后端 `internal/relay/relay.go` 承担入站解析、候选选择、重试、compact 官方远程入口、raw passthrough、流式转发、指标、日志等多类职责。
 - `internal/op` 以包级全局缓存和后台 flush 为主，生命周期、失败重试、测试隔离和并发边界逐渐变难。
 - 前端设置、分组、渠道页面中存在大组件，表单状态、业务规则、接口调用和展示逻辑混在一起。
 - 工作区近期变更跨越 compact、health、sync、export、UI 等多个主题，说明功能增长已经超过当前模块边界承载能力。
@@ -23,7 +23,7 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
 
 - 不整体替换 `axonhub/llm` 协议转换层。
 - 不重写前端技术栈。
-- 不一次性删除 compact fallback、health、stats、logs 等现有能力。
+- 不一次性删除 health、stats、logs 等现有能力；compact 已收敛为官方远程入口。
 - 不在同一个提交里混合架构拆分、行为调整和 UI 改版。
 - 不在没有迁移和回滚路径的情况下改变用户现有配置语义。
 
@@ -33,7 +33,7 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
 
 现状：
 
-- `relay.go` 同时处理 request parse、candidate ranking、nested fallback、attempt lifecycle、stream writer、raw passthrough、compact fallback、soft error、metrics/logging。
+- `relay.go` 同时处理 request parse、candidate ranking、nested fallback、attempt lifecycle、stream writer、raw passthrough、compact 官方远程转发、soft error、metrics/logging。
 - 每次新增上游协议、compact 策略或错误分类，都容易改动 relay 主流程。
 
 影响：
@@ -108,7 +108,7 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
 现状：
 
 - health/adaptive timeout/weighted balancer/slow model/sticky threshold/shadow mode 等设置项不断增加。
-- compact fallback、probe、endpoint downgrade、errorclass、soft error 存在交叉。
+- compact 官方远程入口、probe、endpoint 兼容判断、errorclass、soft error 存在交叉。
 
 影响：
 
@@ -118,7 +118,7 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
 治理方向：
 
 - 前端提供少数模式预设，后端收敛为 policy 对象。
-- compact 策略使用表驱动 strategy chain，relay 主流程只执行策略结果。
+- compact 策略收敛为官方远程入口策略，relay 主流程不再执行手工压缩降级。
 
 ### 6. 前端大组件继续膨胀
 
@@ -160,9 +160,9 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
    - 合并多项高级设置为预设：`off`、`shadow`、`balanced`、`aggressive`。
    - 高级设置保留但折叠，不作为默认主路径。
 
-5. Compact fallback
-   - 合并 probe、fallback、downgrade 判断为 `CompactStrategyChain`。
-   - relay 只消费 strategy chain 返回的候选和错误动作。
+5. Compact 官方远程入口
+   - 保留 `/v1/responses/compact` 官方转发能力。
+   - 移除普通 `/responses` 和 `/chat/completions` 手工压缩降级路径。
 
 ### 应该优化
 
@@ -361,13 +361,13 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
      - error level。
      - retry key/channel。
      - client response。
-     - compact downgrade action。
+     - compact 官方入口兼容动作。
 
 验收标准：
 
 - relay 主流程不直接识别大量状态码和错误字符串。
 - health 设置读取集中在一个地方。
-- compact fallback 行为由表驱动测试覆盖。
+- compact 官方远程入口行为由表驱动测试覆盖。
 
 建议提交：
 
@@ -572,12 +572,12 @@ P3：
 价值：
 
 - 降低同步任务向上游发送探测内容导致风控、封禁或误判的概率。
-- 保留真实请求中的 compact fallback，不直接牺牲功能可用性。
+- 保留真实请求中的官方 compact 远程入口，不引入手工压缩降级。
 - 把“主动探测”从默认行为改为显式选择，更符合生产网关的最小副作用原则。
 
 风险：
 
-- 行为变化：默认不再主动探测 compact 策略，首次真实 compact 请求可能多一次 fallback 成本。
+- 行为变化：默认不再主动探测 compact 策略；真实 compact 请求只走官方远程入口。
 - 新增设置项会继续扩大 settings 面积，和“设置项收敛”目标存在张力。
 - 前端 toggle 当前是乐观更新，保存失败时需要补回滚或错误提示一致性。
 
@@ -705,7 +705,7 @@ P3：
 价值：
 
 - 用户能明确控制主动探测是否启用。
-- 文案说明真实请求 fallback 不受影响，降低误解。
+- 文案说明真实 Compact 请求仅使用官方远程入口，降低误解。
 
 风险：
 
@@ -764,7 +764,7 @@ P3：
 
 - Compact probe opt-in：
   - 手动确认默认 disabled。
-  - 手动确认真实 compact fallback 不依赖主动 probe。
+  - 手动确认真实 compact 请求只走官方远程入口。
 
 - Error classification：
   - 检查近期 relay 日志中的 403/429/503 文案，确认分类样本覆盖真实情况。

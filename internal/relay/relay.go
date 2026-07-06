@@ -260,18 +260,15 @@ func (ra *relayAttempt) forward() (int, []byte, error) {
 		return ra.forwardCompact(ctx, httpClient)
 	}
 
-	return ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest), needsChatToCompactResponse(ra.channel.Type, ra.internalRequest))
+	return ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, requestForOutboundPipeline(ra.channel.Type, ra.internalRequest))
 }
 
 // forwardWithAdapter 用指定出站适配器执行一次完整的 pipeline 转发。
-// 抽出此方法是为了支持同一渠道内的端点级降级（responses/compact → responses → chat）复用同一套转发逻辑。
-// needsChatToCompact 标记是否需要将 Chat 形态响应转换为 Compact 格式（端点降级场景）。
 func (ra *relayAttempt) forwardWithAdapter(
 	ctx context.Context,
 	httpClient *http.Client,
 	outAdapter transformer.Outbound,
 	outboundRequest *llm.Request,
-	needsChatToCompact bool,
 ) (int, []byte, error) {
 	// 更新活跃请求状态为等待上游（第一阶段可观测性增强）
 	UpdateState(ra.trackingID, StateWaitingUpstream)
@@ -291,18 +288,11 @@ func (ra *relayAttempt) forwardWithAdapter(
 
 	relayMiddleware := &relayPipelineMiddleware{attempt: ra}
 
-	// 如果是端点降级场景，插入 Chat 形态响应 → Compact 响应转换中间件。
-	var middlewares []pipeline.Middleware
-	if needsChatToCompact {
-		middlewares = append(middlewares, &chatToCompactMiddleware{})
-	}
-	middlewares = append(middlewares, stream.EnsureUsage(), relayMiddleware)
-
 	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(httpClient)).
 		Pipeline(
 			&parsedRequestInbound{Inbound: ra.inAdapter, request: outboundRequest},
 			outAdapter,
-			pipeline.WithMiddlewares(middlewares...),
+			pipeline.WithMiddlewares(stream.EnsureUsage(), relayMiddleware),
 			pipeline.WithEmptyResponseDetection(),
 		).
 		Process(fwdCtx, ra.internalRequest.RawRequest)

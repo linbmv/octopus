@@ -191,37 +191,32 @@ func TestOpenAIImageGenerationRoundTripBuildsExpectedOutboundRequest(t *testing.
 
 func TestNewOutboundKeepsCurrentCompactCompatibility(t *testing.T) {
 	assertOutboundCompatible(t, []outboundCase{
-		{"openai_chat", llm.APIFormatOpenAIChatCompletion, llm.RequestTypeCompact},
 		{"openai_responses", llm.APIFormatOpenAIResponse, llm.RequestTypeCompact},
 		{"openai_responses_compact", llm.APIFormatOpenAIResponseCompact, llm.RequestTypeCompact},
 	})
 }
 
-func TestNewOutboundCompactOpenAIChatDoesNotMutateRequest(t *testing.T) {
+func TestNewOutboundCompactOpenAIChatUnsupported(t *testing.T) {
 	req := &llm.Request{RequestType: llm.RequestTypeCompact}
 	got, err := newOutbound(llm.APIFormatOpenAIChatCompletion, req, testBaseURL, testAPIKey)
-	if err != nil {
-		t.Fatalf("newOutbound returned error: %v", err)
+	if err == nil {
+		t.Fatal("OpenAI Chat channel must not handle Compact requests")
 	}
-	if got == nil {
-		t.Fatal("newOutbound returned nil outbound")
+	if got != nil {
+		t.Fatal("unsupported OpenAI Chat Compact should not return outbound")
 	}
 	if req.RequestType != llm.RequestTypeCompact {
 		t.Fatalf("RequestType 被原地修改为 %q，期望保持 %q", req.RequestType, llm.RequestTypeCompact)
 	}
 }
 
-func TestNewOutboundCompactChatFallbackDoesNotPolluteResponseRetry(t *testing.T) {
+func TestNewOutboundCompactChatFailureDoesNotPolluteResponseRetry(t *testing.T) {
 	req := &llm.Request{RequestType: llm.RequestTypeCompact}
-	chatOutbound, err := newOutbound(llm.APIFormatOpenAIChatCompletion, req, testBaseURL, testAPIKey)
-	if err != nil {
-		t.Fatalf("OpenAI Chat Compact 降级应返回 outbound: %v", err)
-	}
-	if chatOutbound == nil {
-		t.Fatal("OpenAI Chat Compact 降级返回 nil outbound")
+	if chatOutbound, err := newOutbound(llm.APIFormatOpenAIChatCompletion, req, testBaseURL, testAPIKey); err == nil || chatOutbound != nil {
+		t.Fatal("OpenAI Chat Compact should be rejected before Response retry")
 	}
 	if req.RequestType != llm.RequestTypeCompact {
-		t.Fatalf("OpenAI Chat 降级污染了共享请求类型: %q", req.RequestType)
+		t.Fatalf("OpenAI Chat rejection polluted shared request type: %q", req.RequestType)
 	}
 
 	responseOutbound, err := newOutbound(llm.APIFormatOpenAIResponse, req, testBaseURL, testAPIKey)
@@ -236,7 +231,7 @@ func TestNewOutboundCompactChatFallbackDoesNotPolluteResponseRetry(t *testing.T)
 	}
 }
 
-func TestRequestForOutboundPipelineDowngradesCompactChatOnCopy(t *testing.T) {
+func TestRequestForOutboundPipelineKeepsCompactForChatChannel(t *testing.T) {
 	req := &llm.Request{RequestType: llm.RequestTypeCompact, Model: "gpt-5.5"}
 	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
 	if got == nil {
@@ -245,8 +240,8 @@ func TestRequestForOutboundPipelineDowngradesCompactChatOnCopy(t *testing.T) {
 	if got == req {
 		t.Fatal("requestForOutboundPipeline 应返回当前 attempt 的请求副本")
 	}
-	if got.RequestType != llm.RequestTypeChat {
-		t.Fatalf("OpenAI Chat Compact 副本 RequestType = %q，期望 %q", got.RequestType, llm.RequestTypeChat)
+	if got.RequestType != llm.RequestTypeCompact {
+		t.Fatalf("OpenAI Chat Compact 副本 RequestType = %q，期望保持 Compact", got.RequestType)
 	}
 	if req.RequestType != llm.RequestTypeCompact {
 		t.Fatalf("原始请求被污染为 %q，期望保持 Compact", req.RequestType)
@@ -281,35 +276,7 @@ func TestRequestForOutboundPipelineKeepsCompactForResponseCompactChannel(t *test
 	}
 }
 
-func TestNeedsChatToCompactResponse(t *testing.T) {
-	if !needsChatToCompactResponse(llm.APIFormatOpenAIChatCompletion, &llm.Request{RequestType: llm.RequestTypeCompact}) {
-		t.Fatal("OpenAI Chat Compact 请求应启用 Chat→Compact 响应转换")
-	}
-	if needsChatToCompactResponse(llm.APIFormatOpenAIResponse, &llm.Request{RequestType: llm.RequestTypeCompact}) {
-		t.Fatal("OpenAI Response 官方 Compact 路径不应启用 Chat→Compact 响应转换")
-	}
-	if needsChatToCompactResponse(llm.APIFormatOpenAIResponseCompact, &llm.Request{RequestType: llm.RequestTypeCompact}) {
-		t.Fatal("OpenAI Response Compact 官方路径不应启用 Chat→Compact 响应转换")
-	}
-	if needsChatToCompactResponse(llm.APIFormatOpenAIChatCompletion, &llm.Request{RequestType: llm.RequestTypeChat}) {
-		t.Fatal("普通 Chat 请求不应启用 Chat→Compact 响应转换")
-	}
-	if needsChatToCompactResponse(llm.APIFormatOpenAIChatCompletion, nil) {
-		t.Fatal("nil 请求不应启用 Chat→Compact 响应转换")
-	}
-}
-
-// strPtr 返回字符串内容指针，便于构造 MessageContent。
-func strPtr(value string) *string {
-	return &value
-}
-
-func compactInputMessage(role, text string) llm.Message {
-	content := text
-	return llm.Message{Role: role, Content: llm.MessageContent{Content: &content}}
-}
-
-func TestCompactChatFallbackRequestFillsMessages(t *testing.T) {
+func TestRequestForOutboundPipelineDoesNotFallbackCompactToChat(t *testing.T) {
 	req := &llm.Request{
 		Model:       "gpt-5.5",
 		RequestType: llm.RequestTypeCompact,
@@ -326,24 +293,13 @@ func TestCompactChatFallbackRequestFillsMessages(t *testing.T) {
 	if got == nil {
 		t.Fatal("requestForOutboundPipeline returned nil")
 	}
-	if got.RequestType != llm.RequestTypeChat {
-		t.Fatalf("RequestType = %q, 期望降级为 Chat", got.RequestType)
+	if got.RequestType != llm.RequestTypeCompact {
+		t.Fatalf("RequestType = %q, 期望保持 Compact", got.RequestType)
 	}
-	// Instructions(1) + Input(2) = 3 条消息
-	if len(got.Messages) != 3 {
-		t.Fatalf("Messages 长度 = %d, 期望 3（system + 2 条 input）", len(got.Messages))
-	}
-	if got.Messages[0].Role != "system" {
-		t.Fatalf("首条消息 role = %q, 期望 system", got.Messages[0].Role)
-	}
-	if got.Messages[0].Content.Content == nil || *got.Messages[0].Content.Content != "you are a summarizer" {
-		t.Fatalf("system 消息内容未正确搬运 Instructions")
-	}
-	if got.Messages[1].Role != "user" || got.Messages[2].Role != "assistant" {
-		t.Fatalf("Input 消息顺序/角色未保持: %q, %q", got.Messages[1].Role, got.Messages[2].Role)
+	if len(got.Messages) != 0 {
+		t.Fatalf("Compact 请求不应被改写为 Chat Messages，got %d", len(got.Messages))
 	}
 
-	// 原始请求不能被污染。
 	if req.RequestType != llm.RequestTypeCompact {
 		t.Fatalf("原始 RequestType 被污染为 %q", req.RequestType)
 	}
@@ -355,272 +311,14 @@ func TestCompactChatFallbackRequestFillsMessages(t *testing.T) {
 	}
 }
 
-func TestCompactResponsesFallbackRequestUsesStandardResponsesShape(t *testing.T) {
-	req := &llm.Request{
-		Model:       "gpt-5.5",
-		RequestType: llm.RequestTypeCompact,
-		Compact: &llm.CompactRequest{
-			Instructions:   "summarize",
-			PromptCacheKey: "cache-key",
-			Input:          []llm.Message{compactInputMessage("user", "hello")},
-		},
-	}
-
-	got := compactResponsesFallbackRequest(req)
-	if got == nil {
-		t.Fatal("compactResponsesFallbackRequest returned nil")
-	}
-	if got.RequestType != llm.RequestTypeChat {
-		t.Fatalf("RequestType = %q, 期望降级为 Chat", got.RequestType)
-	}
-	if got.APIFormat != llm.APIFormatOpenAIResponse {
-		t.Fatalf("APIFormat = %q, 期望 OpenAI Responses", got.APIFormat)
-	}
-	if got.Store == nil || *got.Store {
-		t.Fatalf("Store = %#v, 期望 false", got.Store)
-	}
-	if got.TransformOptions.ArrayInputs == nil || !*got.TransformOptions.ArrayInputs {
-		t.Fatalf("ArrayInputs = %#v, 期望 true", got.TransformOptions.ArrayInputs)
-	}
-	if got.PromptCacheKey == nil || *got.PromptCacheKey != "cache-key" {
-		t.Fatalf("PromptCacheKey = %#v, 期望 cache-key", got.PromptCacheKey)
-	}
-	if len(got.Messages) != 2 {
-		t.Fatalf("Messages 长度 = %d, 期望 2（system + input）", len(got.Messages))
-	}
-	if got.Messages[0].Role != "system" || got.Messages[0].Content.Content == nil || *got.Messages[0].Content.Content != "summarize" {
-		t.Fatalf("Instructions 未正确搬运到 system 消息: %#v", got.Messages[0])
-	}
-	if got.Messages[1].Role != "user" || got.Messages[1].Content.Content == nil || *got.Messages[1].Content.Content != "hello" {
-		t.Fatalf("Compact.Input 未正确搬运到 Messages: %#v", got.Messages[1])
-	}
-	if req.RequestType != llm.RequestTypeCompact {
-		t.Fatalf("原始 RequestType 被污染为 %q", req.RequestType)
-	}
-	if len(req.Messages) != 0 {
-		t.Fatalf("原始 Messages 被污染，长度 = %d，期望 0", len(req.Messages))
-	}
+// strPtr 返回字符串内容指针，便于构造 MessageContent。
+func strPtr(value string) *string {
+	return &value
 }
 
-func TestCompactResponsesFallbackRequestBuildsCodexCompatibleResponsesBody(t *testing.T) {
-	req := &llm.Request{
-		Model:       "gpt-5.5",
-		RequestType: llm.RequestTypeCompact,
-		Compact: &llm.CompactRequest{
-			Instructions:   "summarize",
-			PromptCacheKey: "cache-key",
-			Input:          []llm.Message{compactInputMessage("user", "hello")},
-		},
-	}
-	fallback := compactResponsesFallbackRequest(req)
-	outbound, err := newOutbound(llm.APIFormatOpenAIResponse, fallback, testBaseURL, testAPIKey)
-	if err != nil {
-		t.Fatalf("newOutbound returned error: %v", err)
-	}
-	httpReq, err := outbound.TransformRequest(context.Background(), fallback)
-	if err != nil {
-		t.Fatalf("TransformRequest returned error: %v", err)
-	}
-	if httpReq.URL != testBaseURL+"/responses" {
-		t.Fatalf("URL = %q, 期望普通 /responses", httpReq.URL)
-	}
-
-	var body map[string]any
-	if err := json.Unmarshal(httpReq.Body, &body); err != nil {
-		t.Fatalf("body 不是合法 JSON: %v", err)
-	}
-	input, ok := body["input"].([]any)
-	if !ok {
-		t.Fatalf("input = %#v, 期望数组而不是字符串", body["input"])
-	}
-	if len(input) != 1 {
-		t.Fatalf("input 长度 = %d, 期望 1", len(input))
-	}
-	if body["instructions"] != "summarize" {
-		t.Fatalf("instructions = %#v, 期望 summarize", body["instructions"])
-	}
-	if body["store"] != false {
-		t.Fatalf("store = %#v, 期望 false", body["store"])
-	}
-	if body["prompt_cache_key"] != "cache-key" {
-		t.Fatalf("prompt_cache_key = %#v, 期望 cache-key", body["prompt_cache_key"])
-	}
-	if _, ok := body["max_tokens"]; ok {
-		t.Fatal("Codex-compatible Responses fallback 不应发送 max_tokens")
-	}
-	if _, ok := body["max_completion_tokens"]; ok {
-		t.Fatal("Codex-compatible Responses fallback 不应发送 max_completion_tokens")
-	}
-}
-
-func TestCompactChatFallbackRequestNoInstructions(t *testing.T) {
-	req := &llm.Request{
-		Model:       "gpt-5.5",
-		RequestType: llm.RequestTypeCompact,
-		Compact: &llm.CompactRequest{
-			Input: []llm.Message{compactInputMessage("user", "hello")},
-		},
-	}
-
-	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
-	if len(got.Messages) != 1 {
-		t.Fatalf("Messages 长度 = %d, 期望 1（无 Instructions）", len(got.Messages))
-	}
-	if got.Messages[0].Role != "user" {
-		t.Fatalf("首条消息 role = %q, 期望 user（无 system 头）", got.Messages[0].Role)
-	}
-}
-
-func TestCompactChatFallbackRequestNilCompact(t *testing.T) {
-	req := &llm.Request{
-		Model:       "gpt-5.5",
-		RequestType: llm.RequestTypeCompact,
-		Compact:     nil,
-	}
-
-	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
-	if got == nil {
-		t.Fatal("requestForOutboundPipeline returned nil")
-	}
-	if got.RequestType != llm.RequestTypeChat {
-		t.Fatalf("RequestType = %q, 期望 Chat", got.RequestType)
-	}
-	// Compact 为 nil 时不应 panic，Messages 保持原样（空）。
-	if len(got.Messages) != 0 {
-		t.Fatalf("Compact 为 nil 时 Messages 应为空，got %d", len(got.Messages))
-	}
-}
-
-func TestCompactChatFallbackRequestTranscriptsToolHistory(t *testing.T) {
-	forcedCustom := &llm.ToolChoice{
-		NamedToolChoice: &llm.NamedToolChoice{
-			Type:     llm.ToolTypeResponsesCustomTool,
-			Function: llm.ToolFunction{Name: "apply_patch"},
-		},
-	}
-	parallel := true
-	req := &llm.Request{
-		Model:             "gpt-5.5",
-		RequestType:       llm.RequestTypeCompact,
-		ParallelToolCalls: &parallel,
-		ToolChoice:        forcedCustom,
-		Tools: []llm.Tool{
-			{Type: llm.ToolTypeResponsesCustomTool, ResponseCustomTool: &llm.ResponseCustomTool{Name: "apply_patch"}},
-			{Type: llm.ToolTypeFunction, Function: llm.Function{Name: ""}},
-			{Type: llm.ToolTypeFunction, Function: llm.Function{Name: "read_file"}},
-		},
-		Compact: &llm.CompactRequest{
-			Input: []llm.Message{
-				{
-					Role: "assistant",
-					ToolCalls: []llm.ToolCall{
-						{ID: "custom", Type: llm.ToolTypeResponsesCustomTool, ResponseCustomToolCall: &llm.ResponseCustomToolCall{Name: "apply_patch", Input: "*** Begin Patch\n"}},
-						{ID: "empty", Type: llm.ToolTypeFunction, Function: llm.FunctionCall{Name: ""}},
-						{ID: "fn", Type: llm.ToolTypeFunction, Function: llm.FunctionCall{Name: "read_file", Arguments: "{}"}},
-					},
-				},
-			},
-		},
-	}
-
-	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
-	if got == nil {
-		t.Fatal("requestForOutboundPipeline returned nil")
-	}
-	if got.APIFormat != llm.APIFormatOpenAIChatCompletion {
-		t.Fatalf("APIFormat = %q, 期望 OpenAI Chat", got.APIFormat)
-	}
-	if got.ParallelToolCalls != nil {
-		t.Fatalf("Compact Chat fallback 不应发送 ParallelToolCalls，got %#v", got.ParallelToolCalls)
-	}
-	if len(got.Tools) != 0 {
-		t.Fatalf("Compact Chat fallback 不应发送工具定义: %#v", got.Tools)
-	}
-	if got.ToolChoice != nil {
-		t.Fatalf("Compact Chat fallback 不应发送 ToolChoice: %#v", got.ToolChoice)
-	}
-	if len(got.Messages) != 1 {
-		t.Fatalf("Messages 长度 = %d, 期望 1", len(got.Messages))
-	}
-	if len(got.Messages[0].ToolCalls) != 0 {
-		t.Fatalf("真实 ToolCalls 应转成文本而不是继续发送: %#v", got.Messages[0].ToolCalls)
-	}
-	if got.Messages[0].Content.Content == nil {
-		t.Fatal("工具调用 transcript 应写入普通文本 content")
-	}
-	content := *got.Messages[0].Content.Content
-	if !strings.Contains(content, "[tool call name=apply_patch id=custom]") || !strings.Contains(content, "*** Begin Patch") {
-		t.Fatalf("Responses custom tool call 未进入 transcript: %q", content)
-	}
-	if !strings.Contains(content, "[tool call name=read_file id=fn]") || !strings.Contains(content, "{}") {
-		t.Fatalf("function tool call 未进入 transcript: %q", content)
-	}
-
-	if len(req.Tools) != 3 {
-		t.Fatalf("原始 Tools 被污染，长度 = %d", len(req.Tools))
-	}
-	if len(req.Compact.Input[0].ToolCalls) != 3 {
-		t.Fatalf("原始 Compact.Input ToolCalls 被污染，长度 = %d", len(req.Compact.Input[0].ToolCalls))
-	}
-}
-
-func TestCompactChatFallbackRequestConvertsToolResultsToUserText(t *testing.T) {
-	callID := "call_123"
-	toolName := "read_file"
-	req := &llm.Request{
-		Model:       "gpt-5.5",
-		RequestType: llm.RequestTypeCompact,
-		Compact: &llm.CompactRequest{
-			Input: []llm.Message{
-				{
-					Role:         "tool",
-					ToolCallID:   &callID,
-					ToolCallName: &toolName,
-					Content:      llm.MessageContent{Content: strPtr(`{"ok":true}`)},
-				},
-			},
-		},
-	}
-
-	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
-	if len(got.Messages) != 1 {
-		t.Fatalf("Messages 长度 = %d, 期望 1", len(got.Messages))
-	}
-	msg := got.Messages[0]
-	if msg.Role != "user" {
-		t.Fatalf("tool 结果应转为普通 user 文本，got role=%q", msg.Role)
-	}
-	if msg.ToolCallID != nil || msg.ToolCallName != nil || len(msg.ToolCalls) != 0 {
-		t.Fatalf("tool 协议字段应被清空: %#v", msg)
-	}
-	if msg.Content.Content == nil || !strings.Contains(*msg.Content.Content, "[tool result name=read_file id=call_123]") {
-		t.Fatalf("tool 结果 transcript 不正确: %#v", msg.Content.Content)
-	}
-}
-
-func TestCompactChatFallbackRequestClearsParallelToolCallsWhenNoChatTools(t *testing.T) {
-	parallel := true
-	req := &llm.Request{
-		Model:             "gpt-5.5",
-		RequestType:       llm.RequestTypeCompact,
-		ParallelToolCalls: &parallel,
-		ToolChoice:        &llm.ToolChoice{ToolChoice: strPtr("required")},
-		Tools: []llm.Tool{
-			{Type: llm.ToolTypeResponsesCustomTool, ResponseCustomTool: &llm.ResponseCustomTool{Name: "apply_patch"}},
-		},
-		Compact: &llm.CompactRequest{Input: []llm.Message{compactInputMessage("user", "hello")}},
-	}
-
-	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
-	if len(got.Tools) != 0 {
-		t.Fatalf("不可发送工具应全部清理，got %#v", got.Tools)
-	}
-	if got.ToolChoice != nil {
-		t.Fatalf("没有可发送工具时 ToolChoice 应被清理，got %#v", got.ToolChoice)
-	}
-	if got.ParallelToolCalls != nil {
-		t.Fatalf("没有可发送工具时 ParallelToolCalls 应被清理，got %#v", got.ParallelToolCalls)
-	}
+func compactInputMessage(role, text string) llm.Message {
+	content := text
+	return llm.Message{Role: role, Content: llm.MessageContent{Content: &content}}
 }
 
 func TestRequestForOutboundPipelineDeepCopiesStreamPointer(t *testing.T) {

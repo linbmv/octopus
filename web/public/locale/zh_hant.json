@@ -280,7 +280,7 @@
             },
             "compactProbe": {
                 "label": "啟用 Compact 策略主動探測",
-                "description": "預設關閉，避免同步任務向上游發送探測內容；真實 Compact 請求仍會自動 fallback 並記住成功策略。"
+                "description": "預設關閉，避免同步任務向上游發送探測內容；真實 Compact 請求僅使用官方遠端端點。"
             },
             "lastSync": "上次同步",
             "neverSynced": "從未同步",

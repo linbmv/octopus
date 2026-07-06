@@ -93,95 +93,7 @@ func TestIsEndpointUnsupportedErrorNil(t *testing.T) {
 	}
 }
 
-func TestIsCompactResponsesFallbackIncompatibleError(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{
-			name: "anyrouter codex response error",
-			err: &llm.ResponseError{
-				StatusCode: http.StatusBadRequest,
-				Detail: llm.ErrorDetail{
-					Message: "invalid codex request (request id: 20260609212616676063062AdJaB1KR)",
-					Code:    "invalid_responses_request",
-					Type:    "new_api_error",
-				},
-			},
-			want: true,
-		},
-		{
-			name: "anyrouter codex text",
-			err:  errors.New("Request failed: Bad Request, error: invalid codex request (request id: x), code: invalid_responses_request, type: new_api_error"),
-			want: true,
-		},
-		{
-			name: "generic bad request",
-			err: &llm.ResponseError{
-				StatusCode: http.StatusBadRequest,
-				Detail: llm.ErrorDetail{
-					Message: "invalid request",
-					Code:    "invalid_request",
-				},
-			},
-			want: false,
-		},
-		{
-			name: "unauthorized invalid codex text",
-			err: &llm.ResponseError{
-				StatusCode: http.StatusUnauthorized,
-				Detail: llm.ErrorDetail{
-					Message: "invalid codex request",
-					Code:    "invalid_responses_request",
-				},
-			},
-			want: false,
-		},
-		{name: "nil", err: nil, want: false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isCompactResponsesFallbackIncompatibleError(tc.err); got != tc.want {
-				t.Fatalf("isCompactResponsesFallbackIncompatibleError(%v) = %v, 期望 %v", tc.err, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestIsCompactManualFallbackError(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"response 408", &llm.ResponseError{StatusCode: http.StatusRequestTimeout}, true},
-		{"response 500", &llm.ResponseError{StatusCode: http.StatusInternalServerError}, true},
-		{"response 502", &llm.ResponseError{StatusCode: http.StatusBadGateway}, true},
-		{"response 503", &llm.ResponseError{StatusCode: http.StatusServiceUnavailable}, true},
-		{"response 504", &llm.ResponseError{StatusCode: http.StatusGatewayTimeout}, true},
-		{"httpclient 502", &httpclient.Error{StatusCode: http.StatusBadGateway}, true},
-		{"stream disconnected text", errors.New("stream disconnected before completion"), true},
-		{"connection reset text", errors.New("read: connection reset by peer"), true},
-		{"401", &llm.ResponseError{StatusCode: http.StatusUnauthorized}, false},
-		{"403", &llm.ResponseError{StatusCode: http.StatusForbidden}, false},
-		{"429", &llm.ResponseError{StatusCode: http.StatusTooManyRequests}, false},
-		{"generic bad request", &llm.ResponseError{StatusCode: http.StatusBadRequest}, false},
-		{"client canceled", errors.New("context canceled"), false},
-		{"nil", nil, false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isCompactManualFallbackError(tc.err); got != tc.want {
-				t.Fatalf("isCompactManualFallbackError(%v) = %v, 期望 %v", tc.err, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestCompactEndpointDowngradeTriesResponsesBeforeChat(t *testing.T) {
+func TestCompactEndpointFailureDoesNotCallResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetCompactStrategyCacheForTest()
 
@@ -194,9 +106,9 @@ func TestCompactEndpointDowngradeTriesResponsesBeforeChat(t *testing.T) {
 		case "/v1/responses/compact":
 			http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
 		case "/v1/responses":
-			_, _ = w.Write([]byte(compactResponseFixture()))
+			t.Fatalf("Compact official failure must not call non-compact Responses endpoint")
 		case "/v1/chat/completions":
-			t.Fatalf("不应在普通 /responses 成功后继续请求 Chat 端点")
+			t.Fatalf("Compact official failure must not call Chat endpoint")
 		default:
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
@@ -245,15 +157,12 @@ func TestCompactEndpointDowngradeTriesResponsesBeforeChat(t *testing.T) {
 		usedKey:    dbmodel.ChannelKey{ID: 1, ChannelKey: "test-key"},
 	}
 
-	statusCode, _, err := ra.forward()
-	if err != nil {
-		t.Fatalf("forward returned error: %v", err)
-	}
-	if statusCode != http.StatusOK {
-		t.Fatalf("statusCode = %d, 期望 200", statusCode)
+	_, _, err = ra.forward()
+	if err == nil {
+		t.Fatal("official compact endpoint failure should fail instead of calling non-compact Responses")
 	}
 
-	want := []string{"/v1/responses/compact", "/v1/responses"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
 	}
@@ -264,7 +173,7 @@ func TestCompactEndpointDowngradeTriesResponsesBeforeChat(t *testing.T) {
 	}
 }
 
-func TestOfficialCompactGatewayTimeoutFallsBackToManualResponses(t *testing.T) {
+func TestOfficialCompactGatewayTimeoutDoesNotCallResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetCompactStrategyCacheForTest()
 
@@ -277,9 +186,9 @@ func TestOfficialCompactGatewayTimeoutFallsBackToManualResponses(t *testing.T) {
 		case "/v1/responses/compact":
 			http.Error(w, `{"error":{"message":"Gateway Timeout"}}`, http.StatusGatewayTimeout)
 		case "/v1/responses":
-			_, _ = w.Write([]byte(compactResponseFixture()))
+			t.Fatalf("Compact official timeout must not call non-compact Responses endpoint")
 		case "/v1/chat/completions":
-			t.Fatalf("普通 /responses 手动压缩成功后不应继续请求 Chat 端点")
+			t.Fatalf("Compact official timeout must not call Chat endpoint")
 		default:
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
@@ -328,15 +237,12 @@ func TestOfficialCompactGatewayTimeoutFallsBackToManualResponses(t *testing.T) {
 		usedKey:    dbmodel.ChannelKey{ID: 1, ChannelKey: "test-key"},
 	}
 
-	statusCode, _, err := ra.forward()
-	if err != nil {
-		t.Fatalf("forward returned error: %v", err)
-	}
-	if statusCode != http.StatusOK {
-		t.Fatalf("statusCode = %d, 期望 200", statusCode)
+	_, _, err = ra.forward()
+	if err == nil {
+		t.Fatal("official compact timeout should fail instead of calling non-compact Responses")
 	}
 
-	want := []string{"/v1/responses/compact", "/v1/responses"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
 	}
@@ -347,7 +253,7 @@ func TestOfficialCompactGatewayTimeoutFallsBackToManualResponses(t *testing.T) {
 	}
 }
 
-func TestCompactStrategyTriesChatAfterInvalidCodexResponsesFallback(t *testing.T) {
+func TestCompactStrategyDoesNotTryChatAfterOfficialFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetCompactStrategyCacheForTest()
 
@@ -360,22 +266,9 @@ func TestCompactStrategyTriesChatAfterInvalidCodexResponsesFallback(t *testing.T
 		case "/v1/responses/compact":
 			http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
 		case "/v1/responses":
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"message":"invalid codex request (request id: x)","code":"invalid_responses_request","type":"new_api_error"}}`))
+			t.Fatalf("Compact official failure must not call non-compact Responses endpoint")
 		case "/v1/chat/completions":
-			_, _ = w.Write([]byte(`{
-				"id": "chatcmpl_1",
-				"object": "chat.completion",
-				"created": 1,
-				"model": "gpt-5.5",
-				"choices": [
-					{
-						"index": 0,
-						"message": {"role": "assistant", "content": "ok"},
-						"finish_reason": "stop"
-					}
-				]
-			}`))
+			t.Fatalf("Compact official failure must not call Chat endpoint")
 		default:
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
@@ -426,10 +319,10 @@ func TestCompactStrategyTriesChatAfterInvalidCodexResponsesFallback(t *testing.T
 
 	_, _, err = ra.forward()
 	if err == nil {
-		t.Fatal("invalid Responses manual compact must not fall back to Chat or succeed")
+		t.Fatal("official compact failure must not call Chat or succeed")
 	}
 
-	want := []string{"/v1/responses/compact", "/v1/responses"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
 	}
@@ -440,7 +333,7 @@ func TestCompactStrategyTriesChatAfterInvalidCodexResponsesFallback(t *testing.T
 	}
 }
 
-func TestCompactStrategyCacheSkipsOfficialAfterResponsesManualSuccess(t *testing.T) {
+func TestCompactStrategyStopsAfterOfficialFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetCompactStrategyCacheForTest()
 
@@ -453,9 +346,9 @@ func TestCompactStrategyCacheSkipsOfficialAfterResponsesManualSuccess(t *testing
 		case "/v1/responses/compact":
 			http.Error(w, `{"error":{"message":"no such endpoint"}}`, http.StatusNotFound)
 		case "/v1/responses":
-			_, _ = w.Write([]byte(compactResponseFixture()))
+			t.Fatalf("Compact official failure must not call non-compact Responses endpoint")
 		case "/v1/chat/completions":
-			t.Fatalf("普通 /responses 手动压缩成功后不应继续请求 Chat 端点")
+			t.Fatalf("Compact official failure must not call Chat endpoint")
 		default:
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
@@ -469,17 +362,12 @@ func TestCompactStrategyCacheSkipsOfficialAfterResponsesManualSuccess(t *testing
 		BaseUrls: []dbmodel.BaseUrl{{URL: upstream.URL + "/v1"}},
 	}
 
-	for i := 0; i < 2; i++ {
-		statusCode, err := runCompactForwardForTest(t, channel)
-		if err != nil {
-			t.Fatalf("forward #%d returned error: %v", i+1, err)
-		}
-		if statusCode != http.StatusOK {
-			t.Fatalf("statusCode #%d = %d, 期望 200", i+1, statusCode)
-		}
+	_, err := runCompactForwardForTest(t, channel)
+	if err == nil {
+		t.Fatal("official compact failure should fail instead of calling non-compact Responses")
 	}
 
-	want := []string{"/v1/responses/compact", "/v1/responses", "/v1/responses"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
 	}
@@ -490,7 +378,7 @@ func TestCompactStrategyCacheSkipsOfficialAfterResponsesManualSuccess(t *testing
 	}
 }
 
-func TestPersistedCompactStrategySkipsOfficial(t *testing.T) {
+func TestPersistedObsoleteCompactStrategyDoesNotSkipOfficial(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetCompactStrategyCacheForTest()
 
@@ -501,9 +389,9 @@ func TestPersistedCompactStrategySkipsOfficial(t *testing.T) {
 
 		switch r.URL.Path {
 		case "/v1/responses/compact":
-			t.Fatalf("持久化 responses_manual 策略命中时不应先请求官方 Compact 端点")
-		case "/v1/responses":
 			_, _ = w.Write([]byte(compactResponseFixture()))
+		case "/v1/responses":
+			t.Fatalf("persisted obsolete compact strategy must not call non-compact Responses endpoint")
 		default:
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
@@ -520,7 +408,7 @@ func TestPersistedCompactStrategySkipsOfficial(t *testing.T) {
 		ID:              1,
 		ChannelID:       channel.ID,
 		ModelName:       "gpt-5.5",
-		CompactStrategy: dbmodel.CompactStrategyResponsesManual,
+		CompactStrategy: dbmodel.CompactStrategy("obsolete"),
 	}
 
 	statusCode, err := runCompactForwardForTestWithItem(t, channel, groupItem)
@@ -531,7 +419,7 @@ func TestPersistedCompactStrategySkipsOfficial(t *testing.T) {
 		t.Fatalf("statusCode = %d, 期望 200", statusCode)
 	}
 
-	want := []string{"/v1/responses"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
 	}
@@ -542,7 +430,7 @@ func TestPersistedCompactStrategySkipsOfficial(t *testing.T) {
 	}
 }
 
-func TestCompactStrategyDoesNotFallbackToChatManual(t *testing.T) {
+func TestCompactStrategyDoesNotCallChatEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetCompactStrategyCacheForTest()
 
@@ -558,7 +446,7 @@ func TestCompactStrategyDoesNotFallbackToChatManual(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":{"message":"invalid codex request (request id: x)","code":"invalid_responses_request","type":"new_api_error"}}`))
 		case "/v1/chat/completions":
-			t.Fatalf("Compact manual fallback must not call Chat endpoint")
+			t.Fatalf("Compact official failure must not call Chat endpoint")
 		default:
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
@@ -574,10 +462,10 @@ func TestCompactStrategyDoesNotFallbackToChatManual(t *testing.T) {
 
 	_, err := runCompactForwardForTest(t, channel)
 	if err == nil {
-		t.Fatal("invalid Responses manual compact should fail instead of falling back to Chat")
+		t.Fatal("official compact failure should fail instead of calling Chat")
 	}
 
-	want := []string{"/v1/responses/compact", "/v1/responses"}
+	want := []string{"/v1/responses/compact"}
 	if len(paths) != len(want) {
 		t.Fatalf("upstream paths = %#v, 期望 %#v", paths, want)
 	}
