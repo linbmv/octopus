@@ -38,10 +38,6 @@ func NewGroupService(groups cache.Cache[int, model.Group], groupsByKey cache.Cac
 	}
 }
 
-func DefaultGroupService() *GroupService {
-	return groupService
-}
-
 func GroupList(ctx context.Context) ([]model.Group, error) {
 	return groupService.List(ctx)
 }
@@ -729,14 +725,14 @@ func GroupItemUpdate(item *model.GroupItem, ctx context.Context) error {
 	return groupRefreshCacheByID(item.GroupID, ctx)
 }
 
-func GroupItemCompactStrategyUpdate(itemID, groupID int, strategy model.CompactStrategy, probeError string, updatedAt time.Time, ctx context.Context) error {
-	if err := GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID, strategy, probeError, updatedAt, ctx); err != nil {
+func GroupItemCompactStrategyUpdate(itemID, groupID int, strategy model.CompactStrategy, updatedAt time.Time, ctx context.Context) error {
+	if err := GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID, strategy, updatedAt, ctx); err != nil {
 		return err
 	}
 	return groupRefreshCacheByID(groupID, ctx)
 }
 
-func GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID int, strategy model.CompactStrategy, probeError string, updatedAt time.Time, ctx context.Context) error {
+func GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID int, strategy model.CompactStrategy, updatedAt time.Time, ctx context.Context) error {
 	if itemID == 0 || groupID == 0 {
 		return fmt.Errorf("invalid group item")
 	}
@@ -746,7 +742,6 @@ func GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID int, strategy 
 	updates := map[string]any{
 		"compact_strategy":            strategy,
 		"compact_strategy_updated_at": updatedAt,
-		"compact_probe_error":         probeError,
 	}
 	if err := db.GetDB().WithContext(ctx).Model(&model.GroupItem{}).Where("id = ?", itemID).Updates(updates).Error; err != nil {
 		return fmt.Errorf("failed to update group item compact strategy: %w", err)

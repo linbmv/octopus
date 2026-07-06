@@ -36,10 +36,6 @@ func NewChannelService(channels cache.Cache[int, model.Channel], channelKeys cac
 	}
 }
 
-func DefaultChannelService() *ChannelService {
-	return channelService
-}
-
 func ChannelList(ctx context.Context) ([]model.Channel, error) {
 	return channelService.List(ctx)
 }

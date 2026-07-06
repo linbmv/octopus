@@ -16,6 +16,7 @@ func TestSettingValidateHealthWeightedBalancerEnabled(t *testing.T) {
 
 func TestDefaultSettingsIncludeHealthWeightedBalancerEnabled(t *testing.T) {
 	want := map[SettingKey]string{
+		SettingKeyCircuitBreakerThreshold:       "2",
 		SettingKeyHealthWeightedBalancerEnabled: "true",
 		SettingKeyHealthMinAdaptiveTimeout:      "15",
 		SettingKeyHealthSlowModelMinTimeout:     "25",
@@ -23,7 +24,6 @@ func TestDefaultSettingsIncludeHealthWeightedBalancerEnabled(t *testing.T) {
 		SettingKeyHealthRecoveryProbeInterval:   "300",
 		SettingKeyHealthTimeoutRateThreshold:    "20",
 		SettingKeyHealthSlowModelKeywords:       "thinking,opus,reasoning,long-context,long_context,200k,1m",
-		SettingKeyCompactStrategyProbeEnabled:   "false",
 	}
 	for _, setting := range DefaultSettings() {
 		if value, ok := want[setting.Key]; ok {

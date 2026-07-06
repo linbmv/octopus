@@ -550,52 +550,7 @@ P3：
 
 本节记录当前工作区未提交改动的主题划分、收益、风险和纳入整改计划的处理方式。目标是避免把多个方向的修复混成一个不可回滚的大提交。
 
-### A. Compact 主动探测默认关闭
-
-涉及文件：
-
-- `internal/helper/compact_probe.go`
-- `internal/model/setting.go`
-- `internal/model/setting_test.go`
-- `internal/task/sync.go`
-- `web/src/api/endpoints/setting.ts`
-- `web/src/components/modules/setting/LLMSync.tsx`
-- `web/public/locale/*.json`
-
-改动摘要：
-
-- 新增 `compact_strategy_probe_enabled` 设置项，默认 `false`。
-- 模型同步阶段的 compact strategy probe 受该开关控制。
-- probe 请求内容从简单 `hello` / `Reply with ok` 改为更接近真实 handoff summary 的低 token 请求。
-- 前端 LLM Sync 设置页增加开关和说明文案。
-
-价值：
-
-- 降低同步任务向上游发送探测内容导致风控、封禁或误判的概率。
-- 保留真实请求中的官方 compact 远程入口，不引入手工压缩降级。
-- 把“主动探测”从默认行为改为显式选择，更符合生产网关的最小副作用原则。
-
-风险：
-
-- 行为变化：默认不再主动探测 compact 策略；真实 compact 请求只走官方远程入口。
-- 新增设置项会继续扩大 settings 面积，和“设置项收敛”目标存在张力。
-- 前端 toggle 当前是乐观更新，保存失败时需要补回滚或错误提示一致性。
-
-整改纳入：
-
-- 作为独立提交合入，不与 relay/errorclass 或 worker 改动混合。
-- 提交前补充验证：
-  - 默认设置包含 `compact_strategy_probe_enabled=false`。
-  - 设置校验只接受 bool。
-  - probe disabled 时 `syncCompactGroupStrategies` 不执行上游探测。
-  - probe enabled 时仍保持原有探测路径。
-- Phase 4 中将其并入 `CompactPolicy`，避免后续继续散落读取 setting。
-
-建议提交：
-
-- `feat(compact): make strategy probes opt-in`
-
-### B. 错误分类与请求取消处理
+### A. 错误分类与请求取消处理
 
 涉及文件：
 
@@ -688,54 +643,15 @@ P3：
 - `perf(backup): stream database exports`
 - `test(server): cover request body limits`
 
-### D. 前端 LLM Sync 设置改动
-
-涉及文件：
-
-- `web/src/components/modules/setting/LLMSync.tsx`
-- `web/src/api/endpoints/setting.ts`
-- `web/public/locale/*.json`
-
-改动摘要：
-
-- 在 LLM Sync 设置区域增加 compact probe 开关。
-- 增加三语言文案。
-- 新增 `CompactStrategyProbeEnabled` setting key。
-
-价值：
-
-- 用户能明确控制主动探测是否启用。
-- 文案说明真实 Compact 请求仅使用官方远程入口，降低误解。
-
-风险：
-
-- `LLMSync.tsx` 继续承载更多设置项，和前端设置组件膨胀问题一致。
-- toggle 保存失败时本地状态没有回滚，可能造成 UI 与实际设置短暂不一致。
-- 设置页继续按功能散落开关，后续需要整合到 compact/advanced policy。
-
-整改纳入：
-
-- 可随 A 主题提交，不单独混入其它后端改动。
-- Phase 6 拆分设置页时，将 compact probe 放入 compact/advanced 区域。
-- 补 UI 行为：保存失败时回滚 switch 或重新拉取 settings。
-
-建议提交：
-
-- 与 `feat(compact): make strategy probes opt-in` 同提交，或单独 `feat(web): expose compact probe setting`。
-
-### E. 工作区提交拆分建议
+### D. 工作区提交拆分建议
 
 当前未提交改动应拆为以下提交序列：
 
-1. `feat(compact): make strategy probes opt-in`
-   - 包含 compact probe setting、task gate、probe prompt、前端开关和 locale。
-   - 不包含 errorclass、export、stats/log worker。
-
-2. `fix(relay): refine upstream error classification`
+1. `fix(relay): refine upstream error classification`
    - 包含 403/429/503 分类和测试。
    - 不包含 request cancellation 行为。
 
-3. `fix(relay): avoid health mutation after request cancellation`
+2. `fix(relay): avoid health mutation after request cancellation`
    - 包含 `isRequestContextCanceled` 和对应测试。
    - 便于独立回滚。
 

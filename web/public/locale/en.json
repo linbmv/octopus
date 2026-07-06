@@ -278,10 +278,6 @@
                 "button": "Sync Now",
                 "syncing": "Syncing..."
             },
-            "compactProbe": {
-                "label": "Enable Compact Strategy Probes",
-                "description": "Off by default to avoid sending probe content upstream during sync; real Compact requests use the official remote endpoint only."
-            },
             "lastSync": "Last Sync",
             "neverSynced": "Never synced",
             "syncSuccess": "Channel synced successfully",

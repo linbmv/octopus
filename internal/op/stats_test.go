@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -30,8 +31,51 @@ func TestStatsServiceMetricUpdates(t *testing.T) {
 	if got := service.takeDirtyChannels(); len(got) != 1 || got[0] != 7 {
 		t.Fatalf("unexpected dirty channels: %#v", got)
 	}
+	if got := service.takeDirtyChannels(); len(got) != 1 || got[0] != 7 {
+		t.Fatalf("dirty snapshot should not clear before db save succeeds: %#v", got)
+	}
+	snap := service.dirtyChannels.snapshot()
+	service.dirtyChannels.clearUnchanged(snap)
 	if got := service.takeDirtyChannels(); len(got) != 0 {
-		t.Fatalf("expected dirty channels to reset, got %#v", got)
+		t.Fatalf("expected dirty channels to clear after ack, got %#v", got)
+	}
+}
+
+func TestStatsServiceChannelUpdateConcurrent(t *testing.T) {
+	service := NewStatsService()
+	const goroutines = 100
+	const updatesPerGoroutine = 100
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < updatesPerGoroutine; j++ {
+				if err := service.ChannelUpdate(7, model.StatsMetrics{InputToken: 1, RequestSuccess: 1}); err != nil {
+					t.Errorf("channel update: %v", err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	got := service.ChannelGet(7)
+	want := int64(goroutines * updatesPerGoroutine)
+	if got.InputToken != want || got.RequestSuccess != want {
+		t.Fatalf("concurrent channel updates lost metrics: got=%#v want=%d", got, want)
+	}
+}
+
+func TestDirtySetClearUnchangedPreservesNewerMarks(t *testing.T) {
+	dirty := newDirtySet()
+	dirty.mark(7)
+	snap := dirty.snapshot()
+	dirty.mark(7)
+	dirty.clearUnchanged(snap)
+
+	if got := dirtyIDs(dirty.snapshot()); len(got) != 1 || got[0] != 7 {
+		t.Fatalf("newer dirty mark should survive stale ack: %#v", got)
 	}
 }
 
@@ -61,12 +105,14 @@ func TestStatsServiceDailyUpdateSignalsPreviousDay(t *testing.T) {
 	}
 
 	select {
-	case prev := <-service.saveSignal:
-		if prev.Date != "20000101" || prev.RequestSuccess != 3 {
-			t.Fatalf("unexpected previous daily snapshot: %#v", prev)
-		}
+	case <-service.pendingDailyNotify:
 	default:
-		t.Fatal("expected previous daily snapshot to be queued")
+		t.Fatal("expected previous daily snapshot notification")
+	}
+
+	pending := service.drainPendingDailySnapshots()
+	if len(pending) != 1 || pending[0].Date != "20000101" || pending[0].RequestSuccess != 3 {
+		t.Fatalf("unexpected pending daily snapshot: %#v", pending)
 	}
 
 	if got := service.TodayGet(); got.Date == "20000101" || got.RequestSuccess != 1 {
@@ -76,15 +122,15 @@ func TestStatsServiceDailyUpdateSignalsPreviousDay(t *testing.T) {
 
 func TestStatsServiceDrainPendingDailySnapshots(t *testing.T) {
 	service := NewStatsService()
-	service.saveSignal <- model.StatsDaily{
+	service.signalSave(model.StatsDaily{
 		Date:         "20000101",
 		StatsMetrics: model.StatsMetrics{RequestSuccess: 2},
-	}
-	service.saveSignal <- model.StatsDaily{}
-	service.saveSignal <- model.StatsDaily{
+	})
+	service.signalSave(model.StatsDaily{})
+	service.signalSave(model.StatsDaily{
 		Date:         "20000102",
 		StatsMetrics: model.StatsMetrics{RequestSuccess: 3},
-	}
+	})
 
 	got := service.drainPendingDailySnapshots()
 	if len(got) != 2 {
@@ -97,9 +143,19 @@ func TestStatsServiceDrainPendingDailySnapshots(t *testing.T) {
 		t.Fatalf("unexpected second snapshot: %#v", got[1])
 	}
 
+	again := service.drainPendingDailySnapshots()
+	if len(again) != 2 {
+		t.Fatalf("drain should not ack snapshots before db save succeeds: %#v", again)
+	}
+	for _, daily := range got {
+		service.ackPendingDaily(daily)
+	}
+	if remaining := service.drainPendingDailySnapshots(); len(remaining) != 0 {
+		t.Fatalf("expected snapshots to clear after ack, got %#v", remaining)
+	}
+
 	select {
-	case leftover := <-service.saveSignal:
-		t.Fatalf("expected queue to be drained, got %#v", leftover)
+	case <-service.pendingDailyNotify:
 	default:
 	}
 }

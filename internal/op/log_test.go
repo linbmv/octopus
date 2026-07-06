@@ -1,6 +1,7 @@
 package op
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -24,6 +25,53 @@ func TestRelayLogServiceTokens(t *testing.T) {
 	service.StreamTokenRevoke(token)
 	if service.StreamTokenVerify(token) {
 		t.Fatal("expected revoked token to fail verification")
+	}
+}
+
+func TestRelayLogServiceListIncludesSuccessLogsNewestFirst(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	if err := settingRefreshCache(ctx); err != nil {
+		t.Fatalf("refresh settings: %v", err)
+	}
+
+	service := NewRelayLogService()
+	success := model.RelayLog{
+		ID:               1,
+		Time:             100,
+		RequestModelName: "gpt-test",
+		ChannelName:      "ok-channel",
+		ActualModelName:  "gpt-test",
+		ResponseContent:  `{"ok":true}`,
+	}
+	failure := model.RelayLog{
+		ID:               2,
+		Time:             100,
+		RequestModelName: "gpt-test",
+		ChannelName:      "bad-channel",
+		ActualModelName:  "gpt-test",
+		Error:            "upstream failed",
+	}
+
+	if err := service.Add(ctx, success); err != nil {
+		t.Fatalf("add success log: %v", err)
+	}
+	if err := service.Add(ctx, failure); err != nil {
+		t.Fatalf("add failure log: %v", err)
+	}
+
+	logs, err := service.List(ctx, nil, nil, 1, 10)
+	if err != nil {
+		t.Fatalf("list logs: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("log count = %d, want 2: %#v", len(logs), logs)
+	}
+	if logs[0].Error != failure.Error || logs[1].ResponseContent != success.ResponseContent {
+		t.Fatalf("logs not sorted by newest id within same second: %#v", logs)
+	}
+	if logs[1].Error != "" || logs[1].ResponseContent == "" {
+		t.Fatalf("success log missing from list or classified as error: %#v", logs[1])
 	}
 }
 

@@ -21,10 +21,6 @@ func NewUserService() *UserService {
 	return &UserService{}
 }
 
-func DefaultUserService() *UserService {
-	return userService
-}
-
 func UserInit() error {
 	return userService.Init(context.Background())
 }

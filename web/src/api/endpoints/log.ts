@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 /**
  * 尝试状态
  */
-export type AttemptStatus = 'success' | 'failed' | 'circuit_break' | 'skipped';
+export type AttemptStatus = 'success' | 'failed' | 'circuit_break' | 'skipped' | 'redirect';
 
 /**
  * 单次渠道尝试信息
@@ -23,6 +23,7 @@ export interface ChannelAttempt {
     duration: number;       // 耗时(毫秒)
     sticky?: boolean;
     msg?: string;
+    first_token_time?: number;
 }
 
 /**
@@ -139,7 +140,10 @@ export function useLogs(options: { pageSize?: number } = {}) {
             }
         }
 
-        merged.sort((a, b) => b.time - a.time);
+        merged.sort((a, b) => {
+            if (a.time === b.time) return b.id - a.id;
+            return b.time - a.time;
+        });
         return merged;
     }, [logsQuery.data]);
 

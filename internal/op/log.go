@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"sync"
 	"time"
 
@@ -43,10 +44,6 @@ func NewRelayLogService() *RelayLogService {
 		subscribers:  make(map[chan model.RelayLog]struct{}),
 		streamTokens: make(map[string]struct{}),
 	}
-}
-
-func DefaultRelayLogService() *RelayLogService {
-	return relayLogService
 }
 
 func RelayLogStreamTokenCreate() (string, error) {
@@ -336,9 +333,7 @@ func (s *RelayLogService) List(ctx context.Context, startTime, endTime *int, pag
 	s.cacheMu.Unlock()
 
 	// 反转缓存日志顺序（原本新的在末尾，反转后新的在前面，方便分页）
-	for i, j := 0, len(cachedLogs)-1; i < j; i, j = i+1, j-1 {
-		cachedLogs[i], cachedLogs[j] = cachedLogs[j], cachedLogs[i]
-	}
+	sortRelayLogsNewestFirst(cachedLogs)
 
 	cacheCount := len(cachedLogs)
 	offset := (page - 1) * pageSize
@@ -377,6 +372,15 @@ func (s *RelayLogService) List(ctx context.Context, startTime, endTime *int, pag
 	}
 
 	return result, nil
+}
+
+func sortRelayLogsNewestFirst(logs []model.RelayLog) {
+	sort.SliceStable(logs, func(i, j int) bool {
+		if logs[i].Time == logs[j].Time {
+			return logs[i].ID > logs[j].ID
+		}
+		return logs[i].Time > logs[j].Time
+	})
 }
 
 func RelayLogClear(ctx context.Context) error {

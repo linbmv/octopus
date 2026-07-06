@@ -24,10 +24,6 @@ func NewSettingsService(cacheStore cache.Cache[model.SettingKey, string]) *Setti
 	return &SettingsService{cache: cacheStore}
 }
 
-func DefaultSettingsService() *SettingsService {
-	return settingsService
-}
-
 func SettingList(ctx context.Context) ([]model.Setting, error) {
 	return settingsService.List(ctx)
 }

@@ -105,7 +105,7 @@ func (ra *relayAttempt) rememberCompactStrategy(ctx context.Context, strategy co
 	if ra.groupItem.ID == 0 || ra.groupItem.GroupID == 0 || ra.groupItem.CompactStrategy == persistedStrategy {
 		return
 	}
-	if err := op.GroupItemCompactStrategyUpdate(ra.groupItem.ID, ra.groupItem.GroupID, persistedStrategy, "", time.Now(), ctx); err != nil {
+	if err := op.GroupItemCompactStrategyUpdate(ra.groupItem.ID, ra.groupItem.GroupID, persistedStrategy, time.Now(), ctx); err != nil {
 		log.Warnf("failed to persist compact strategy for group item %d: %v", ra.groupItem.ID, err)
 		return
 	}

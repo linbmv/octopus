@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -17,6 +18,71 @@ import (
 
 var statsService = NewStatsService()
 
+type dirtySet struct {
+	mu      sync.Mutex
+	version uint64
+	items   map[int]uint64
+}
+
+func newDirtySet() *dirtySet {
+	return &dirtySet{items: make(map[int]uint64)}
+}
+
+func (d *dirtySet) mark(id int) {
+	d.mu.Lock()
+	d.version++
+	d.items[id] = d.version
+	d.mu.Unlock()
+}
+
+func (d *dirtySet) snapshot() map[int]uint64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	snap := make(map[int]uint64, len(d.items))
+	for id, version := range d.items {
+		snap[id] = version
+	}
+	return snap
+}
+
+func (d *dirtySet) clearUnchanged(snap map[int]uint64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for id, version := range snap {
+		if d.items[id] == version {
+			delete(d.items, id)
+		}
+	}
+}
+
+func (d *dirtySet) delete(id int) {
+	d.mu.Lock()
+	delete(d.items, id)
+	d.mu.Unlock()
+}
+
+func (d *dirtySet) reset() {
+	d.mu.Lock()
+	d.version = 0
+	d.items = make(map[int]uint64)
+	d.mu.Unlock()
+}
+
+func dirtyIDs(snap map[int]uint64) []int {
+	ids := make([]int, 0, len(snap))
+	for id := range snap {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+func statsLockFor(locks *[256]sync.Mutex, id int) *sync.Mutex {
+	return &locks[uint(id)&255]
+}
+
 type StatsService struct {
 	daily   model.StatsDaily
 	dailyMu sync.RWMutex
@@ -27,19 +93,21 @@ type StatsService struct {
 	hourly   [24]model.StatsHourly
 	hourlyMu sync.RWMutex
 
-	channels        cache.Cache[int, model.StatsChannel]
-	dirtyChannels   map[int]struct{}
-	dirtyChannelsMu sync.Mutex
+	channels           cache.Cache[int, model.StatsChannel]
+	dirtyChannels      *dirtySet
+	channelUpdateLocks [256]sync.Mutex
 
-	models        cache.Cache[int, model.StatsModel]
-	dirtyModels   map[int]struct{}
-	dirtyModelsMu sync.Mutex
+	models           cache.Cache[int, model.StatsModel]
+	dirtyModels      *dirtySet
+	modelUpdateLocks [256]sync.Mutex
 
-	apiKeys        cache.Cache[int, model.StatsAPIKey]
-	dirtyAPIKeys   map[int]struct{}
-	dirtyAPIKeysMu sync.Mutex
+	apiKeys           cache.Cache[int, model.StatsAPIKey]
+	dirtyAPIKeys      *dirtySet
+	apiKeyUpdateLocks [256]sync.Mutex
 
-	saveSignal chan model.StatsDaily
+	pendingDailyMu     sync.Mutex
+	pendingDaily       map[string]model.StatsDaily
+	pendingDailyNotify chan struct{}
 
 	workerMu   sync.Mutex
 	workerStop chan struct{}
@@ -48,18 +116,15 @@ type StatsService struct {
 
 func NewStatsService() *StatsService {
 	return &StatsService{
-		channels:      cache.New[int, model.StatsChannel](16),
-		dirtyChannels: make(map[int]struct{}),
-		models:        cache.New[int, model.StatsModel](16),
-		dirtyModels:   make(map[int]struct{}),
-		apiKeys:       cache.New[int, model.StatsAPIKey](16),
-		dirtyAPIKeys:  make(map[int]struct{}),
-		saveSignal:    make(chan model.StatsDaily, 16),
+		channels:           cache.New[int, model.StatsChannel](16),
+		dirtyChannels:      newDirtySet(),
+		models:             cache.New[int, model.StatsModel](16),
+		dirtyModels:        newDirtySet(),
+		apiKeys:            cache.New[int, model.StatsAPIKey](16),
+		dirtyAPIKeys:       newDirtySet(),
+		pendingDaily:       make(map[string]model.StatsDaily),
+		pendingDailyNotify: make(chan struct{}, 1),
 	}
-}
-
-func DefaultStatsService() *StatsService {
-	return statsService
 }
 
 func (s *StatsService) totalSnapshot() model.StatsTotal {
@@ -81,57 +146,27 @@ func (s *StatsService) hourlySnapshot() [24]model.StatsHourly {
 }
 
 func (s *StatsService) markDirtyChannel(id int) {
-	s.dirtyChannelsMu.Lock()
-	s.dirtyChannels[id] = struct{}{}
-	s.dirtyChannelsMu.Unlock()
+	s.dirtyChannels.mark(id)
 }
 
 func (s *StatsService) markDirtyModel(id int) {
-	s.dirtyModelsMu.Lock()
-	s.dirtyModels[id] = struct{}{}
-	s.dirtyModelsMu.Unlock()
+	s.dirtyModels.mark(id)
 }
 
 func (s *StatsService) markDirtyAPIKey(id int) {
-	s.dirtyAPIKeysMu.Lock()
-	s.dirtyAPIKeys[id] = struct{}{}
-	s.dirtyAPIKeysMu.Unlock()
+	s.dirtyAPIKeys.mark(id)
 }
 
 func (s *StatsService) takeDirtyChannels() []int {
-	s.dirtyChannelsMu.Lock()
-	defer s.dirtyChannelsMu.Unlock()
-
-	ids := make([]int, 0, len(s.dirtyChannels))
-	for id := range s.dirtyChannels {
-		ids = append(ids, id)
-	}
-	s.dirtyChannels = make(map[int]struct{})
-	return ids
+	return dirtyIDs(s.dirtyChannels.snapshot())
 }
 
 func (s *StatsService) takeDirtyModels() []int {
-	s.dirtyModelsMu.Lock()
-	defer s.dirtyModelsMu.Unlock()
-
-	ids := make([]int, 0, len(s.dirtyModels))
-	for id := range s.dirtyModels {
-		ids = append(ids, id)
-	}
-	s.dirtyModels = make(map[int]struct{})
-	return ids
+	return dirtyIDs(s.dirtyModels.snapshot())
 }
 
 func (s *StatsService) takeDirtyAPIKeys() []int {
-	s.dirtyAPIKeysMu.Lock()
-	defer s.dirtyAPIKeysMu.Unlock()
-
-	ids := make([]int, 0, len(s.dirtyAPIKeys))
-	for id := range s.dirtyAPIKeys {
-		ids = append(ids, id)
-	}
-	s.dirtyAPIKeys = make(map[int]struct{})
-	return ids
+	return dirtyIDs(s.dirtyAPIKeys.snapshot())
 }
 
 func StatsSaveDBTask() {
@@ -161,21 +196,10 @@ func (s *StatsService) SaveDB(ctx context.Context) error {
 		if err := s.saveDBWithDailyOverride(ctx, daily); err != nil {
 			return err
 		}
+		s.ackPendingDaily(daily)
 	}
 
-	totalSnap := s.totalSnapshot()
-	if totalSnap.ID == 0 {
-		totalSnap.ID = 1
-	}
-
-	dailySnap := s.dailySnapshot()
-	hourlyAll := s.hourlySnapshot()
-
-	channelIDs := s.takeDirtyChannels()
-	modelIDs := s.takeDirtyModels()
-	apiKeyIDs := s.takeDirtyAPIKeys()
-
-	return s.persistSnapshots(ctx, totalSnap, dailySnap, hourlyAll, channelIDs, modelIDs, apiKeyIDs)
+	return s.saveDBWithDailyOverride(ctx, s.dailySnapshot())
 }
 
 func (s *StatsService) persistSnapshots(
@@ -253,11 +277,27 @@ func (s *StatsService) saveDBWithDailyOverride(ctx context.Context, dailyOverrid
 
 	hourlyAll := s.hourlySnapshot()
 
-	channelIDs := s.takeDirtyChannels()
-	modelIDs := s.takeDirtyModels()
-	apiKeyIDs := s.takeDirtyAPIKeys()
+	channelDirty := s.dirtyChannels.snapshot()
+	modelDirty := s.dirtyModels.snapshot()
+	apiKeyDirty := s.dirtyAPIKeys.snapshot()
 
-	return s.persistSnapshots(ctx, totalSnap, dailyOverride, hourlyAll, channelIDs, modelIDs, apiKeyIDs)
+	err := s.persistSnapshots(
+		ctx,
+		totalSnap,
+		dailyOverride,
+		hourlyAll,
+		dirtyIDs(channelDirty),
+		dirtyIDs(modelDirty),
+		dirtyIDs(apiKeyDirty),
+	)
+	if err != nil {
+		return err
+	}
+
+	s.dirtyChannels.clearUnchanged(channelDirty)
+	s.dirtyModels.clearUnchanged(modelDirty)
+	s.dirtyAPIKeys.clearUnchanged(apiKeyDirty)
+	return nil
 }
 
 func (s *StatsService) signalSave(daily model.StatsDaily) {
@@ -265,24 +305,37 @@ func (s *StatsService) signalSave(daily model.StatsDaily) {
 		return
 	}
 
+	s.pendingDailyMu.Lock()
+	s.pendingDaily[daily.Date] = daily
+	s.pendingDailyMu.Unlock()
+
 	select {
-	case s.saveSignal <- daily:
+	case s.pendingDailyNotify <- struct{}{}:
 	default:
-		log.Warnf("stats async save queue full, dropping daily snapshot: date=%s", daily.Date)
 	}
 }
 
 func (s *StatsService) drainPendingDailySnapshots() []model.StatsDaily {
-	var snapshots []model.StatsDaily
-	for {
-		select {
-		case daily := <-s.saveSignal:
-			if daily.Date != "" {
-				snapshots = append(snapshots, daily)
-			}
-		default:
-			return snapshots
-		}
+	s.pendingDailyMu.Lock()
+	defer s.pendingDailyMu.Unlock()
+
+	snapshots := make([]model.StatsDaily, 0, len(s.pendingDaily))
+	for _, daily := range s.pendingDaily {
+		snapshots = append(snapshots, daily)
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].Date < snapshots[j].Date
+	})
+	return snapshots
+
+}
+
+func (s *StatsService) ackPendingDaily(daily model.StatsDaily) {
+	s.pendingDailyMu.Lock()
+	defer s.pendingDailyMu.Unlock()
+
+	if current, ok := s.pendingDaily[daily.Date]; ok && current == daily {
+		delete(s.pendingDaily, daily.Date)
 	}
 }
 
@@ -333,12 +386,17 @@ func (s *StatsService) saveWorker(stopCh <-chan struct{}, doneCh chan<- struct{}
 	defer close(doneCh)
 	for {
 		select {
-		case daily := <-s.saveSignal:
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			if err := s.saveDBWithDailyOverride(ctx, daily); err != nil {
-				log.Errorf("stats async save error: %v", err)
+		case <-s.pendingDailyNotify:
+			for _, daily := range s.drainPendingDailySnapshots() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				if err := s.saveDBWithDailyOverride(ctx, daily); err != nil {
+					log.Errorf("stats async save error: %v", err)
+					cancel()
+					continue
+				}
+				cancel()
+				s.ackPendingDaily(daily)
 			}
-			cancel()
 		case <-stopCh:
 			return
 		}
@@ -387,6 +445,10 @@ func StatsChannelUpdate(channelID int, metrics model.StatsMetrics) error {
 }
 
 func (s *StatsService) ChannelUpdate(channelID int, metrics model.StatsMetrics) error {
+	mu := statsLockFor(&s.channelUpdateLocks, channelID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	channelCache, ok := s.channels.Get(channelID)
 	if !ok {
 		channelCache = model.StatsChannel{
@@ -427,6 +489,10 @@ func StatsModelUpdate(stats model.StatsModel) error {
 }
 
 func (s *StatsService) ModelUpdate(stats model.StatsModel) error {
+	mu := statsLockFor(&s.modelUpdateLocks, stats.ID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	modelCache, ok := s.models.Get(stats.ID)
 	if !ok {
 		modelCache = model.StatsModel{
@@ -444,6 +510,10 @@ func StatsAPIKeyUpdate(apiKeyID int, metrics model.StatsMetrics) error {
 }
 
 func (s *StatsService) APIKeyUpdate(apiKeyID int, metrics model.StatsMetrics) error {
+	mu := statsLockFor(&s.apiKeyUpdateLocks, apiKeyID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	apiKeyCache, ok := s.apiKeys.Get(apiKeyID)
 	if !ok {
 		apiKeyCache = model.StatsAPIKey{
@@ -461,13 +531,15 @@ func StatsChannelDel(id int) error {
 }
 
 func (s *StatsService) ChannelDel(id int) error {
+	mu := statsLockFor(&s.channelUpdateLocks, id)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if _, ok := s.channels.Get(id); !ok {
 		return nil
 	}
 	s.channels.Del(id)
-	s.dirtyChannelsMu.Lock()
-	delete(s.dirtyChannels, id)
-	s.dirtyChannelsMu.Unlock()
+	s.dirtyChannels.delete(id)
 	return db.GetDB().Delete(&model.StatsChannel{}, id).Error
 }
 
@@ -476,13 +548,15 @@ func StatsAPIKeyDel(id int) error {
 }
 
 func (s *StatsService) APIKeyDel(id int) error {
+	mu := statsLockFor(&s.apiKeyUpdateLocks, id)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if _, ok := s.apiKeys.Get(id); !ok {
 		return nil
 	}
 	s.apiKeys.Del(id)
-	s.dirtyAPIKeysMu.Lock()
-	delete(s.dirtyAPIKeys, id)
-	s.dirtyAPIKeysMu.Unlock()
+	s.dirtyAPIKeys.delete(id)
 	return db.GetDB().Delete(&model.StatsAPIKey{}, id).Error
 }
 
@@ -507,6 +581,10 @@ func StatsChannelGet(id int) model.StatsChannel {
 }
 
 func (s *StatsService) ChannelGet(id int) model.StatsChannel {
+	mu := statsLockFor(&s.channelUpdateLocks, id)
+	mu.Lock()
+	defer mu.Unlock()
+
 	stats, ok := s.channels.Get(id)
 	if !ok {
 		tmp := model.StatsChannel{
@@ -524,6 +602,10 @@ func StatsAPIKeyGet(id int) model.StatsAPIKey {
 }
 
 func (s *StatsService) APIKeyGet(id int) model.StatsAPIKey {
+	mu := statsLockFor(&s.apiKeyUpdateLocks, id)
+	mu.Lock()
+	defer mu.Unlock()
+
 	stats, ok := s.apiKeys.Get(id)
 	if !ok {
 		tmp := model.StatsAPIKey{
@@ -638,9 +720,7 @@ func (s *StatsService) RefreshCache(ctx context.Context) error {
 	s.totalMu.Unlock()
 
 	s.channels.Clear()
-	s.dirtyChannelsMu.Lock()
-	s.dirtyChannels = make(map[int]struct{})
-	s.dirtyChannelsMu.Unlock()
+	s.dirtyChannels.reset()
 	for _, v := range loadedChannels {
 		s.channels.Set(v.ChannelID, v)
 	}
@@ -652,9 +732,7 @@ func (s *StatsService) RefreshCache(ctx context.Context) error {
 	}
 
 	s.apiKeys.Clear()
-	s.dirtyAPIKeysMu.Lock()
-	s.dirtyAPIKeys = make(map[int]struct{})
-	s.dirtyAPIKeysMu.Unlock()
+	s.dirtyAPIKeys.reset()
 	for _, v := range loadedAPIKeys {
 		s.apiKeys.Set(v.APIKeyID, v)
 	}

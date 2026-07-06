@@ -30,7 +30,6 @@ const (
 	SettingKeyHealthShadowMode               SettingKey = "health_shadow_mode"                 // 自动超时 shadow 模式（只记录不执行）
 	SettingKeyHealthMaxMultiplierStack       SettingKey = "health_max_multiplier_stack"        // multiplier 叠加上限（浮点数，0=无限制）
 	SettingKeyStickyHealthyFirstTokenTimeout SettingKey = "sticky_healthy_first_token_timeout" // 粘性健康首token阈值（秒），0=关闭健康粘性检查
-	SettingKeyCompactStrategyProbeEnabled    SettingKey = "compact_strategy_probe_enabled"     // 是否在模型同步时主动探测 compact 策略
 )
 
 type Setting struct {
@@ -47,7 +46,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeySyncLLMInterval, Value: "24"},                 // 默认24小时同步一次LLM
 		{Key: SettingKeyRelayLogKeepPeriod, Value: "7"},               // 默认日志保存7天
 		{Key: SettingKeyRelayLogKeepEnabled, Value: "true"},           // 默认保留历史日志
-		{Key: SettingKeyCircuitBreakerThreshold, Value: "5"},          // 默认连续失败5次触发熔断
+		{Key: SettingKeyCircuitBreakerThreshold, Value: "2"},          // 默认连续失败2次触发熔断
 		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},          // 默认基础冷却60秒
 		{Key: SettingKeyCircuitBreakerMaxCooldown, Value: "600"},      // 默认最大冷却600秒（10分钟）
 		{Key: SettingKeySmartHealthEnabled, Value: "true"},            // 默认启用智能健康系统
@@ -61,7 +60,6 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyHealthShadowMode, Value: "false"},           // shadow mode 默认关闭
 		{Key: SettingKeyHealthMaxMultiplierStack, Value: "3.0"},     // multiplier 叠加上限 3.0x
 		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"}, // 默认不启用粘性健康检查
-		{Key: SettingKeyCompactStrategyProbeEnabled, Value: "false"},
 	}
 }
 
@@ -77,7 +75,7 @@ func (s *Setting) Validate() error {
 		}
 		return nil
 	case SettingKeyRelayLogKeepEnabled, SettingKeySmartHealthEnabled, SettingKeyHealthWeightedBalancerEnabled,
-		SettingKeyHealthShadowMode, SettingKeyCompactStrategyProbeEnabled:
+		SettingKeyHealthShadowMode:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("%s must be true or false", s.Key)
 		}

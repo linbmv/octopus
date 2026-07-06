@@ -278,10 +278,6 @@
                 "button": "立即同步",
                 "syncing": "同步中..."
             },
-            "compactProbe": {
-                "label": "启用 Compact 策略主动探测",
-                "description": "默认关闭，避免同步任务向上游发送探测内容；真实 Compact 请求仅使用官方远程端点。"
-            },
             "lastSync": "上次同步",
             "neverSynced": "从未同步",
             "syncSuccess": "渠道同步成功",

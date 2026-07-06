@@ -42,7 +42,6 @@ type GroupItem struct {
 
 	CompactStrategy          CompactStrategy `json:"-" gorm:"type:varchar(32);default:''"`
 	CompactStrategyUpdatedAt *time.Time      `json:"-"`
-	CompactProbeError        string          `json:"-" gorm:"type:text"`
 }
 
 // GroupUpdateRequest 分组更新请求 - 仅包含变更的数据

@@ -50,7 +50,7 @@ func getOrCreateEntry(key string) *circuitEntry {
 func getThreshold() int64 {
 	v, err := op.SettingGetInt(model.SettingKeyCircuitBreakerThreshold)
 	if err != nil || v <= 0 {
-		return 5
+		return 2
 	}
 	return int64(v)
 }
