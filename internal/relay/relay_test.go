@@ -680,6 +680,127 @@ func TestRelayRunStopsOnTerminalClientError(t *testing.T) {
 	}
 }
 
+func TestBuildRealAttemptSkipsCircuitBrokenKeyWithinChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := testGinContext()
+	modelName := "test-key-circuit-build"
+	channelID := 91001
+	firstKeyID := 92001
+	secondKeyID := 92002
+	tripCircuitForTest(t, channelID, firstKeyID, modelName)
+
+	group := dbmodel.Group{
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: channelID, ModelName: modelName, Priority: 1},
+		},
+	}
+	iter := balancer.NewIterator(group, 1, modelName)
+	if !iter.Next() {
+		t.Fatal("test iterator should have one candidate")
+	}
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: modelName, RequestType: llm.RequestTypeChat},
+		metrics:         &RelayMetrics{RequestModel: modelName, ActualModel: modelName},
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:     []*balancer.Iterator{iter},
+		group:           group,
+	}
+	channel := &dbmodel.Channel{
+		ID:       channelID,
+		Name:     "multi-key",
+		Type:     llm.APIFormatOpenAIChatCompletion,
+		Enabled:  true,
+		BaseUrls: []dbmodel.BaseUrl{{URL: "https://example.com/v1"}},
+		Keys: []dbmodel.ChannelKey{
+			{ID: firstKeyID, ChannelID: channelID, Enabled: true, ChannelKey: "sk-first", Remark: "first"},
+			{ID: secondKeyID, ChannelID: channelID, Enabled: true, ChannelKey: "sk-second", Remark: "second"},
+		},
+	}
+
+	attempt, err := r.buildRealAttempt(channel, group.Items[0], false, 0)
+	if err != nil {
+		t.Fatalf("buildRealAttempt error = %v", err)
+	}
+	if attempt == nil {
+		t.Fatal("buildRealAttempt returned nil, want attempt with second key")
+	}
+	if attempt.usedKey.ID != secondKeyID || attempt.keyIndex != 1 {
+		t.Fatalf("selected key = %d at index %d, want key %d at index 1", attempt.usedKey.ID, attempt.keyIndex, secondKeyID)
+	}
+	attempts := r.attempts()
+	if len(attempts) != 1 || attempts[0].Status != dbmodel.AttemptCircuitBreak || attempts[0].ChannelKeyID != firstKeyID {
+		t.Fatalf("first key circuit break not recorded correctly: %+v", attempts)
+	}
+}
+
+func TestSwitchToNextKeySkipsCircuitBrokenKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := testGinContext()
+	modelName := "test-key-circuit-switch"
+	channelID := 91011
+	firstKeyID := 92011
+	secondKeyID := 92012
+	thirdKeyID := 92013
+	tripCircuitForTest(t, channelID, secondKeyID, modelName)
+
+	group := dbmodel.Group{
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: channelID, ModelName: modelName, Priority: 1},
+		},
+	}
+	iter := balancer.NewIterator(group, 1, modelName)
+	if !iter.Next() {
+		t.Fatal("test iterator should have one candidate")
+	}
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: modelName, RequestType: llm.RequestTypeChat},
+		metrics:         &RelayMetrics{RequestModel: modelName, ActualModel: modelName},
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:     []*balancer.Iterator{iter},
+		group:           group,
+	}
+	keyOptions := []dbmodel.ChannelKey{
+		{ID: firstKeyID, ChannelID: channelID, Enabled: true, ChannelKey: "sk-first"},
+		{ID: secondKeyID, ChannelID: channelID, Enabled: true, ChannelKey: "sk-second", Remark: "blocked"},
+		{ID: thirdKeyID, ChannelID: channelID, Enabled: true, ChannelKey: "sk-third", Remark: "third"},
+	}
+	ra := &relayAttempt{
+		relayRun:   r,
+		channel:    &dbmodel.Channel{ID: channelID, Name: "multi-key", Type: llm.APIFormatOpenAIChatCompletion},
+		usedKey:    keyOptions[0],
+		keyOptions: keyOptions,
+		keyIndex:   0,
+		baseURL:    "https://example.com/v1",
+	}
+
+	if !ra.switchToNextKey() {
+		t.Fatal("switchToNextKey() = false, want true")
+	}
+	if ra.usedKey.ID != thirdKeyID || ra.keyIndex != 2 {
+		t.Fatalf("selected key = %d at index %d, want key %d at index 2", ra.usedKey.ID, ra.keyIndex, thirdKeyID)
+	}
+	attempts := r.attempts()
+	if len(attempts) != 1 || attempts[0].Status != dbmodel.AttemptCircuitBreak || attempts[0].ChannelKeyID != secondKeyID {
+		t.Fatalf("second key circuit break not recorded correctly: %+v", attempts)
+	}
+}
+
+func tripCircuitForTest(t *testing.T, channelID, keyID int, modelName string) {
+	t.Helper()
+	balancer.RecordSuccess(channelID, keyID, modelName)
+	t.Cleanup(func() {
+		balancer.RecordSuccess(channelID, keyID, modelName)
+	})
+	balancer.RecordFailure(channelID, keyID, modelName)
+	balancer.RecordFailure(channelID, keyID, modelName)
+}
+
 func TestNestedGroupFallbackEntersChildAfterParentCandidates(t *testing.T) {
 	parent := dbmodel.Group{
 		ID:   1,

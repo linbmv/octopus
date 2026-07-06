@@ -179,41 +179,44 @@ func (r *relayRun) buildRealAttempt(
 		r.iter.Skip(channel.ID, 0, channel.Name, "no available key")
 		return nil, nil
 	}
-	usedKey := keyOptions[0]
-
-	keyRemark := cleanKeyRemark(usedKey.Remark)
-	if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {
-		return nil, nil
-	}
 
 	baseURL := selectRuntimeBaseURL(channel)
-	outAdapter, err := newOutbound(channel.Type, r.internalRequest, baseURL, usedKey.ChannelKey)
-	if err != nil {
-		r.iter.Skip(channel.ID, usedKey.ID, channel.Name, err.Error())
-		return nil, nil
+	for keyIndex, usedKey := range keyOptions {
+		keyRemark := cleanKeyRemark(usedKey.Remark)
+		if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {
+			continue
+		}
+		outAdapter, err := newOutbound(channel.Type, r.internalRequest, baseURL, usedKey.ChannelKey)
+		if err != nil {
+			r.iter.Skip(channel.ID, usedKey.ID, channel.Name, err.Error())
+			continue
+		}
+
+		r.internalRequest.Model = item.ModelName
+		r.metrics.ActualModel = item.ModelName
+		r.metrics.ParamOverride = ""
+		r.metrics.OutboundRequestSummary = nil
+
+		log.Infof(
+			"request model %s, mode: %d, forwarding to channel: %s model: %s "+
+				"(attempt %d/%d, sticky=%t, channel_id=%d, channel_key_id=%d, sticky_key_id=%d, key_remark=%s)",
+			r.metrics.RequestModel, r.group.Mode, channel.Name, item.ModelName,
+			r.iter.Index()+1, r.iter.Len(), sticky,
+			channel.ID, usedKey.ID, stickyKeyID, safeKeyRemark(usedKey.Remark),
+		)
+
+		return &relayAttempt{
+			relayRun:   r,
+			outAdapter: outAdapter,
+			channel:    channel,
+			groupItem:  item,
+			usedKey:    usedKey,
+			keyOptions: keyOptions,
+			keyIndex:   keyIndex,
+			baseURL:    baseURL,
+			keyRemark:  keyRemark,
+		}, nil
 	}
 
-	r.internalRequest.Model = item.ModelName
-	r.metrics.ActualModel = item.ModelName
-	r.metrics.ParamOverride = ""
-	r.metrics.OutboundRequestSummary = nil
-
-	log.Infof(
-		"request model %s, mode: %d, forwarding to channel: %s model: %s "+
-			"(attempt %d/%d, sticky=%t, channel_id=%d, channel_key_id=%d, sticky_key_id=%d, key_remark=%s)",
-		r.metrics.RequestModel, r.group.Mode, channel.Name, item.ModelName,
-		r.iter.Index()+1, r.iter.Len(), sticky,
-		channel.ID, usedKey.ID, stickyKeyID, safeKeyRemark(usedKey.Remark),
-	)
-
-	return &relayAttempt{
-		relayRun:   r,
-		outAdapter: outAdapter,
-		channel:    channel,
-		groupItem:  item,
-		usedKey:    usedKey,
-		keyOptions: keyOptions,
-		baseURL:    baseURL,
-		keyRemark:  keyRemark,
-	}, nil
+	return nil, nil
 }

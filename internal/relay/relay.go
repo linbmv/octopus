@@ -224,13 +224,17 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		if nextKey.ChannelKey == "" {
 			continue
 		}
+		nextKeyRemark := cleanKeyRemark(nextKey.Remark)
+		if ra.iter != nil && ra.iter.SkipCircuitBreak(ra.channel.ID, nextKey.ID, ra.channel.Name, nextKeyRemark) {
+			continue
+		}
 		outAdapter, err := newOutbound(ra.channel.Type, ra.internalRequest, ra.baseURL, nextKey.ChannelKey)
 		if err != nil {
 			ra.iter.Skip(ra.channel.ID, nextKey.ID, ra.channel.Name, err.Error())
 			continue
 		}
 		ra.usedKey = nextKey
-		ra.keyRemark = cleanKeyRemark(nextKey.Remark)
+		ra.keyRemark = nextKeyRemark
 		ra.outAdapter = outAdapter
 		ra.metrics.ParamOverride = ""
 		ra.metrics.OutboundRequestSummary = nil
