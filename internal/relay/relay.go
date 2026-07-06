@@ -15,6 +15,7 @@ import (
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/relay/errorclass"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -140,27 +141,32 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 	}
 
 	if isRequestContextCanceled(ra.c.Request.Context(), fwdErr) {
-		span.End(dbmodel.AttemptFailed, fwdErr.Error())
-		log.Infof("attempt %d/%d canceled by request context: channel=%s(%d), key=%d, duration=%dms, error=%v",
+		msg := "request context canceled"
+		if ra.c.Writer.Written() {
+			msg = "client disconnected"
+		}
+		span.End(dbmodel.AttemptClientCancel, msg)
+		log.Infof("attempt %d/%d canceled by request context: channel=%s(%d), key=%d, duration=%dms, msg=%s, error=%v",
 			ra.iter.Index()+1, ra.iter.Len(),
 			ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
-			span.Duration().Milliseconds(), fwdErr)
+			span.Duration().Milliseconds(), msg, fwdErr)
 		return ra.c.Writer.Written(), upstreamResponseBody, fwdErr
 	}
 
 	recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
 	op.ChannelKeyUpdate(ra.usedKey)
-	span.End(dbmodel.AttemptFailed, fwdErr.Error())
-	op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
-		WaitTime:      span.Duration().Milliseconds(),
-		RequestFailed: 1,
-	})
-	if !ra.isAdaptiveFirstTokenTimeout(fwdErr) {
-		balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
-	}
-
 	// 使用完整的上游响应体进行智能错误决策。
 	decision := decideRelayError(upstreamStatusCode, upstreamResponseBody, fwdErr)
+	span.End(dbmodel.AttemptFailed, fwdErr.Error())
+	if decision.Classification.Level != errorclass.ErrorLevelClient {
+		op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
+			WaitTime:      span.Duration().Milliseconds(),
+			RequestFailed: 1,
+		})
+		if !ra.isAdaptiveFirstTokenTimeout(fwdErr) {
+			balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+		}
+	}
 
 	// 获取首 token 延迟（如果有）
 	firstTokenDuration := time.Duration(0)
@@ -186,6 +192,9 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 		ra.iter.Index()+1, ra.iter.Len(),
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
 		span.Duration().Milliseconds(), decision.Classification.Level, fwdErr)
+	if decision.Classification.Level == errorclass.ErrorLevelClient {
+		return false, upstreamResponseBody, newTerminalRelayError(upstreamStatusCode, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr))
+	}
 
 	return ra.c.Writer.Written(), upstreamResponseBody, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
 }

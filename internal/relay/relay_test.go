@@ -263,6 +263,26 @@ func TestRelayErrorDecisionRetriesOnlyKeyLevelFailures(t *testing.T) {
 	}
 }
 
+func TestRelayErrorDecisionClassifiesEmptyUpstreamResponseAsChannel(t *testing.T) {
+	decision := decideRelayError(http.StatusOK, nil, errors.New("failed to stream request: response body is empty"))
+	if decision.Classification.Level.String() != "channel" {
+		t.Fatalf("empty response level = %s, want channel", decision.Classification.Level)
+	}
+	if decision.RetryNextKey {
+		t.Fatal("empty channel response should fail over to another channel, not another key")
+	}
+}
+
+func TestRelayErrorDecisionClassifiesClientErrorAsTerminal(t *testing.T) {
+	decision := decideRelayError(http.StatusBadRequest, []byte(`{"error":"invalid request"}`), errors.New("bad request"))
+	if decision.Classification.Level.String() != "client" {
+		t.Fatalf("400 error level = %s, want client", decision.Classification.Level)
+	}
+	if decision.RetryNextKey {
+		t.Fatal("client error should not retry another key")
+	}
+}
+
 func TestIsRequestContextCanceledRequiresCanceledRequestContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -490,6 +510,26 @@ func TestFinalAttemptReturnsLastFailedWhenNoSuccess(t *testing.T) {
 	}
 }
 
+func TestFinalAttemptReturnsClientCanceledWhenNoSuccess(t *testing.T) {
+	attempts := []dbmodel.ChannelAttempt{
+		{ChannelID: 1, ChannelName: "a", ChannelKeyID: 11, Status: dbmodel.AttemptClientCancel},
+	}
+	id, name, keyID, status := finalAttempt(attempts)
+	if id != 1 || name != "a" || keyID != 11 || status != dbmodel.AttemptClientCancel {
+		t.Fatalf("got id=%d name=%s key=%d status=%s, want client canceled attempt", id, name, keyID, status)
+	}
+}
+
+func TestFinalAttemptReturnsCircuitBreakWhenNoSuccess(t *testing.T) {
+	attempts := []dbmodel.ChannelAttempt{
+		{ChannelID: 38, ChannelName: "T1", ChannelKeyID: 71, Status: dbmodel.AttemptCircuitBreak},
+	}
+	id, name, keyID, status := finalAttempt(attempts)
+	if id != 38 || name != "T1" || keyID != 71 || status != dbmodel.AttemptCircuitBreak {
+		t.Fatalf("got id=%d name=%s key=%d status=%s, want circuit break attempt", id, name, keyID, status)
+	}
+}
+
 func TestFinalAttemptEmpty(t *testing.T) {
 	id, name, keyID, status := finalAttempt(nil)
 	if id != 0 || name != "" || keyID != 0 || status != "" {
@@ -518,6 +558,125 @@ func TestRelayRunAttemptsRenumbersNestedIteratorAttempts(t *testing.T) {
 	}
 	if attempts[0].ChannelID != 1 || attempts[1].ChannelID != 2 {
 		t.Fatalf("attempt 顺序被改变: %+v", attempts)
+	}
+}
+
+func TestPrepareAttemptContinuesAfterSkippedCandidate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := testGinContext()
+	group := dbmodel.Group{
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: 10, ModelName: "m", Priority: 1},
+			{ID: 2, Type: dbmodel.GroupItemTypeChannel, ChannelID: 11, ModelName: "m", Priority: 2},
+		},
+	}
+	iter := balancer.NewIterator(group, 1, "m")
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: "m"},
+		metrics:         &RelayMetrics{},
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:     []*balancer.Iterator{iter},
+	}
+	r.resolveGroupItemFunc = func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error) {
+		if item.ChannelID == 10 {
+			r.iter.Skip(item.ChannelID, 0, "disabled", "channel disabled")
+			return nil, nil
+		}
+		return &relayAttempt{relayRun: r, channel: &dbmodel.Channel{ID: item.ChannelID, Name: "ok"}}, nil
+	}
+
+	attempt, err := r.prepareAttempt()
+	if err != nil {
+		t.Fatalf("prepareAttempt error = %v", err)
+	}
+	if attempt == nil || attempt.channel.ID != 11 {
+		t.Fatalf("prepareAttempt should continue to channel 11, got %+v", attempt)
+	}
+	attempts := r.attempts()
+	if len(attempts) != 1 || attempts[0].Status != dbmodel.AttemptSkipped || attempts[0].ChannelID != 10 {
+		t.Fatalf("skipped attempt not recorded correctly: %+v", attempts)
+	}
+}
+
+func TestPrepareAttemptContinuesAfterCircuitBreak(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := testGinContext()
+	group := dbmodel.Group{
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: 21, ModelName: "gpt-5.5", Priority: 1},
+			{ID: 2, Type: dbmodel.GroupItemTypeChannel, ChannelID: 5, ModelName: "gpt-5.5", Priority: 2},
+		},
+	}
+	iter := balancer.NewIterator(group, 1, "gpt-5.5")
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: "gpt-5.5"},
+		metrics:         &RelayMetrics{},
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:     []*balancer.Iterator{iter},
+	}
+	r.resolveGroupItemFunc = func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error) {
+		if item.ChannelID == 21 {
+			r.iter.SkipFor(item, sticky, item.ChannelID, 38, "Anyrouter_codex", "circuit breaker tripped, remaining cooldown: 48s")
+			attempts := r.iter.Attempts()
+			attempts[len(attempts)-1].Status = dbmodel.AttemptCircuitBreak
+			return nil, nil
+		}
+		return &relayAttempt{relayRun: r, channel: &dbmodel.Channel{ID: item.ChannelID, Name: "Linuxdo_WONG"}}, nil
+	}
+
+	attempt, err := r.prepareAttempt()
+	if err != nil {
+		t.Fatalf("prepareAttempt error = %v", err)
+	}
+	if attempt == nil || attempt.channel.ID != 5 {
+		t.Fatalf("prepareAttempt should continue to channel 5 after circuit break, got %+v", attempt)
+	}
+	attempts := r.attempts()
+	if len(attempts) != 1 || attempts[0].Status != dbmodel.AttemptCircuitBreak || attempts[0].ChannelID != 21 {
+		t.Fatalf("circuit break attempt not recorded correctly: %+v", attempts)
+	}
+}
+
+func TestRelayRunStopsOnTerminalClientError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	group := dbmodel.Group{
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: 10, ModelName: "m", Priority: 1},
+			{ID: 2, Type: dbmodel.GroupItemTypeChannel, ChannelID: 11, ModelName: "m", Priority: 2},
+		},
+	}
+	iter := balancer.NewIterator(group, 1, "m")
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: "m"},
+		metrics:         &RelayMetrics{StartTime: time.Now(), RequestModel: "m", ActualModel: "m"},
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:     []*balancer.Iterator{iter},
+		group:           group,
+	}
+	resolveCount := 0
+	r.resolveGroupItemFunc = func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error) {
+		resolveCount++
+		return nil, newTerminalRelayError(http.StatusBadRequest, errors.New("bad request"))
+	}
+
+	r.run()
+	if resolveCount != 1 {
+		t.Fatalf("terminal client error should stop failover after one candidate, got %d resolves", resolveCount)
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want 400", recorder.Code)
 	}
 }
 

@@ -177,7 +177,7 @@ func finalAttempt(attempts []model.ChannelAttempt) (int, string, int, model.Atte
 		if a.Status == model.AttemptSuccess {
 			return a.ChannelID, a.ChannelName, a.ChannelKeyID, a.Status
 		}
-		if a.Status == model.AttemptFailed && last.ChannelID == 0 {
+		if last.Status == "" && (a.ChannelID > 0 || a.ChannelName != "" || a.Status != "") {
 			last = a
 		}
 	}

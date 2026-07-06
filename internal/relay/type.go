@@ -10,14 +10,15 @@ import (
 
 // relayRun 保存一次客户端请求在负载均衡循环中共享的状态。
 type relayRun struct {
-	c               *gin.Context
-	inAdapter       transformer.Inbound
-	internalRequest *llm.Request
-	metrics         *RelayMetrics
-	iter            *balancer.Iterator
-	iterStack       []*relayIteratorFrame
-	iterHistory     []*balancer.Iterator
-	group           dbmodel.Group
+	c                    *gin.Context
+	inAdapter            transformer.Inbound
+	internalRequest      *llm.Request
+	metrics              *RelayMetrics
+	iter                 *balancer.Iterator
+	iterStack            []*relayIteratorFrame
+	iterHistory          []*balancer.Iterator
+	group                dbmodel.Group
+	resolveGroupItemFunc func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error)
 }
 
 type relayIteratorFrame struct {

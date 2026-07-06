@@ -48,6 +48,8 @@ function attemptStatusLabel(status: ChannelAttempt['status']): string {
             return '成功';
         case 'failed':
             return '失败';
+        case 'client_canceled':
+            return '客户端断开';
         case 'circuit_break':
             return '熔断';
         case 'skipped':
@@ -63,6 +65,8 @@ function attemptStatusClass(status: ChannelAttempt['status']): string {
             return 'bg-primary/15 text-primary';
         case 'circuit_break':
             return 'bg-amber-500/15 text-amber-600 dark:text-amber-400';
+        case 'client_canceled':
+            return 'bg-sky-500/15 text-sky-700 dark:text-sky-300';
         case 'skipped':
             return 'bg-muted text-muted-foreground';
         case 'failed':
@@ -453,7 +457,9 @@ export function LogCard({ log }: { log: RelayLog }) {
                                                                             "text-xs p-2.5 rounded-xl border transition-colors flex flex-col gap-2",
                                                                             attempt.status === 'success'
                                                                                 ? "bg-primary/5 border-primary/20 hover:bg-primary/10"
-                                                                                : "bg-destructive/5 border-destructive/20 hover:bg-destructive/10"
+                                                                                : attempt.status === 'failed'
+                                                                                  ? "bg-destructive/5 border-destructive/20 hover:bg-destructive/10"
+                                                                                  : "bg-muted/30 border-border hover:bg-muted/50"
                                                                         )}
                                                                     >
                                                                         <div className="flex items-start gap-2">

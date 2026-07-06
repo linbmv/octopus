@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,13 +19,19 @@ func (r *relayRun) run() {
 		select {
 		case <-ctx.Done():
 			log.Infof("request context canceled, stopping retry")
-			r.metrics.Save(ctx, false, context.Canceled, r.attempts())
+			r.metrics.Save(ctx, r.c.Writer.Written(), nil, r.attempts())
 			return
 		default:
 		}
 
 		attempt, err := r.prepareAttempt()
 		if err != nil {
+			var terminalErr *terminalRelayError
+			if errors.As(err, &terminalErr) {
+				r.metrics.Save(ctx, false, err, r.attempts())
+				resp.Error(r.c, terminalErr.StatusCode(), terminalErr.Error())
+				return
+			}
 			lastErr = err
 			continue
 		}
@@ -39,7 +44,17 @@ func (r *relayRun) run() {
 			r.metrics.Save(ctx, true, nil, r.attempts())
 			return
 		}
+		var terminalErr *terminalRelayError
+		if errors.As(err, &terminalErr) {
+			r.metrics.Save(ctx, false, err, r.attempts())
+			resp.Error(r.c, terminalErr.StatusCode(), terminalErr.Error())
+			return
+		}
 		if written {
+			if isRequestContextCanceled(ctx, err) {
+				r.metrics.Save(ctx, true, nil, r.attempts())
+				return
+			}
 			r.metrics.Save(ctx, false, err, r.attempts())
 			return
 		}
@@ -73,12 +88,27 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 		item := frame.iter.Item()
 		if item.Type != dbmodel.GroupItemTypeGroup {
 			r.iter = frame.iter
-			return r.resolveGroupItem(item, frame.iter.IsSticky(), frame.iter.StickyKeyID())
+			attempt, err := r.resolveCandidate(item, frame.iter.IsSticky(), frame.iter.StickyKeyID())
+			if err != nil || attempt != nil {
+				return attempt, err
+			}
+			continue
 		}
 		if err := r.pushNestedGroupIterator(frame, item); err != nil {
 			return nil, err
 		}
 	}
+}
+
+func (r *relayRun) resolveCandidate(
+	item dbmodel.GroupItem,
+	sticky bool,
+	stickyKeyID int,
+) (*relayAttempt, error) {
+	if r.resolveGroupItemFunc != nil {
+		return r.resolveGroupItemFunc(item, sticky, stickyKeyID)
+	}
+	return r.resolveGroupItem(item, sticky, stickyKeyID)
 }
 
 func (r *relayRun) currentIteratorFrame() *relayIteratorFrame {
