@@ -3,6 +3,13 @@ import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
 import { StatsChannel, type StatsMetricsFormatted } from './stats';
+import type {
+    BaseUrl,
+    Channel as ContractChannel,
+    ChannelKey,
+    CustomHeader,
+} from '../contracts';
+export type { BaseUrl, ChannelKey, CustomHeader } from '../contracts';
 /**
  * 渠道类型枚举
  */
@@ -25,50 +32,13 @@ export enum AutoGroupType {
     Regex = 3,  // 正则匹配
 }
 
-export type BaseUrl = {
-    url: string;
-    delay: number;
-};
-
-export type CustomHeader = {
-    header_key: string;
-    header_value: string;
-};
-
-export type ChannelKey = {
-    id: number;
-    channel_id: number;
-    enabled: boolean;
-    channel_key: string;
-    status_code: number;
-    last_use_time_stamp: number;
-    total_cost: number;
-    remark: string;
-};
-
 /**
  * 渠道完整数据（与后端 model.Channel 对齐；数组字段在前端保证为 []）
  */
-export type Channel = {
-    id: number;
-    name: string;
-    type: ChannelType;
-    enabled: boolean;
-    base_urls: BaseUrl[];
-    keys: ChannelKey[];
-    model: string;
-    custom_model: string;
-    proxy: boolean;
-    auto_sync: boolean;
+export type Channel = Omit<ContractChannel, 'auto_group' | 'stats' | 'type'> & {
     auto_group: AutoGroupType;
-    custom_header: CustomHeader[];
-    param_override?: string | null;
-    channel_proxy?: string | null;
-    match_regex?: string | null;
-    raw_passthrough: boolean;
-    rpm_limit: number;
-    max_concurrency: number;
     stats: StatsChannel;
+    type: ChannelType;
 };
 
 // Internal type: backend may return null for slice fields; normalize to [] in select()

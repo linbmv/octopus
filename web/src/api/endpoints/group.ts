@@ -1,6 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
+import type {
+    Group as ContractGroup,
+    GroupItem as ContractGroupItem,
+    GroupItemAddRequest as ContractGroupItemAddRequest,
+    GroupItemUpdateRequest as ContractGroupItemUpdateRequest,
+    GroupUpdateRequest as ContractGroupUpdateRequest,
+} from '../contracts';
+export type {
+    ContractGroup,
+    ContractGroupItem,
+    ContractGroupItemAddRequest,
+    ContractGroupItemUpdateRequest,
+    ContractGroupUpdateRequest,
+};
 
 /**
  * 分组项信息
@@ -213,4 +227,3 @@ export function useDeleteGroup() {
 //         },
 //     });
 // }
-

@@ -4,38 +4,19 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { apiClient, setAuthStoreGetter } from '../client';
 import { logger } from '@/lib/logger';
+import type {
+    UserChangePassword as ChangePasswordRequest,
+    UserChangeUsername as ChangeUsernameRequest,
+    UserLogin as UserLoginRequest,
+    UserLoginResponse,
+} from '../contracts';
 
-/**
- * 用户登录请求
- */
-export interface UserLoginRequest {
-    username: string;
-    password: string;
-    expire: number; // token 过期时间（秒）
-}
-
-/**
- * 用户登录响应
- */
-export interface UserLoginResponse {
-    token: string;
-    expire_at: string; // ISO 8601 格式
-}
-
-/**
- * 修改密码请求
- */
-export interface ChangePasswordRequest {
-    old_password: string;
-    new_password: string;
-}
-
-/**
- * 修改用户名请求
- */
-export interface ChangeUsernameRequest {
-    new_username: string;
-}
+export type {
+    UserChangePassword as ChangePasswordRequest,
+    UserChangeUsername as ChangeUsernameRequest,
+    UserLogin as UserLoginRequest,
+    UserLoginResponse,
+} from '../contracts';
 
 /**
  * 认证状态 Store
@@ -252,4 +233,3 @@ export function useAuth() {
         logout: store.logout,
     };
 }
-

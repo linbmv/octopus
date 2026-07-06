@@ -1,19 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
+import type {
+    StatsAPIKey,
+    StatsDaily,
+    StatsHourly,
+    StatsTotal,
+} from '../contracts';
 
-/**
- * 统计数据
- */
-interface StatsMetrics {
-    input_token: number;
-    output_token: number;
-    input_cost: number;
-    output_cost: number;
-    wait_time: number;
-    request_success: number;
-    request_failed: number;
-}
+export type { StatsAPIKey, StatsChannel, StatsDaily, StatsHourly, StatsMetrics, StatsTotal } from '../contracts';
 
 export interface StatsMetricsFormatted {
     input_token: ReturnType<typeof formatCount>;
@@ -29,35 +24,15 @@ export interface StatsMetricsFormatted {
     total_cost: ReturnType<typeof formatMoney>;
 }
 
-export interface StatsChannel extends StatsMetrics {
-    channel_id: number;
-}
-
-export interface StatsDaily extends StatsMetrics {
-    date: string;
-}
 export interface StatsDailyFormatted extends StatsMetricsFormatted {
     date: string;
 }
 
-export interface StatsTotal extends StatsMetrics {
-    id: number;
-}
 export type StatsTotalFormatted = StatsMetricsFormatted;
 
-export interface StatsHourly extends StatsMetrics {
-    hour: number;
-    date: string;
-}
 export interface StatsHourlyFormatted extends StatsMetricsFormatted {
     hour: number;
     date: string;
-}
-/**
- * API Key 统计数据
- */
-export interface StatsAPIKey extends StatsMetrics {
-    api_key_id: number;
 }
 
 export interface StatsAPIKeyFormatted extends StatsMetricsFormatted {

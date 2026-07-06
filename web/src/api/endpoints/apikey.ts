@@ -4,19 +4,9 @@ import { logger } from '@/lib/logger';
 import { useAuthStore } from './user';
 import { StatsAPIKey, StatsAPIKeyFormatted } from './stats';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
+import type { APIKey } from '../contracts';
 
-/**
- * API Key 数据
- */
-export interface APIKey {
-    id: number;
-    name: string;
-    api_key: string;
-    enabled: boolean;
-    expire_at?: number; // Unix 时间戳（秒），不传表示永不过期
-    max_cost?: number; // 不传表示无限制
-    supported_models?: string; // 不传表示支持所有模型
-}
+export type { APIKey } from '../contracts';
 
 /**
  * API Key Stats 响应（包含 stats 和 info）

@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "devs": "next dev --experimental-https --experimental-https-key /workplace/code/octopus/build/localhost-key.pem --experimental-https-cert /workplace/code/octopus/build/localhost.pem",
+    "gen:contracts": "cd .. && go run ./tools/webtypes > web/src/api/contracts.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

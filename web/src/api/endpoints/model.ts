@@ -1,33 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
+import type { LLMChannel, LLMInfo } from '../contracts';
 
-/**
- * LLM 价格信息
- */
-export interface LLMPrice {
-    input: number;
-    output: number;
-    cache_read: number;
-    cache_write: number;
-}
-
-/**
- * LLM 模型信息
- */
-export interface LLMInfo extends LLMPrice {
-    name: string;
-}
-
-/**
- * LLM 渠道关联信息
- */
-export interface LLMChannel {
-    name: string;
-    enabled: boolean;
-    channel_id: number;
-    channel_name: string;
-}
+export type { LLMChannel, LLMInfo, LLMPrice } from '../contracts';
 
 /**
  * 获取 LLM 模型列表 Hook

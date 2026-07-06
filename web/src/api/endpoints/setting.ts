@@ -2,14 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient, API_BASE_URL } from '../client';
 import { logger } from '@/lib/logger';
 import { useAuthStore } from './user';
+import type { DBImportResult, Setting } from '../contracts';
 
-/**
- * Setting 数据
- */
-export interface Setting {
-    key: string;
-    value: string;
-}
+export type { DBImportResult, Setting } from '../contracts';
 
 export const SettingKey = {
     ProxyURL: 'proxy_url',
@@ -82,13 +77,6 @@ export function useSetSetting() {
             logger.error('Setting 设置失败:', error);
         },
     });
-}
-
-/**
- * 数据库导入/导出
- */
-export interface DBImportResult {
-    rows_affected: Record<string, number>;
 }
 
 export interface DBExportOptions {

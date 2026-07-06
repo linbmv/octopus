@@ -3,51 +3,9 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import { apiClient, API_BASE_URL } from '../client';
 import { logger } from '@/lib/logger';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { RelayLog } from '../contracts';
 
-/**
- * 尝试状态
- */
-export type AttemptStatus = 'success' | 'failed' | 'circuit_break' | 'skipped' | 'redirect';
-
-/**
- * 单次渠道尝试信息
- */
-export interface ChannelAttempt {
-    channel_id: number;
-    channel_key_id?: number;
-    channel_key_remark?: string;
-    channel_name: string;
-    model_name: string;
-    attempt_num: number;    // 第几次尝试
-    status: AttemptStatus;
-    duration: number;       // 耗时(毫秒)
-    sticky?: boolean;
-    msg?: string;
-    first_token_time?: number;
-}
-
-/**
- * 日志数据
- */
-export interface RelayLog {
-    id: number;
-    time: number;                // 时间戳
-    request_model_name: string;  // 请求模型名称
-    request_api_key_name?: string; // 请求使用的 API Key 名称
-    channel: number;             // 实际使用的渠道ID
-    channel_name: string;        // 渠道名称
-    actual_model_name: string;   // 实际使用模型名称
-    input_tokens: number;        // 输入Token
-    output_tokens: number;       // 输出Token
-    ftut: number;                // 首字时间(毫秒)
-    use_time: number;            // 总用时(毫秒)
-    cost: number;                // 消耗费用
-    request_content: string;     // 请求内容
-    response_content: string;    // 响应内容
-    error: string;               // 错误信息
-    attempts?: ChannelAttempt[]; // 所有尝试记录
-    total_attempts?: number;     // 总尝试次数
-}
+export type { AttemptStatus, ChannelAttempt, RelayLog } from '../contracts';
 
 /**
  * 日志列表查询参数
