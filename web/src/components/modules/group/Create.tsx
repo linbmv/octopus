@@ -1,6 +1,6 @@
 'use client';
 
-import type { GroupItem } from '@/api/endpoints/group';
+import type { GroupCreateItem } from '@/api/endpoints/group';
 import {
     MorphingDialogClose,
     MorphingDialogTitle,
@@ -40,7 +40,7 @@ export function CreateDialogContent() {
                     submittingText={t('create.submitting')}
                     isSubmitting={createGroup.isPending}
                     onSubmit={({ name, match_regex, mode, first_token_time_out, session_keep_time, members }) => {
-                        const items: GroupItem[] = members.map((member, index) => {
+                        const items: GroupCreateItem[] = members.map((member, index) => {
                             if (member.type === 'group') {
                                 return {
                                     type: 'group',

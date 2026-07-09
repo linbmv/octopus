@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/update"
 	"github.com/looplj/axonhub/llm"
 )
 
@@ -36,6 +37,7 @@ var modelTypes = []typeSpec{
 	{Name: "GroupItemAddRequest", Type: reflect.TypeOf(model.GroupItemAddRequest{})},
 	{Name: "GroupItemUpdateRequest", Type: reflect.TypeOf(model.GroupItemUpdateRequest{})},
 	{Name: "GroupUpdateRequest", Type: reflect.TypeOf(model.GroupUpdateRequest{})},
+	{Name: "LatestInfo", Type: reflect.TypeOf(update.LatestInfo{})},
 	{Name: "LLMChannel", Type: reflect.TypeOf(model.LLMChannel{})},
 	{Name: "LLMInfo", Type: reflect.TypeOf(model.LLMInfo{})},
 	{Name: "LLMPrice", Type: reflect.TypeOf(model.LLMPrice{})},

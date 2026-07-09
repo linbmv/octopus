@@ -1,16 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
+import type { LatestInfo as ContractLatestInfo } from '../contracts';
 
 /**
- * 后端 /api/v1/update 返回的最新发布信息
+ * 后端 /api/v1/update 返回的最新发布信息（来自 webtypes 生成契约，勿手写）
  */
-export interface LatestInfo {
-    tag_name: string;
-    published_at: string;
-    body: string;
-    message: string;
-}
+export type LatestInfo = ContractLatestInfo;
 
 /**
  * 获取最新发布信息 Hook

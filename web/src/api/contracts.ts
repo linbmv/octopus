@@ -165,6 +165,13 @@ export interface GroupUpdateRequest {
   items_to_delete?: number[];
 }
 
+export interface LatestInfo {
+  tag_name: string;
+  published_at: string;
+  body: string;
+  message: string;
+}
+
 export interface LLMChannel {
   name: string;
   enabled: boolean;

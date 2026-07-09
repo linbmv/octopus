@@ -8,89 +8,34 @@ import type {
     GroupItemUpdateRequest as ContractGroupItemUpdateRequest,
     GroupUpdateRequest as ContractGroupUpdateRequest,
 } from '../contracts';
-export type {
-    ContractGroup,
-    ContractGroupItem,
-    ContractGroupItemAddRequest,
-    ContractGroupItemUpdateRequest,
-    ContractGroupUpdateRequest,
+
+/**
+ * 分组类型统一走 tools/webtypes 生成的契约，防止与后端 Go struct 漂移：
+ * 读形状直接使用契约类型；创建载荷是契约的 Partial 派生（id/enabled 等由后端补默认）。
+ */
+export type Group = ContractGroup;
+export type GroupItem = ContractGroupItem;
+export type GroupItemAddRequest = ContractGroupItemAddRequest;
+export type GroupItemUpdateRequest = ContractGroupItemUpdateRequest;
+export type GroupUpdateRequest = ContractGroupUpdateRequest;
+
+/** 创建分组时的 item 载荷：仅业务字段，id/group_id/disabled 由后端补默认 */
+export type GroupCreateItem = Partial<ContractGroupItem>;
+
+/** 创建分组载荷 */
+export type GroupCreateRequest = Partial<Omit<ContractGroup, 'items'>> & {
+    name: string;
+    items?: GroupCreateItem[];
 };
 
 /**
- * 分组项信息
- */
-export interface GroupItem {
-    id?: number;
-    group_id?: number;
-    type?: 'channel' | 'group';
-    channel_id?: number;
-    target_group_id?: number;
-    model_name?: string;
-    priority: number;
-    weight: number;
-    disabled?: boolean;
-}
-
-/**
- * 分组模式
+ * 分组模式（数值与后端 model.GroupMode 一一对应）
  */
 export enum GroupMode {
     RoundRobin = 1,
     Random = 2,
     Failover = 3,
     Weighted = 4,
-}
-
-/**
- * 分组信息
- */
-export interface Group {
-    id?: number;
-    name: string;
-    enabled?: boolean;
-    mode: GroupMode;
-    match_regex: string;
-    first_token_time_out?: number;
-    session_keep_time?: number;
-    items?: GroupItem[];
-}
-
-/**
- * 新增 item 请求
- */
-export interface GroupItemAddRequest {
-    type?: 'channel' | 'group';
-    channel_id?: number;
-    target_group_id?: number;
-    model_name?: string;
-    priority: number;
-    weight: number;
-}
-
-/**
- * 更新 item 请求 (priority / weight / disabled)
- */
-export interface GroupItemUpdateRequest {
-    id: number;
-    priority: number;
-    weight: number;
-    disabled?: boolean; // 仅在禁用状态变更时发送
-}
-
-/**
- * 分组更新请求 - 仅包含变更的数据
- */
-export interface GroupUpdateRequest {
-    id: number;
-    name?: string;                        // 仅在名称变更时发送
-    enabled?: boolean;                    // 仅在启用状态变更时发送
-    mode?: GroupMode;                     // 仅在模式变更时发送
-    match_regex?: string;                 // 仅在匹配正则变更时发送
-    first_token_time_out?: number;        // 仅在超时变更时发送
-    session_keep_time?: number;           // 仅在会话保持时间变更时发送
-    items_to_add?: GroupItemAddRequest[];    // 新增的 items
-    items_to_update?: GroupItemUpdateRequest[]; // 更新的 items (priority 变更)
-    items_to_delete?: number[];              // 删除的 item IDs
 }
 
 /**
@@ -132,7 +77,7 @@ export function useCreateGroup() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async (data: Group) => {
+        mutationFn: async (data: GroupCreateRequest) => {
             return apiClient.post<Group>('/api/v1/group/create', data);
         },
         onSuccess: (data) => {
