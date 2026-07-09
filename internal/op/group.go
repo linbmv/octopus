@@ -67,41 +67,6 @@ func (s *GroupService) ListModel(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-func GroupGet(id int, ctx context.Context) (*model.Group, error) {
-	return groupService.Get(id, ctx)
-}
-
-func (s *GroupService) Get(id int, ctx context.Context) (*model.Group, error) {
-	group, ok := s.groups.Get(id)
-	if !ok {
-		return nil, fmt.Errorf("group not found")
-	}
-	return &group, nil
-}
-
-func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
-	return groupService.GetEnabledMap(name, ctx)
-}
-
-func (s *GroupService) GetEnabledMap(name string, ctx context.Context) (model.Group, error) {
-	group, ok := s.groupsByKey.Get(name)
-	if !ok {
-		// 尝试后备查找：去掉常见后缀
-		fallbackName := stripModelSuffix(name)
-		if fallbackName != name {
-			group, ok = s.groupsByKey.Get(fallbackName)
-			if ok {
-				// 找到后备模型，继续处理
-				goto processGroup
-			}
-		}
-		return model.Group{}, fmt.Errorf("group not found")
-	}
-
-processGroup:
-	return expandEnabledGroup(group)
-}
-
 func GroupGetEnabledTree(name string, ctx context.Context) (model.Group, error) {
 	return groupService.GetEnabledTree(name, ctx)
 }
@@ -124,23 +89,6 @@ processGroup:
 	return filterEnabledGroupTree(group, 0, visited)
 }
 
-// GroupGetEnabledByID 根据分组 ID 获取启用的分组，并递归展开嵌套分组成员
-func GroupGetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
-	return groupService.GetEnabledByID(id, ctx)
-}
-
-func (s *GroupService) GetEnabledByID(id int, ctx context.Context) (*model.Group, error) {
-	group, ok := s.groups.Get(id)
-	if !ok {
-		return nil, fmt.Errorf("group not found")
-	}
-	expanded, err := expandEnabledGroup(group)
-	if err != nil {
-		return nil, err
-	}
-	return &expanded, nil
-}
-
 func GroupGetEnabledTreeByID(id int, ctx context.Context) (*model.Group, error) {
 	return groupService.GetEnabledTreeByID(id, ctx)
 }
@@ -156,20 +104,6 @@ func (s *GroupService) GetEnabledTreeByID(id int, ctx context.Context) (*model.G
 		return nil, err
 	}
 	return &expanded, nil
-}
-
-func expandEnabledGroup(group model.Group) (model.Group, error) {
-	if !group.Enabled {
-		group.Items = nil
-		return group, nil
-	}
-	visited := map[int]struct{}{group.ID: {}}
-	items, err := expandGroupItems(group, 0, visited)
-	if err != nil {
-		return model.Group{}, err
-	}
-	group.Items = items
-	return group, nil
 }
 
 func filterEnabledGroupTree(group model.Group, depth int, visited map[int]struct{}) (model.Group, error) {
@@ -224,65 +158,6 @@ func filterEnabledGroupTree(group model.Group, depth int, visited map[int]struct
 	return group, nil
 }
 
-func expandGroupItems(group model.Group, depth int, visited map[int]struct{}) ([]model.GroupItem, error) {
-	if depth > MaxGroupNestDepth {
-		return nil, fmt.Errorf("group %d: nesting depth exceeded (max %d)", group.ID, MaxGroupNestDepth)
-	}
-	if !group.Enabled || len(group.Items) == 0 {
-		return nil, nil
-	}
-
-	out := make([]model.GroupItem, 0, len(group.Items))
-	for _, item := range group.Items {
-		if item.Disabled {
-			continue
-		}
-
-		itemType := normalizeGroupItemType(item.Type)
-		if itemType == model.GroupItemTypeChannel {
-			channel, ok := channelCache.Get(item.ChannelID)
-			if !ok || !channel.Enabled {
-				continue
-			}
-			out = append(out, item)
-			continue
-		}
-
-		if itemType != model.GroupItemTypeGroup {
-			continue
-		}
-
-		if item.TargetGroupID <= 0 {
-			continue
-		}
-
-		if _, ok := visited[item.TargetGroupID]; ok {
-			return nil, fmt.Errorf("group %d: circular reference detected (target %d)", group.ID, item.TargetGroupID)
-		}
-
-		targetGroup, ok := groupCache.Get(item.TargetGroupID)
-		if !ok {
-			continue
-		}
-
-		if !targetGroup.Enabled {
-			continue
-		}
-
-		nextVisited := cloneIntSet(visited)
-		nextVisited[item.TargetGroupID] = struct{}{}
-
-		childItems, err := expandGroupItems(targetGroup, depth+1, nextVisited)
-		if err != nil {
-			return nil, err
-		}
-
-		out = append(out, childItems...)
-	}
-
-	return out, nil
-}
-
 func normalizeGroupItemType(itemType string) string {
 	itemType = strings.TrimSpace(itemType)
 	if itemType == "" {
@@ -297,16 +172,6 @@ func cloneIntSet(src map[int]struct{}) map[int]struct{} {
 		dst[k] = struct{}{}
 	}
 	return dst
-}
-
-// filterEnabledGroupItems 已被 expandEnabledGroup 替代，保留用于兼容性
-func filterEnabledGroupItems(group model.Group) model.Group {
-	expanded, err := expandEnabledGroup(group)
-	if err != nil {
-		group.Items = nil
-		return group
-	}
-	return expanded
 }
 
 // stripModelSuffix 去除模型名的常见后缀，使带后缀的请求回退到基础分组。
@@ -614,43 +479,6 @@ func GroupDel(id int, ctx context.Context) error {
 	return nil
 }
 
-func GroupItemAdd(item *model.GroupItem, ctx context.Context) error {
-	tx := db.GetDB().WithContext(ctx).Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			panic(r)
-		}
-	}()
-
-	var group model.Group
-	if err := tx.Select("id").First(&group, item.GroupID).Error; err != nil {
-		tx.Rollback()
-		return fmt.Errorf("group not found")
-	}
-
-	item.Type = normalizeGroupItemType(item.Type)
-	item.ModelName = strings.TrimSpace(item.ModelName)
-	if err := validateGroupItemFields(tx, item.GroupID, item.Type, item.ChannelID, item.TargetGroupID, item.ModelName); err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	if err := tx.Create(item).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	if err := tx.Commit().Error; err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return groupRefreshCacheByID(item.GroupID, ctx)
-}
-
 func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context.Context) error {
 	if len(items) == 0 {
 		return nil
@@ -716,16 +544,6 @@ func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context
 	return groupRefreshCacheByID(groupID, ctx)
 }
 
-func GroupItemUpdate(item *model.GroupItem, ctx context.Context) error {
-	if err := db.GetDB().WithContext(ctx).Model(item).
-		Select("ModelName", "Priority", "Weight").
-		Updates(item).Error; err != nil {
-		return err
-	}
-
-	return groupRefreshCacheByID(item.GroupID, ctx)
-}
-
 func GroupItemCompactStrategyUpdate(itemID, groupID int, strategy model.CompactStrategy, updatedAt time.Time, ctx context.Context) error {
 	if err := GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID, strategy, updatedAt, ctx); err != nil {
 		return err
@@ -752,19 +570,6 @@ func GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID int, strategy 
 
 func GroupRefreshCacheByID(id int, ctx context.Context) error {
 	return groupRefreshCacheByID(id, ctx)
-}
-
-func GroupItemDel(id int, ctx context.Context) error {
-	var item model.GroupItem
-	if err := db.GetDB().WithContext(ctx).First(&item, id).Error; err != nil {
-		return fmt.Errorf("group item not found")
-	}
-
-	if err := db.GetDB().WithContext(ctx).Delete(&item).Error; err != nil {
-		return err
-	}
-
-	return groupRefreshCacheByID(item.GroupID, ctx)
 }
 
 // GroupItemBatchDelByChannelAndModels 根据渠道ID和模型名称批量删除分组项

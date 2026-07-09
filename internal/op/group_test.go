@@ -125,20 +125,20 @@ func TestGroupServiceReadMethodsUseInjectedCache(t *testing.T) {
 	groupsByKey.Set(disabled.Name, disabled)
 
 	service := NewGroupService(groups, groupsByKey)
-	got, err := service.Get(enabled.ID, context.Background())
+	got, err := service.GetEnabledTree(enabled.Name, context.Background())
 	if err != nil {
-		t.Fatalf("Get returned error: %v", err)
+		t.Fatalf("GetEnabledTree returned error: %v", err)
 	}
 	if got.Name != enabled.Name {
-		t.Fatalf("Get name = %q, want %q", got.Name, enabled.Name)
+		t.Fatalf("GetEnabledTree name = %q, want %q", got.Name, enabled.Name)
 	}
 	got.Name = "mutated"
-	again, err := service.Get(enabled.ID, context.Background())
+	again, err := service.GetEnabledTree(enabled.Name, context.Background())
 	if err != nil {
-		t.Fatalf("Get returned error: %v", err)
+		t.Fatalf("GetEnabledTree returned error: %v", err)
 	}
 	if again.Name != enabled.Name {
-		t.Fatal("Get should return a copy of cached group")
+		t.Fatal("GetEnabledTree should return a copy of cached group")
 	}
 
 	models, err := service.ListModel(context.Background())
@@ -149,41 +149,12 @@ func TestGroupServiceReadMethodsUseInjectedCache(t *testing.T) {
 		t.Fatalf("ListModel = %#v, want only enabled group", models)
 	}
 
-	expanded, err := service.GetEnabledMap(disabled.Name, context.Background())
+	expanded, err := service.GetEnabledTree(disabled.Name, context.Background())
 	if err != nil {
-		t.Fatalf("GetEnabledMap returned error: %v", err)
+		t.Fatalf("GetEnabledTree returned error: %v", err)
 	}
 	if len(expanded.Items) != 0 {
 		t.Fatal("disabled group should return no enabled items")
-	}
-}
-
-func TestGroupGetEnabledMapDisabledGroup(t *testing.T) {
-	// 构造一个禁用分组，确认返回空 Items，符合"无可用通道"语义。
-	testGroup := model.Group{
-		ID:      99,
-		Name:    "test-disabled-group",
-		Enabled: false,
-		Items: []model.GroupItem{
-			{ID: 1, ChannelID: 10, ModelName: "test-model", Priority: 1},
-		},
-	}
-	groupCache.Set(testGroup.ID, testGroup)
-	groupMap.Set(testGroup.Name, testGroup)
-	defer func() {
-		groupCache.Del(testGroup.ID)
-		groupMap.Del(testGroup.Name)
-	}()
-
-	result, err := GroupGetEnabledMap(testGroup.Name, context.Background())
-	if err != nil {
-		t.Fatalf("GroupGetEnabledMap 返回错误: %v", err)
-	}
-	if result.Enabled {
-		t.Errorf("返回的 group.Enabled = true, 期望 false")
-	}
-	if len(result.Items) != 0 {
-		t.Errorf("禁用分组返回 Items 长度 %d，期望 0（空候选让 relay 走无可用通道）", len(result.Items))
 	}
 }
 
@@ -235,14 +206,6 @@ func TestGroupGetEnabledTreeKeepsNestedGroupBoundary(t *testing.T) {
 	}
 	if tree.Items[1].Type != model.GroupItemTypeGroup || tree.Items[1].TargetGroupID != child.ID {
 		t.Fatalf("第二个 item = %+v, 期望保留嵌套分组引用", tree.Items[1])
-	}
-
-	flat, err := GroupGetEnabledMap(parent.Name, context.Background())
-	if err != nil {
-		t.Fatalf("GroupGetEnabledMap 返回错误: %v", err)
-	}
-	if len(flat.Items) != 3 || flat.Items[1].Type == model.GroupItemTypeGroup {
-		t.Fatalf("旧 flat 查询应继续展开子分组, got %+v", flat.Items)
 	}
 }
 

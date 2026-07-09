@@ -52,10 +52,6 @@ func UserChangePassword(oldPassword, newPassword string) error {
 	return userService.ChangePassword(context.Background(), oldPassword, newPassword)
 }
 
-func UserChangePasswordContext(ctx context.Context, oldPassword, newPassword string) error {
-	return userService.ChangePassword(ctx, oldPassword, newPassword)
-}
-
 func (s *UserService) ChangePassword(ctx context.Context, oldPassword, newPassword string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,10 +76,6 @@ func (s *UserService) ChangePassword(ctx context.Context, oldPassword, newPasswo
 
 func UserChangeUsername(newUsername string) error {
 	return userService.ChangeUsername(context.Background(), newUsername)
-}
-
-func UserChangeUsernameContext(ctx context.Context, newUsername string) error {
-	return userService.ChangeUsername(ctx, newUsername)
 }
 
 func (s *UserService) ChangeUsername(ctx context.Context, newUsername string) error {

@@ -108,20 +108,3 @@ func GetActiveRequestCount() int {
 	defer globalActiveRequests.mu.RUnlock()
 	return len(globalActiveRequests.requests)
 }
-
-// CleanupStaleRequests 清理卡住的请求（超过指定时间未完成）
-func CleanupStaleRequests(maxAge time.Duration) int {
-	globalActiveRequests.mu.Lock()
-	defer globalActiveRequests.mu.Unlock()
-
-	now := time.Now()
-	cleaned := 0
-	for id, req := range globalActiveRequests.requests {
-		if now.Sub(req.StartTime) > maxAge {
-			delete(globalActiveRequests.requests, id)
-			cleaned++
-		}
-	}
-
-	return cleaned
-}

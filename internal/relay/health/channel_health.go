@@ -501,10 +501,6 @@ func (h *ChannelHealth) RecordShadowTimeout() {
 	}
 }
 
-func isSlowFirstTokenModel(model string) bool {
-	return isSlowFirstTokenModelWithKeywords(model, DefaultHealthConfig().SlowModelKeywords)
-}
-
 func isSlowFirstTokenModelWithKeywords(model string, keywords []string) bool {
 	model = strings.ToLower(model)
 	for _, keyword := range keywords {

@@ -55,10 +55,6 @@ func SettingSetString(key model.SettingKey, value string) error {
 	return settingsService.SetString(context.Background(), key, value)
 }
 
-func SettingSetStringContext(ctx context.Context, key model.SettingKey, value string) error {
-	return settingsService.SetString(ctx, key, value)
-}
-
 func (s *SettingsService) SetString(ctx context.Context, key model.SettingKey, value string) error {
 	valueCache, ok := s.cache.Get(key)
 	if !ok {
@@ -100,37 +96,6 @@ func (s *SettingsService) GetBool(key model.SettingKey) (bool, error) {
 		return false, fmt.Errorf("setting not found")
 	}
 	return strconv.ParseBool(setting)
-}
-
-func SettingSetInt(key model.SettingKey, value int) error {
-	return settingsService.SetInt(context.Background(), key, value)
-}
-
-func SettingSetIntContext(ctx context.Context, key model.SettingKey, value int) error {
-	return settingsService.SetInt(ctx, key, value)
-}
-
-func (s *SettingsService) SetInt(ctx context.Context, key model.SettingKey, value int) error {
-	valueCache, ok := s.cache.Get(key)
-	if !ok {
-		return fmt.Errorf("setting not found")
-	}
-	valueCacheNum, err := strconv.Atoi(valueCache)
-	if err != nil {
-		return fmt.Errorf("failed to set setting: %w", err)
-	}
-	if valueCacheNum == value {
-		return nil
-	}
-	result := db.GetDB().WithContext(ctx).Model(&model.Setting{Key: key}).Update("Value", value)
-	if result.Error != nil {
-		return fmt.Errorf("failed to set setting: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("failed to set setting, key not found")
-	}
-	s.cache.Set(key, strconv.Itoa(value))
-	return nil
 }
 
 func settingRefreshCache(ctx context.Context) error {
