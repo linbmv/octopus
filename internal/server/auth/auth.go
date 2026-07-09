@@ -10,19 +10,37 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// 登录请求体的 expire 由客户端提供，必须在服务端收敛：
+// 0 → 默认 15 分钟；-1 → 30 天"记住我"；其余负值非法，回落默认；
+// 正数按分钟签发但 clamp 到 30 天，防止已认证者自授超长凭据。
+// ExpiresAt 必须恒非 nil：曾因 <-1 不设过期导致对 nil NumericDate 调 Format panic。
+const (
+	defaultTokenLifetime = 15 * time.Minute
+	maxTokenLifetime     = 30 * 24 * time.Hour
+)
+
+func tokenLifetime(expiresMin int) time.Duration {
+	switch {
+	case expiresMin == -1:
+		return maxTokenLifetime
+	case expiresMin > 0:
+		lifetime := time.Duration(expiresMin) * time.Minute
+		if lifetime > maxTokenLifetime {
+			return maxTokenLifetime
+		}
+		return lifetime
+	default:
+		return defaultTokenLifetime
+	}
+}
+
 func GenerateJWTToken(expiresMin int) (string, string, error) {
 	now := time.Now()
 	claims := &jwt.RegisteredClaims{
 		IssuedAt:  jwt.NewNumericDate(now),
 		NotBefore: jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(tokenLifetime(expiresMin))),
 		Issuer:    conf.APP_NAME,
-	}
-	if expiresMin == 0 {
-		claims.ExpiresAt = jwt.NewNumericDate(now.Add(time.Duration(15) * time.Minute))
-	} else if expiresMin > 0 {
-		claims.ExpiresAt = jwt.NewNumericDate(now.Add(time.Duration(expiresMin) * time.Minute))
-	} else if expiresMin == -1 {
-		claims.ExpiresAt = jwt.NewNumericDate(now.Add(time.Duration(30) * 24 * time.Hour))
 	}
 	user := op.UserGet()
 	secret := user.Username + user.Password
@@ -38,7 +56,7 @@ func VerifyJWTToken(token string) bool {
 		user := op.UserGet()
 		secret := user.Username + user.Password
 		return []byte(secret), nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 	if err != nil || !jwtToken.Valid {
 		return false
 	}
