@@ -440,7 +440,8 @@ func StatsHourlyUpdate(metrics model.StatsMetrics) error {
 func (s *StatsService) HourlyUpdate(metrics model.StatsMetrics) error {
 	now := time.Now()
 	nowHour := now.Hour()
-	todayDate := time.Now().Format("20060102")
+	// hour 与 date 必须从同一次取时派生，跨午夜瞬间两次 time.Now() 会把 23 点数据记到新日期。
+	todayDate := now.Format("20060102")
 
 	s.hourlyMu.Lock()
 	defer s.hourlyMu.Unlock()
@@ -588,7 +589,7 @@ func StatsHourlyGet() []model.StatsHourly {
 func (s *StatsService) HourlyGet() []model.StatsHourly {
 	now := time.Now()
 	currentHour := now.Hour()
-	todayDate := time.Now().Format("20060102")
+	todayDate := now.Format("20060102")
 
 	s.hourlyMu.RLock()
 	defer s.hourlyMu.RUnlock()
