@@ -67,9 +67,6 @@ func DBExportAllStream(ctx context.Context, w io.Writer, includeLogs, includeSta
 		if err := streamDBDumpTable[model.StatsHourly](conn, w, &wroteField, "stats_hourly", "stats_hourly"); err != nil {
 			return err
 		}
-		if err := streamDBDumpTable[model.StatsModel](conn, w, &wroteField, "stats_model", "stats_model"); err != nil {
-			return err
-		}
 		if err := streamDBDumpTable[model.StatsChannel](conn, w, &wroteField, "stats_channel", "stats_channel"); err != nil {
 			return err
 		}
@@ -219,11 +216,6 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 				return fmt.Errorf("import stats_hourly: %w", err)
 			} else {
 				res.RowsAffected["stats_hourly"] = n
-			}
-			if n, err := createUpsertAll(tx, dump.StatsModel, []clause.Column{{Name: "id"}}); err != nil {
-				return fmt.Errorf("import stats_model: %w", err)
-			} else {
-				res.RowsAffected["stats_model"] = n
 			}
 			if n, err := createUpsertAll(tx, dump.StatsChannel, []clause.Column{{Name: "channel_id"}}); err != nil {
 				return fmt.Errorf("import stats_channel: %w", err)

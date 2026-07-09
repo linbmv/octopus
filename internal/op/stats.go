@@ -97,10 +97,6 @@ type StatsService struct {
 	dirtyChannels      *dirtySet
 	channelUpdateLocks [256]sync.Mutex
 
-	models           cache.Cache[int, model.StatsModel]
-	dirtyModels      *dirtySet
-	modelUpdateLocks [256]sync.Mutex
-
 	apiKeys           cache.Cache[int, model.StatsAPIKey]
 	dirtyAPIKeys      *dirtySet
 	apiKeyUpdateLocks [256]sync.Mutex
@@ -118,8 +114,6 @@ func NewStatsService() *StatsService {
 	return &StatsService{
 		channels:           cache.New[int, model.StatsChannel](16),
 		dirtyChannels:      newDirtySet(),
-		models:             cache.New[int, model.StatsModel](16),
-		dirtyModels:        newDirtySet(),
 		apiKeys:            cache.New[int, model.StatsAPIKey](16),
 		dirtyAPIKeys:       newDirtySet(),
 		pendingDaily:       make(map[string]model.StatsDaily),
@@ -149,20 +143,12 @@ func (s *StatsService) markDirtyChannel(id int) {
 	s.dirtyChannels.mark(id)
 }
 
-func (s *StatsService) markDirtyModel(id int) {
-	s.dirtyModels.mark(id)
-}
-
 func (s *StatsService) markDirtyAPIKey(id int) {
 	s.dirtyAPIKeys.mark(id)
 }
 
 func (s *StatsService) takeDirtyChannels() []int {
 	return dirtyIDs(s.dirtyChannels.snapshot())
-}
-
-func (s *StatsService) takeDirtyModels() []int {
-	return dirtyIDs(s.dirtyModels.snapshot())
 }
 
 func (s *StatsService) takeDirtyAPIKeys() []int {
@@ -208,7 +194,6 @@ func (s *StatsService) persistSnapshots(
 	dailySnap model.StatsDaily,
 	hourlyAll [24]model.StatsHourly,
 	channelIDs []int,
-	modelIDs []int,
 	apiKeyIDs []int,
 ) error {
 	dbConn := db.GetDB().WithContext(ctx)
@@ -246,16 +231,6 @@ func (s *StatsService) persistSnapshots(
 		}
 	}
 
-	for _, id := range modelIDs {
-		m, ok := s.models.Get(id)
-		if !ok {
-			continue
-		}
-		if result := dbConn.Save(&m); result.Error != nil {
-			return result.Error
-		}
-	}
-
 	for _, id := range apiKeyIDs {
 		ak, ok := s.apiKeys.Get(id)
 		if !ok {
@@ -278,7 +253,6 @@ func (s *StatsService) saveDBWithDailyOverride(ctx context.Context, dailyOverrid
 	hourlyAll := s.hourlySnapshot()
 
 	channelDirty := s.dirtyChannels.snapshot()
-	modelDirty := s.dirtyModels.snapshot()
 	apiKeyDirty := s.dirtyAPIKeys.snapshot()
 
 	err := s.persistSnapshots(
@@ -287,7 +261,6 @@ func (s *StatsService) saveDBWithDailyOverride(ctx context.Context, dailyOverrid
 		dailyOverride,
 		hourlyAll,
 		dirtyIDs(channelDirty),
-		dirtyIDs(modelDirty),
 		dirtyIDs(apiKeyDirty),
 	)
 	if err != nil {
@@ -295,7 +268,6 @@ func (s *StatsService) saveDBWithDailyOverride(ctx context.Context, dailyOverrid
 	}
 
 	s.dirtyChannels.clearUnchanged(channelDirty)
-	s.dirtyModels.clearUnchanged(modelDirty)
 	s.dirtyAPIKeys.clearUnchanged(apiKeyDirty)
 	return nil
 }
@@ -481,27 +453,6 @@ func (s *StatsService) HourlyUpdate(metrics model.StatsMetrics) error {
 	}
 
 	s.hourly[nowHour].StatsMetrics.Add(metrics)
-	return nil
-}
-
-func StatsModelUpdate(stats model.StatsModel) error {
-	return statsService.ModelUpdate(stats)
-}
-
-func (s *StatsService) ModelUpdate(stats model.StatsModel) error {
-	mu := statsLockFor(&s.modelUpdateLocks, stats.ID)
-	mu.Lock()
-	defer mu.Unlock()
-
-	modelCache, ok := s.models.Get(stats.ID)
-	if !ok {
-		modelCache = model.StatsModel{
-			ID: stats.ID,
-		}
-	}
-	modelCache.StatsMetrics.Add(stats.StatsMetrics)
-	s.models.Set(stats.ID, modelCache)
-	s.markDirtyModel(stats.ID)
 	return nil
 }
 

@@ -235,12 +235,6 @@ export interface StatsMetrics {
   request_failed: number;
 }
 
-export interface StatsModel extends StatsMetrics {
-  id: number;
-  name: string;
-  channel_id: number;
-}
-
 export interface StatsTotal extends StatsMetrics {
   ID: number;
 }

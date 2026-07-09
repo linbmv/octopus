@@ -21,7 +21,6 @@ type DBDump struct {
 	StatsTotal   []StatsTotal   `json:"stats_total,omitempty"`
 	StatsDaily   []StatsDaily   `json:"stats_daily,omitempty"`
 	StatsHourly  []StatsHourly  `json:"stats_hourly,omitempty"`
-	StatsModel   []StatsModel   `json:"stats_model,omitempty"`
 	StatsChannel []StatsChannel `json:"stats_channel,omitempty"`
 	StatsAPIKey  []StatsAPIKey  `json:"stats_api_key,omitempty"`
 

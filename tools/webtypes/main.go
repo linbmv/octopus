@@ -46,7 +46,6 @@ var modelTypes = []typeSpec{
 	{Name: "StatsDaily", Type: reflect.TypeOf(model.StatsDaily{})},
 	{Name: "StatsHourly", Type: reflect.TypeOf(model.StatsHourly{})},
 	{Name: "StatsMetrics", Type: reflect.TypeOf(model.StatsMetrics{})},
-	{Name: "StatsModel", Type: reflect.TypeOf(model.StatsModel{})},
 	{Name: "StatsTotal", Type: reflect.TypeOf(model.StatsTotal{})},
 	{Name: "UserChangePassword", Type: reflect.TypeOf(model.UserChangePassword{})},
 	{Name: "UserChangeUsername", Type: reflect.TypeOf(model.UserChangeUsername{})},
