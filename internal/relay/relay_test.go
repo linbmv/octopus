@@ -423,9 +423,9 @@ func TestCompactCandidateOrderingPlacesIncompatibleAfterUsable(t *testing.T) {
 	}
 }
 
-func TestCompactStrategyOrderTreatsIncompatibleAsUncached(t *testing.T) {
-	got := compactStrategyOrder(llm.APIFormatOpenAIResponse, compactStrategyIncompatible, true)
-	want := []compactStrategy{compactStrategyOfficial}
+func TestCompactStrategyOrderFollowsModelCanonicalOrder(t *testing.T) {
+	got := compactStrategyOrder(llm.APIFormatOpenAIResponse)
+	want := []compactStrategy{compactStrategy(dbmodel.CompactStrategyOfficial)}
 	if len(got) != len(want) {
 		t.Fatalf("order length = %d, want %d: %#v", len(got), len(want), got)
 	}

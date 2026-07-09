@@ -95,7 +95,6 @@ func TestIsEndpointUnsupportedErrorNil(t *testing.T) {
 
 func TestCompactEndpointFailureDoesNotCallResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	resetCompactStrategyCacheForTest()
 
 	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +174,6 @@ func TestCompactEndpointFailureDoesNotCallResponses(t *testing.T) {
 
 func TestOfficialCompactGatewayTimeoutDoesNotCallResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	resetCompactStrategyCacheForTest()
 
 	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -255,7 +253,6 @@ func TestOfficialCompactGatewayTimeoutDoesNotCallResponses(t *testing.T) {
 
 func TestCompactStrategyDoesNotTryChatAfterOfficialFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	resetCompactStrategyCacheForTest()
 
 	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -335,7 +332,6 @@ func TestCompactStrategyDoesNotTryChatAfterOfficialFailure(t *testing.T) {
 
 func TestCompactStrategyStopsAfterOfficialFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	resetCompactStrategyCacheForTest()
 
 	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -380,7 +376,6 @@ func TestCompactStrategyStopsAfterOfficialFailure(t *testing.T) {
 
 func TestPersistedObsoleteCompactStrategyDoesNotSkipOfficial(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	resetCompactStrategyCacheForTest()
 
 	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -432,7 +427,6 @@ func TestPersistedObsoleteCompactStrategyDoesNotSkipOfficial(t *testing.T) {
 
 func TestCompactStrategyDoesNotCallChatEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	resetCompactStrategyCacheForTest()
 
 	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

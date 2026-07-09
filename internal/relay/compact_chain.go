@@ -23,7 +23,7 @@ func isCompactOpenAIChannel(channelType llm.APIFormat, request *llm.Request) boo
 }
 
 func (ra *relayAttempt) forwardCompact(ctx context.Context, httpClient *http.Client) (int, []byte, error) {
-	strategies := compactStrategyOrder(ra.channel.Type, "", false)
+	strategies := compactStrategyOrder(ra.channel.Type)
 	if len(strategies) == 0 {
 		return 0, nil, fmt.Errorf("channel type %s is not compatible with %s request", ra.channel.Type, llm.RequestTypeCompact)
 	}
