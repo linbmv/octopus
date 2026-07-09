@@ -4,8 +4,23 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+// settings 表的列名 "key" 在 MySQL 是保留字，迁移里的裸 SQL 必须按方言引用。
+func TestQuoteIdentifierQuotesReservedColumnPerDialect(t *testing.T) {
+	if got := quoteIdentifier(mysql.New(mysql.Config{}), "key"); got != "`key`" {
+		t.Fatalf("mysql quoted identifier = %q, want %q", got, "`key`")
+	}
+	if got := quoteIdentifier(postgres.New(postgres.Config{}), "key"); got != `"key"` {
+		t.Fatalf("postgres quoted identifier = %q, want %q", got, `"key"`)
+	}
+	if got := quoteIdentifier(sqlite.Dialector{}, "key"); got == "key" {
+		t.Fatalf("sqlite quoted identifier = %q, want quoted form", got)
+	}
+}
 
 func TestCleanupCompactProbeArtifactsSQLite(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

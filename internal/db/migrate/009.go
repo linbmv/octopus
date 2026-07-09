@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -19,7 +20,8 @@ func cleanupCompactProbeArtifacts(db *gorm.DB) error {
 	}
 
 	if db.Migrator().HasTable("settings") {
-		if err := db.Exec("DELETE FROM settings WHERE key = ?", "compact_strategy_probe_enabled").Error; err != nil {
+		// "key" 是 MySQL 保留字，必须按方言引用，否则该 DELETE 在 MySQL 上直接语法报错。
+		if err := db.Exec("DELETE FROM settings WHERE "+quoteIdentifier(db.Dialector, "key")+" = ?", "compact_strategy_probe_enabled").Error; err != nil {
 			return fmt.Errorf("failed to delete compact probe setting: %w", err)
 		}
 	}
@@ -50,6 +52,12 @@ func hasCompactProbeErrorColumn(db *gorm.DB) bool {
 	default:
 		return db.Migrator().HasColumn("group_items", "compact_probe_error")
 	}
+}
+
+func quoteIdentifier(dialector gorm.Dialector, name string) string {
+	var quoted strings.Builder
+	dialector.QuoteTo(&quoted, name)
+	return quoted.String()
 }
 
 func dropCompactProbeErrorColumn(db *gorm.DB) error {
