@@ -33,16 +33,20 @@ type RelayLogService struct {
 	subscribers   map[chan model.RelayLog]struct{}
 	subscribersMu sync.RWMutex
 
-	streamTokens   map[string]struct{}
+	streamTokens   map[string]time.Time
 	streamTokensMu sync.RWMutex
 }
+
+// streamTokenTTL 限定一次性流 token 从签发到建立 SSE 连接的窗口。
+// 没有 TTL 时，取 token 后不连接（网络中断/前端重试）会让 token 永久驻留内存。
+const streamTokenTTL = 2 * time.Minute
 
 func NewRelayLogService() *RelayLogService {
 	return &RelayLogService{
 		cache:        make([]model.RelayLog, 0, relayLogMaxSize),
 		flushSignal:  make(chan struct{}, 1),
 		subscribers:  make(map[chan model.RelayLog]struct{}),
-		streamTokens: make(map[string]struct{}),
+		streamTokens: make(map[string]time.Time),
 	}
 }
 
@@ -58,7 +62,14 @@ func (s *RelayLogService) StreamTokenCreate() (string, error) {
 	token := hex.EncodeToString(bytes)
 
 	s.streamTokensMu.Lock()
-	s.streamTokens[token] = struct{}{}
+	now := time.Now()
+	// 顺带清扫过期未消费的 token，token 数量受 TTL 窗口内的签发频率约束。
+	for stale, expireAt := range s.streamTokens {
+		if now.After(expireAt) {
+			delete(s.streamTokens, stale)
+		}
+	}
+	s.streamTokens[token] = now.Add(streamTokenTTL)
 	s.streamTokensMu.Unlock()
 
 	return token, nil
@@ -69,10 +80,17 @@ func RelayLogStreamTokenVerify(token string) bool {
 }
 
 func (s *RelayLogService) StreamTokenVerify(token string) bool {
-	s.streamTokensMu.RLock()
-	defer s.streamTokensMu.RUnlock()
-	_, ok := s.streamTokens[token]
-	return ok
+	s.streamTokensMu.Lock()
+	defer s.streamTokensMu.Unlock()
+	expireAt, ok := s.streamTokens[token]
+	if !ok {
+		return false
+	}
+	if time.Now().After(expireAt) {
+		delete(s.streamTokens, token)
+		return false
+	}
+	return true
 }
 
 func RelayLogStreamTokenRevoke(token string) {

@@ -28,6 +28,46 @@ func TestRelayLogServiceTokens(t *testing.T) {
 	}
 }
 
+func TestRelayLogStreamTokenExpiresAndSweeps(t *testing.T) {
+	service := NewRelayLogService()
+
+	token, err := service.StreamTokenCreate()
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	if !service.StreamTokenVerify(token) {
+		t.Fatal("新 token 应通过校验")
+	}
+
+	// 人为过期：Verify 应拒绝并顺带删除
+	service.streamTokensMu.Lock()
+	service.streamTokens[token] = time.Now().Add(-time.Second)
+	service.streamTokensMu.Unlock()
+	if service.StreamTokenVerify(token) {
+		t.Fatal("过期 token 必须校验失败")
+	}
+	service.streamTokensMu.Lock()
+	_, stillThere := service.streamTokens[token]
+	service.streamTokensMu.Unlock()
+	if stillThere {
+		t.Fatal("过期 token 应在校验时被删除")
+	}
+
+	// 未消费的过期 token 应在下一次 Create 时被清扫
+	service.streamTokensMu.Lock()
+	service.streamTokens["stale-unconsumed"] = time.Now().Add(-time.Second)
+	service.streamTokensMu.Unlock()
+	if _, err := service.StreamTokenCreate(); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	service.streamTokensMu.Lock()
+	_, staleThere := service.streamTokens["stale-unconsumed"]
+	service.streamTokensMu.Unlock()
+	if staleThere {
+		t.Fatal("过期未消费 token 应在签发新 token 时被清扫")
+	}
+}
+
 func TestRelayLogServiceListIncludesSuccessLogsNewestFirst(t *testing.T) {
 	initTestDB(t)
 	ctx := context.Background()
