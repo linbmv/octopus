@@ -14,6 +14,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/conf"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
@@ -640,6 +641,79 @@ func TestPrepareAttemptContinuesAfterCircuitBreak(t *testing.T) {
 	attempts := r.attempts()
 	if len(attempts) != 1 || attempts[0].Status != dbmodel.AttemptCircuitBreak || attempts[0].ChannelID != 21 {
 		t.Fatalf("circuit break attempt not recorded correctly: %+v", attempts)
+	}
+}
+
+func TestPrepareAttemptSkipsNestedGroupBeyondMaxDepth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := testGinContext()
+	group := dbmodel.Group{
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeGroup, TargetGroupID: 99, Priority: 1},
+			{ID: 2, Type: dbmodel.GroupItemTypeChannel, ChannelID: 11, ModelName: "m", Priority: 2},
+		},
+	}
+	iter := balancer.NewIterator(group, 1, "m")
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: "m"},
+		metrics:         &RelayMetrics{},
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: group, iter: iter, depth: op.MaxGroupNestDepth}},
+		iterHistory:     []*balancer.Iterator{iter},
+	}
+	r.resolveGroupItemFunc = func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error) {
+		return &relayAttempt{relayRun: r, channel: &dbmodel.Channel{ID: item.ChannelID, Name: "ok"}}, nil
+	}
+
+	attempt, err := r.prepareAttempt()
+	if err != nil {
+		t.Fatalf("prepareAttempt error = %v", err)
+	}
+	if attempt == nil || attempt.channel.ID != 11 {
+		t.Fatalf("超深嵌套 group 应被跳过并继续到 channel 11, got %+v", attempt)
+	}
+	if len(r.iterStack) != 1 {
+		t.Fatalf("超深嵌套 group 不应 push 迭代帧, stack len = %d", len(r.iterStack))
+	}
+	attempts := r.attempts()
+	if len(attempts) != 1 || attempts[0].Status != dbmodel.AttemptSkipped {
+		t.Fatalf("深度超限的 skip 未正确记录: %+v", attempts)
+	}
+}
+
+func TestPrepareAttemptStopsWhenRequestContextCanceled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := testGinContext()
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx.Request = ctx.Request.WithContext(canceled)
+
+	group := dbmodel.Group{
+		Mode:  dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{{ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: 10, ModelName: "m", Priority: 1}},
+	}
+	iter := balancer.NewIterator(group, 1, "m")
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: "m"},
+		metrics:         &RelayMetrics{},
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:     []*balancer.Iterator{iter},
+	}
+	r.resolveGroupItemFunc = func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error) {
+		t.Fatal("context 已取消后不应再解析候选")
+		return nil, nil
+	}
+
+	attempt, err := r.prepareAttempt()
+	if attempt != nil {
+		t.Fatalf("attempt = %+v, want nil", attempt)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
 

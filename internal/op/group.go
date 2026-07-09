@@ -18,7 +18,8 @@ var groupCache = cache.New[int, model.Group](16)
 var groupMap = cache.New[string, model.Group](16)
 var groupService = NewGroupService(groupCache, groupMap)
 
-const maxGroupNestDepth = 3
+// MaxGroupNestDepth 限制嵌套 group 的最大层级，写入校验与 relay 运行时守卫共用。
+const MaxGroupNestDepth = 3
 
 type GroupService struct {
 	groups      cache.Cache[int, model.Group]
@@ -172,8 +173,8 @@ func expandEnabledGroup(group model.Group) (model.Group, error) {
 }
 
 func filterEnabledGroupTree(group model.Group, depth int, visited map[int]struct{}) (model.Group, error) {
-	if depth > maxGroupNestDepth {
-		return model.Group{}, fmt.Errorf("group %d: nesting depth exceeded (max %d)", group.ID, maxGroupNestDepth)
+	if depth > MaxGroupNestDepth {
+		return model.Group{}, fmt.Errorf("group %d: nesting depth exceeded (max %d)", group.ID, MaxGroupNestDepth)
 	}
 	if !group.Enabled || len(group.Items) == 0 {
 		group.Items = nil
@@ -224,8 +225,8 @@ func filterEnabledGroupTree(group model.Group, depth int, visited map[int]struct
 }
 
 func expandGroupItems(group model.Group, depth int, visited map[int]struct{}) ([]model.GroupItem, error) {
-	if depth > maxGroupNestDepth {
-		return nil, fmt.Errorf("group %d: nesting depth exceeded (max %d)", group.ID, maxGroupNestDepth)
+	if depth > MaxGroupNestDepth {
+		return nil, fmt.Errorf("group %d: nesting depth exceeded (max %d)", group.ID, MaxGroupNestDepth)
 	}
 	if !group.Enabled || len(group.Items) == 0 {
 		return nil, nil
@@ -963,8 +964,8 @@ func validateGroupItemFields(tx *gorm.DB, ownerGroupID int, itemType string, cha
 				maxDepthInGraph = nodeDepth
 			}
 		}
-		if maxDepthInGraph > maxGroupNestDepth {
-			return fmt.Errorf("group nesting depth exceeded (max %d, found %d)", maxGroupNestDepth, maxDepthInGraph)
+		if maxDepthInGraph > MaxGroupNestDepth {
+			return fmt.Errorf("group nesting depth exceeded (max %d, found %d)", MaxGroupNestDepth, maxDepthInGraph)
 		}
 	default:
 		return fmt.Errorf("unsupported group item type: %s", itemType)

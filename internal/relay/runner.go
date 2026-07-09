@@ -81,6 +81,9 @@ func (r *relayRun) attempts() []dbmodel.ChannelAttempt {
 
 func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 	for {
+		if err := r.c.Request.Context().Err(); err != nil {
+			return nil, err
+		}
 		frame := r.currentIteratorFrame()
 		if frame == nil {
 			return nil, nil
@@ -127,6 +130,13 @@ func (r *relayRun) currentIteratorFrame() *relayIteratorFrame {
 }
 
 func (r *relayRun) pushNestedGroupIterator(parent *relayIteratorFrame, item dbmodel.GroupItem) error {
+	// 写入侧已有防环校验（自引用/图环检测/深度上限），这里是运行时纵深防御：
+	// 脏数据成环时每层都会以全新 visited 集重新展开，必须靠深度上限阻断无限 push。
+	if parent.depth+1 > op.MaxGroupNestDepth {
+		parent.iter.SkipFor(item, false, 0, 0, fmt.Sprintf("group_%d", item.TargetGroupID),
+			fmt.Sprintf("nested group depth exceeded (max %d)", op.MaxGroupNestDepth))
+		return nil
+	}
 	targetGroup, err := op.GroupGetEnabledTreeByID(item.TargetGroupID, r.c.Request.Context())
 	if err != nil {
 		parent.iter.SkipFor(item, false, 0, 0, fmt.Sprintf("group_%d", item.TargetGroupID), err.Error())
