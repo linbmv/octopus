@@ -351,6 +351,7 @@
             "updated": "更新成功",
             "updateFailed": "更新失败",
             "deleted": "删除成功",
+            "deleteFailed": "删除失败",
             "autoAddFailed": "自动添加失败"
         },
         "create": {

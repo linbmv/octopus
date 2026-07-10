@@ -257,7 +257,16 @@ export function GroupCard({ group }: { group: Group }) {
                             <button type="button" onClick={() => setConfirmDelete(false)} className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive-foreground/20 text-destructive-foreground transition-all hover:bg-destructive-foreground/30 active:scale-95">
                                 <X className="size-4" />
                             </button>
-                            <button type="button" onClick={() => group.id && deleteGroup.mutate(group.id, { onSuccess: () => toast.success(t('toast.deleted')) })} disabled={deleteGroup.isPending} className="flex-1 h-7 flex items-center justify-center gap-2 rounded-lg bg-destructive-foreground text-destructive text-sm font-semibold transition-all hover:bg-destructive-foreground/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
+                            <button type="button" onClick={() => group.id && deleteGroup.mutate(group.id, {
+                                onSuccess: () => {
+                                    toast.success(t('toast.deleted'));
+                                    setConfirmDelete(false);
+                                },
+                                onError: (error) => {
+                                    toast.error(error.message || t('toast.deleteFailed'));
+                                    setConfirmDelete(false);
+                                }
+                            })} disabled={deleteGroup.isPending} className="flex-1 h-7 flex items-center justify-center gap-2 rounded-lg bg-destructive-foreground text-destructive text-sm font-semibold transition-all hover:bg-destructive-foreground/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
                                 <Trash2 className="size-3.5" />
                                 {t('detail.actions.confirmDelete')}
                             </button>

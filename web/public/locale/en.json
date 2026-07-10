@@ -351,6 +351,7 @@
             "updated": "Updated successfully",
             "updateFailed": "Update failed",
             "deleted": "Deleted successfully",
+            "deleteFailed": "Delete failed",
             "autoAddFailed": "Auto add failed"
         },
         "create": {

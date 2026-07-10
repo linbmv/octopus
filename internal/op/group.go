@@ -457,7 +457,20 @@ func GroupDel(id int, ctx context.Context) error {
 	}
 	if len(refs) > 0 {
 		tx.Rollback()
-		return fmt.Errorf("cannot delete group: referenced by groups: %v", refs)
+		groupNames := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			// ref format: "GroupName(item:123)"
+			// Extract just the group name
+			if idx := strings.Index(ref, "("); idx > 0 {
+				groupNames = append(groupNames, ref[:idx])
+			} else {
+				groupNames = append(groupNames, ref)
+			}
+		}
+		if len(groupNames) == 1 {
+			return fmt.Errorf("无法删除：该分组正被「%s」引用。请先从该分组中移除此引用，或删除「%s」分组", groupNames[0], groupNames[0])
+		}
+		return fmt.Errorf("无法删除：该分组正被 %d 个分组引用（%s）。请先移除所有引用关系", len(groupNames), strings.Join(groupNames, "、"))
 	}
 
 	if err := tx.Where("group_id = ?", id).Delete(&model.GroupItem{}).Error; err != nil {
