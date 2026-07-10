@@ -157,19 +157,26 @@ func newHTTPClientCustomProxy(proxyURLStr string) (*http.Client, error) {
 	return &http.Client{Transport: &userAgentTransport{base: cloned}}, nil
 }
 
-// userAgentTransport wraps an http.RoundTripper and overrides User-Agent header.
-// This prevents upstream channels from blocking based on SDK-specific User-Agent values.
+// userAgentTransport wraps an http.RoundTripper and injects a default User-Agent
+// only when the request does not already specify one. This lets a channel override
+// the outbound User-Agent (via its UserAgent field / custom headers) for upstreams
+// that gate on client identity (e.g. relays that only allow Claude Code clients),
+// while still shielding requests that don't set a UA from SDK-fingerprint blocking.
 type userAgentTransport struct {
 	base http.RoundTripper
 }
+
+// defaultOutboundUserAgent 是未显式指定 UA 时的兜底值：常见 Chrome UA，避免被上游按脚本/SDK 特征封禁。
+const defaultOutboundUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	reqClone := req.Clone(req.Context())
 
-	// Override User-Agent to a standard browser value that won't be blocked by upstream channels
-	// Use a common Chrome on Windows User-Agent to avoid detection
-	reqClone.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	// 渠道已显式设置 User-Agent（渠道 UA 字段或自定义头）时保留其值；否则注入默认浏览器 UA。
+	if reqClone.Header.Get("User-Agent") == "" {
+		reqClone.Header.Set("User-Agent", defaultOutboundUserAgent)
+	}
 
 	return t.base.RoundTrip(reqClone)
 }

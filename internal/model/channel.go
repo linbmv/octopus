@@ -38,6 +38,9 @@ type Channel struct {
 	ChannelProxy   *string        `json:"channel_proxy"`
 	Stats          *StatsChannel  `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
 	MatchRegex     *string        `json:"match_regex"`
+	// UserAgent 覆盖该渠道出站请求的 User-Agent。留空则用默认浏览器 UA。
+	// 部分上游按客户端标识放行（如"仅 Claude Code 客户端"的中转站），需在此填对应 UA。
+	UserAgent string `json:"user_agent" gorm:"default:''"`
 }
 
 type BaseUrl struct {
@@ -80,6 +83,7 @@ type ChannelUpdateRequest struct {
 	RPMLimit       *int            `json:"rpm_limit,omitempty"`
 	MaxConcurrency *int            `json:"max_concurrency,omitempty"`
 	MatchRegex     *string         `json:"match_regex,omitempty"`
+	UserAgent      *string         `json:"user_agent,omitempty"`
 
 	KeysToAdd    []ChannelKeyAddRequest    `json:"keys_to_add,omitempty"`
 	KeysToUpdate []ChannelKeyUpdateRequest `json:"keys_to_update,omitempty"`

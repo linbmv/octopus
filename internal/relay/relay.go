@@ -394,6 +394,11 @@ func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.R
 		}
 		outboundRequest.Headers.Set(header.HeaderKey, header.HeaderValue)
 	}
+	// 渠道 UA 字段优先级最高：在自定义头之后设置，作为该渠道出站的权威 User-Agent。
+	// 供"仅特定客户端"的上游放行（如仅 Claude Code 客户端的中转站）。
+	if ua := strings.TrimSpace(ra.channel.UserAgent); ua != "" {
+		outboundRequest.Headers.Set("User-Agent", ua)
+	}
 }
 
 // cleanKeyRemark 清洗渠道 key 备注用于持久化：去除控制字符、trim、截断到 64 rune。
