@@ -133,6 +133,21 @@ export function ChannelAdvancedSection({
                     </div>
 
                     <div className="space-y-2">
+                        <label htmlFor={`${idPrefix}-user-agent`} className="text-sm font-medium text-card-foreground">
+                            {t('userAgent')}
+                        </label>
+                        <Input
+                            id={`${idPrefix}-user-agent`}
+                            type="text"
+                            value={formData.user_agent}
+                            onChange={(e) => onFormDataChange({ ...formData, user_agent: e.target.value })}
+                            placeholder={t('userAgentPlaceholder')}
+                            className="rounded-xl"
+                        />
+                        <p className="text-xs text-muted-foreground">{t('userAgentHint')}</p>
+                    </div>
+
+                    <div className="space-y-2">
                         <label htmlFor={`${idPrefix}-param-override`} className="text-sm font-medium text-card-foreground">
                             {t('paramOverride')}
                         </label>

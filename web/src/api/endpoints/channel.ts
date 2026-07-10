@@ -69,6 +69,7 @@ export type CreateChannelRequest = {
     raw_passthrough?: boolean;
     rpm_limit?: number;
     max_concurrency?: number;
+    user_agent?: string;
 };
 
 /**
@@ -92,6 +93,7 @@ export type UpdateChannelRequest = {
     raw_passthrough?: boolean;
     rpm_limit?: number;
     max_concurrency?: number;
+    user_agent?: string;
     // keys diff
     keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
     keys_to_update?: Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string }>;

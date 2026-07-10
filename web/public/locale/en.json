@@ -566,6 +566,9 @@
             "autoGroupRegex": "Regex",
             "matchRegex": "Match Regex",
             "matchRegexPlaceholder": "Optional: regex pattern to match request model names",
+            "userAgent": "User-Agent",
+            "userAgentPlaceholder": "Leave empty to use default browser UA",
+            "userAgentHint": "Some upstreams gate on client identity (e.g. relays that only allow Claude Code clients); set the matching User-Agent here",
             "remark": "Remark"
         }
     }

@@ -30,6 +30,7 @@ export function CreateDialogContent() {
         raw_passthrough: false,
         rpm_limit: 0,
         max_concurrency: 0,
+        user_agent: '',
     });
     const t = useTranslations('channel.create');
 
@@ -67,6 +68,7 @@ export function CreateDialogContent() {
                 raw_passthrough: formData.raw_passthrough,
                 rpm_limit: Math.max(0, Number(formData.rpm_limit || 0)),
                 max_concurrency: Math.max(0, Number(formData.max_concurrency || 0)),
+                user_agent: formData.user_agent.trim(),
             },
             {
                 onSuccess: () => {
@@ -88,6 +90,7 @@ export function CreateDialogContent() {
                         raw_passthrough: false,
                         rpm_limit: 0,
                         max_concurrency: 0,
+                        user_agent: '',
                     });
                     setIsOpen(false);
                 }

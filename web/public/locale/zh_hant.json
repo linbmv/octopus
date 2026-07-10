@@ -566,6 +566,9 @@
             "autoGroupRegex": "正規比對",
             "matchRegex": "匹配正規",
             "matchRegexPlaceholder": "可選：用於匹配請求模型名稱的正規表示式",
+            "userAgent": "User-Agent",
+            "userAgentPlaceholder": "留空則用預設瀏覽器 UA",
+            "userAgentHint": "部分上游按客戶端標識放行（如僅 Claude Code 客戶端的中轉站），在此填對應 User-Agent",
             "remark": "備註"
         }
     }

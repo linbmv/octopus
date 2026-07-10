@@ -43,6 +43,7 @@ export interface ChannelFormData {
     raw_passthrough: boolean;
     rpm_limit: number;
     max_concurrency: number;
+    user_agent: string;
 }
 
 export interface ChannelFormProps {

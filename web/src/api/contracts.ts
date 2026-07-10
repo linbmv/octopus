@@ -41,6 +41,7 @@ export interface Channel {
   channel_proxy?: string | null;
   stats?: StatsChannel | null;
   match_regex?: string | null;
+  user_agent: string;
 }
 
 export interface ChannelAttempt {
@@ -99,6 +100,7 @@ export interface ChannelUpdateRequest {
   rpm_limit?: number | null;
   max_concurrency?: number | null;
   match_regex?: string | null;
+  user_agent?: string | null;
   keys_to_add?: ChannelKeyAddRequest[];
   keys_to_update?: ChannelKeyUpdateRequest[];
   keys_to_delete?: number[];

@@ -61,6 +61,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         raw_passthrough: channel.raw_passthrough,
         rpm_limit: channel.rpm_limit ?? 0,
         max_concurrency: channel.max_concurrency ?? 0,
+        user_agent: channel.user_agent ?? '',
     });
     const t = useTranslations('channel.detail');
 
@@ -116,6 +117,12 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         if (nextMatchRegex !== curMatchRegex) {
             // Empty string means "clear" for patch semantics; backend maps it to NULL.
             req.match_regex = nextMatchRegex;
+        }
+
+        const nextUserAgent = formData.user_agent.trim();
+        const curUserAgent = channel.user_agent ?? '';
+        if (nextUserAgent !== curUserAgent) {
+            req.user_agent = nextUserAgent;
         }
 
         if (formData.raw_passthrough !== channel.raw_passthrough) req.raw_passthrough = formData.raw_passthrough;
