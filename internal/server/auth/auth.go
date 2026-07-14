@@ -65,10 +65,7 @@ func VerifyJWTToken(token string) bool {
 	}
 	// 检查 token 版本：Subject 格式为 "v{version}"，不匹配则拒绝
 	expectedSubject := fmt.Sprintf("v%d", user.TokenVersion)
-	if claims.Subject != expectedSubject {
-		return false
-	}
-	return true
+	return claims.Subject == expectedSubject
 }
 
 func GenerateAPIKey() string {

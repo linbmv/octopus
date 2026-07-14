@@ -311,11 +311,6 @@ func TestRequestForOutboundPipelineDoesNotFallbackCompactToChat(t *testing.T) {
 	}
 }
 
-// strPtr 返回字符串内容指针，便于构造 MessageContent。
-func strPtr(value string) *string {
-	return &value
-}
-
 func compactInputMessage(role, text string) llm.Message {
 	content := text
 	return llm.Message{Role: role, Content: llm.MessageContent{Content: &content}}
