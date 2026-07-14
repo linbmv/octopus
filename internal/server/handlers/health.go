@@ -2,111 +2,43 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
-	"github.com/bestruirui/octopus/internal/relay"
-	relayhealth "github.com/bestruirui/octopus/internal/relay/health"
-	"github.com/bestruirui/octopus/internal/server/middleware"
-	"github.com/bestruirui/octopus/internal/server/resp"
-	"github.com/bestruirui/octopus/internal/server/router"
+	"github.com/bestruirui/octopus/internal/db"
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func init() {
-	router.NewGroupRouter("/api/v1/health").
-		Use(middleware.Auth()).
-		AddRoute(
-			router.NewRoute("/status", http.MethodGet).
-				Handle(getHealthStatus),
-		).
-		AddRoute(
-			router.NewRoute("/status/channel", http.MethodGet).
-				Handle(getHealthStatusByChannel),
-		).
-		AddRoute(
-			router.NewRoute("/status/specific", http.MethodGet).
-				Handle(getHealthStatusSpecific),
-		).
-		AddRoute(
-			router.NewRoute("/reset", http.MethodPost).
-				Handle(resetHealth),
-		).
-		AddRoute(
-			router.NewRoute("/enable", http.MethodPost).
-				Handle(enableHealth),
-		).
-		AddRoute(
-			router.NewRoute("/disable", http.MethodPost).
-				Handle(disableHealth),
-		).
-		AddRoute(
-			router.NewRoute("/metrics", http.MethodGet).
-				Handle(getHealthMetrics),
-		)
+// HealthCheck 返回服务基本健康状态（不检查依赖）
+func HealthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok",
+		"time":   time.Now().Format(time.RFC3339),
+	})
 }
 
-func healthAPI(c *gin.Context) (*relayhealth.HealthAPI, bool) {
-	manager := relay.GetHealthManager()
-	if manager == nil {
-		resp.Error(c, http.StatusServiceUnavailable, "health manager unavailable")
-		return nil, false
-	}
-	return relayhealth.NewHealthAPI(manager), true
-}
-
-func getHealthStatus(c *gin.Context) {
-	api, ok := healthAPI(c)
-	if !ok {
+// ReadinessCheck 返回服务就绪状态（检查数据库连接）
+func ReadinessCheck(c *gin.Context) {
+	sqlDB, err := db.GetDB().DB()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "not_ready",
+			"reason": "database connection unavailable",
+			"time":   time.Now().Format(time.RFC3339),
+		})
 		return
 	}
-	api.HandleGetAll(c.Writer, c.Request)
-}
 
-func getHealthStatusByChannel(c *gin.Context) {
-	api, ok := healthAPI(c)
-	if !ok {
+	if err := sqlDB.Ping(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "not_ready",
+			"reason": "database ping failed",
+			"time":   time.Now().Format(time.RFC3339),
+		})
 		return
 	}
-	api.HandleGetByChannel(c.Writer, c.Request)
-}
 
-func getHealthStatusSpecific(c *gin.Context) {
-	api, ok := healthAPI(c)
-	if !ok {
-		return
-	}
-	api.HandleGetSpecific(c.Writer, c.Request)
-}
-
-func resetHealth(c *gin.Context) {
-	api, ok := healthAPI(c)
-	if !ok {
-		return
-	}
-	api.HandleReset(c.Writer, c.Request)
-}
-
-func enableHealth(c *gin.Context) {
-	api, ok := healthAPI(c)
-	if !ok {
-		return
-	}
-	api.HandleEnable(c.Writer, c.Request)
-}
-
-func disableHealth(c *gin.Context) {
-	api, ok := healthAPI(c)
-	if !ok {
-		return
-	}
-	api.HandleDisable(c.Writer, c.Request)
-}
-
-func getHealthMetrics(c *gin.Context) {
-	if relay.GetHealthMetrics() == nil || relay.GetHealthManager() == nil {
-		resp.Error(c, http.StatusServiceUnavailable, "health metrics unavailable")
-		return
-	}
-	relay.RefreshHealthMetrics()
-	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ready",
+		"time":   time.Now().Format(time.RFC3339),
+	})
 }

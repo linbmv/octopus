@@ -20,10 +20,10 @@ const ChannelTypeDoubao llm.APIFormat = "doubao"
 
 type Channel struct {
 	ID             int            `json:"id" gorm:"primaryKey"`
-	Name           string         `json:"name" gorm:"unique;not null"`
-	Type           llm.APIFormat  `json:"type"`
+	Name           string         `json:"name" gorm:"unique;not null" binding:"required,min=1,max=64"`
+	Type           llm.APIFormat  `json:"type" binding:"required"`
 	Enabled        bool           `json:"enabled" gorm:"default:true"`
-	BaseUrls       []BaseUrl      `json:"base_urls" gorm:"serializer:json"`
+	BaseUrls       []BaseUrl      `json:"base_urls" gorm:"serializer:json" binding:"required,min=1,dive"`
 	Keys           []ChannelKey   `json:"keys" gorm:"foreignKey:ChannelID"`
 	Model          string         `json:"model"`
 	CustomModel    string         `json:"custom_model"`
@@ -33,8 +33,8 @@ type Channel struct {
 	CustomHeader   []CustomHeader `json:"custom_header" gorm:"serializer:json"`
 	ParamOverride  *string        `json:"param_override"`
 	RawPassthrough bool           `json:"raw_passthrough" gorm:"not null;default:false"`
-	RPMLimit       int            `json:"rpm_limit" gorm:"not null;default:0"`
-	MaxConcurrency int            `json:"max_concurrency" gorm:"not null;default:0"`
+	RPMLimit       int            `json:"rpm_limit" gorm:"not null;default:0" binding:"gte=0"`
+	MaxConcurrency int            `json:"max_concurrency" gorm:"not null;default:0" binding:"gte=0"`
 	ChannelProxy   *string        `json:"channel_proxy"`
 	Stats          *StatsChannel  `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
 	MatchRegex     *string        `json:"match_regex"`
@@ -44,8 +44,8 @@ type Channel struct {
 }
 
 type BaseUrl struct {
-	URL   string `json:"url"`
-	Delay int    `json:"delay"`
+	URL   string `json:"url" binding:"required,url"`
+	Delay int    `json:"delay" binding:"gte=0"`
 }
 
 type CustomHeader struct {

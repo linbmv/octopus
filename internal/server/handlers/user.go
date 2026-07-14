@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -15,6 +16,7 @@ import (
 func init() {
 	router.NewGroupRouter("/api/v1/user").
 		Use(middleware.RequireJSON()).
+		Use(middleware.RateLimit(5, time.Minute)).
 		AddRoute(
 			router.NewRoute("/login", http.MethodPost).
 				Handle(login),
@@ -72,7 +74,21 @@ func changePassword(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
+
 	username, _ := c.Get("username")
+	usernameStr, _ := username.(string)
+
+	// 二次确认：验证当前密码
+	if err := op.UserVerify(usernameStr, user.OldPassword); err != nil {
+		middleware.AuditLog(c, middleware.EventSensitiveOperationDenied, map[string]interface{}{
+			"username":  usernameStr,
+			"operation": "password_change",
+			"reason":    "invalid_current_password",
+		})
+		resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
+		return
+	}
+
 	if err := op.UserChangePassword(user.OldPassword, user.NewPassword); err != nil {
 		resp.Error(c, http.StatusInternalServerError, resp.ErrDatabase)
 		return
@@ -90,6 +106,15 @@ func changeUsername(c *gin.Context) {
 		return
 	}
 	oldUsername, _ := c.Get("username")
+	usernameStr, _ := oldUsername.(string)
+	if err := op.UserVerify(usernameStr, user.CurrentPassword); err != nil {
+		middleware.AuditLog(c, middleware.EventUsernameChangeFailed, map[string]interface{}{
+			"username": usernameStr,
+			"reason":   "invalid_password",
+		})
+		resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
+		return
+	}
 	if err := op.UserChangeUsername(user.NewUsername); err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
