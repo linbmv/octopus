@@ -145,81 +145,29 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		}
 	}()
 
-	var selectFields []string
-	updates := model.Channel{ID: req.ID}
-
-	if req.Name != nil {
-		selectFields = append(selectFields, "name")
-		updates.Name = *req.Name
-	}
-	if req.Type != nil {
-		selectFields = append(selectFields, "type")
-		updates.Type = *req.Type
-	}
-	if req.Enabled != nil {
-		selectFields = append(selectFields, "enabled")
-		updates.Enabled = *req.Enabled
-	}
-	if req.BaseUrls != nil {
-		selectFields = append(selectFields, "base_urls")
-		updates.BaseUrls = *req.BaseUrls
-	}
-	if req.Model != nil {
-		selectFields = append(selectFields, "model")
-		updates.Model = *req.Model
-	}
-	if req.CustomModel != nil {
-		selectFields = append(selectFields, "custom_model")
-		updates.CustomModel = *req.CustomModel
-	}
-	if req.Proxy != nil {
-		selectFields = append(selectFields, "proxy")
-		updates.Proxy = *req.Proxy
-	}
-	if req.AutoSync != nil {
-		selectFields = append(selectFields, "auto_sync")
-		updates.AutoSync = *req.AutoSync
-	}
-	if req.AutoGroup != nil {
-		selectFields = append(selectFields, "auto_group")
-		updates.AutoGroup = *req.AutoGroup
-	}
-	if req.CustomHeader != nil {
-		selectFields = append(selectFields, "custom_header")
-		updates.CustomHeader = *req.CustomHeader
-	}
-	if req.ChannelProxy != nil {
-		selectFields = append(selectFields, "channel_proxy")
-		updates.ChannelProxy = req.ChannelProxy
-	}
-	if req.ParamOverride != nil {
-		selectFields = append(selectFields, "param_override")
-		updates.ParamOverride = req.ParamOverride
-	}
-	if req.RawPassthrough != nil {
-		selectFields = append(selectFields, "raw_passthrough")
-		updates.RawPassthrough = *req.RawPassthrough
-	}
-	if req.RPMLimit != nil {
-		selectFields = append(selectFields, "rpm_limit")
-		updates.RPMLimit = *req.RPMLimit
-	}
-	if req.MaxConcurrency != nil {
-		selectFields = append(selectFields, "max_concurrency")
-		updates.MaxConcurrency = *req.MaxConcurrency
-	}
-	if req.MatchRegex != nil {
-		selectFields = append(selectFields, "match_regex")
-		updates.MatchRegex = req.MatchRegex
-	}
-	if req.UserAgent != nil {
-		selectFields = append(selectFields, "user_agent")
-		updates.UserAgent = *req.UserAgent
-	}
+	// 使用 PatchHelper 简化字段更新逻辑，降低圈复杂度
+	helper := NewPatchHelper()
+	helper.ApplyField("name", req.Name)
+	helper.ApplyField("type", req.Type)
+	helper.ApplyField("enabled", req.Enabled)
+	helper.ApplyField("base_urls", req.BaseUrls)
+	helper.ApplyField("model", req.Model)
+	helper.ApplyField("custom_model", req.CustomModel)
+	helper.ApplyField("proxy", req.Proxy)
+	helper.ApplyField("auto_sync", req.AutoSync)
+	helper.ApplyField("auto_group", req.AutoGroup)
+	helper.ApplyField("custom_header", req.CustomHeader)
+	helper.ApplyField("channel_proxy", req.ChannelProxy)
+	helper.ApplyField("param_override", req.ParamOverride)
+	helper.ApplyField("raw_passthrough", req.RawPassthrough)
+	helper.ApplyField("rpm_limit", req.RPMLimit)
+	helper.ApplyField("max_concurrency", req.MaxConcurrency)
+	helper.ApplyField("match_regex", req.MatchRegex)
+	helper.ApplyField("user_agent", req.UserAgent)
 
 	// 只有当有字段需要更新时才执行 UPDATE
-	if len(selectFields) > 0 {
-		if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Select(selectFields).Updates(&updates).Error; err != nil {
+	if helper.HasUpdates() {
+		if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Select(helper.SelectFields()).Updates(helper.Updates()).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to update channel: %w", err)
 		}

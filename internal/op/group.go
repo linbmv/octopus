@@ -302,37 +302,17 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 		}
 	}
 
-	var selectFields []string
-	updates := model.Group{ID: req.ID}
+	// 使用 PatchHelper 简化字段更新逻辑，降低圈复杂度
+	helper := NewPatchHelper()
+	helper.ApplyField("name", req.Name)
+	helper.ApplyField("enabled", req.Enabled)
+	helper.ApplyField("mode", req.Mode)
+	helper.ApplyField("match_regex", req.MatchRegex)
+	helper.ApplyField("first_token_time_out", req.FirstTokenTimeOut)
+	helper.ApplyField("session_keep_time", req.SessionKeepTime)
 
-	if req.Name != nil {
-		selectFields = append(selectFields, "name")
-		updates.Name = *req.Name
-	}
-	if req.Enabled != nil {
-		// Select 显式包含 enabled 列，确保能写入 false（GORM Updates 默认跳过零值）。
-		selectFields = append(selectFields, "enabled")
-		updates.Enabled = *req.Enabled
-	}
-	if req.Mode != nil {
-		selectFields = append(selectFields, "mode")
-		updates.Mode = *req.Mode
-	}
-	if req.MatchRegex != nil {
-		selectFields = append(selectFields, "match_regex")
-		updates.MatchRegex = *req.MatchRegex
-	}
-	if req.FirstTokenTimeOut != nil {
-		selectFields = append(selectFields, "first_token_time_out")
-		updates.FirstTokenTimeOut = *req.FirstTokenTimeOut
-	}
-	if req.SessionKeepTime != nil {
-		selectFields = append(selectFields, "session_keep_time")
-		updates.SessionKeepTime = *req.SessionKeepTime
-	}
-
-	if len(selectFields) > 0 {
-		if err := tx.Model(&model.Group{}).Where("id = ?", req.ID).Select(selectFields).Updates(&updates).Error; err != nil {
+	if helper.HasUpdates() {
+		if err := tx.Model(&model.Group{}).Where("id = ?", req.ID).Select(helper.SelectFields()).Updates(helper.Updates()).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to update group: %w", err)
 		}
