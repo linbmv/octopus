@@ -24,7 +24,7 @@ import (
 type fakeStream struct {
 	events []*httpclient.StreamEvent
 	index  int
-	closed bool
+	closed atomic.Bool // writeStream 的 reader 协程与主流程都可能触发 Close，用原子量避免测试自身 race
 }
 
 func (s *fakeStream) Next() bool {
@@ -45,7 +45,7 @@ func (s *fakeStream) Current() *httpclient.StreamEvent {
 func (s *fakeStream) Err() error { return nil }
 
 func (s *fakeStream) Close() error {
-	s.closed = true
+	s.closed.Store(true)
 	return nil
 }
 
@@ -1089,7 +1089,17 @@ func TestWriteStreamReturnsCanceledOnClientDisconnectAfterFirstToken(t *testing.
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("writeStream error = %v, want context.Canceled", err)
 	}
-	if !stream.closed {
+	// 关闭可能由主流程或 reader 协程执行（sync.Once 收敛），轮询等待其收敛，
+	// 避免依赖具体哪个协程赢得 Once 而产生 flaky。
+	closed := false
+	for i := 0; i < 100; i++ {
+		if stream.closed.Load() {
+			closed = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !closed {
 		t.Fatal("stream should be closed after client disconnect")
 	}
 }

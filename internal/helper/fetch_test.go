@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/db"
@@ -88,17 +89,23 @@ func TestFetchModelsOpenAIUsesV1AndBearer(t *testing.T) {
 }
 
 func TestFetchModelsMergesModelsFromAllAvailableKeys(t *testing.T) {
+	// FetchModels 会对多个 key 并发请求，handler 在不同 goroutine 执行：
+	// map 写入必须加锁；goroutine 内也不能用 t.Fatalf（FailNow 仅限测试主协程）。
+	var mu sync.Mutex
 	seenAuth := make(map[string]bool)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
+		mu.Lock()
 		seenAuth[auth] = true
+		mu.Unlock()
 		switch auth {
 		case "Bearer key-a":
 			_ = json.NewEncoder(w).Encode(model.OpenAIModelList{Data: []model.OpenAIModel{{ID: "shared"}, {ID: "model-a"}}})
 		case "Bearer key-b":
 			_ = json.NewEncoder(w).Encode(model.OpenAIModelList{Data: []model.OpenAIModel{{ID: "shared"}, {ID: "model-b"}}})
 		default:
-			t.Fatalf("unexpected Authorization header: %q", auth)
+			t.Errorf("unexpected Authorization header: %q", auth)
+			w.WriteHeader(http.StatusUnauthorized)
 		}
 	}))
 	defer server.Close()
@@ -113,8 +120,15 @@ func TestFetchModelsMergesModelsFromAllAvailableKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchModels 错误: %v", err)
 	}
-	if !seenAuth["Bearer key-a"] || !seenAuth["Bearer key-b"] {
-		t.Fatalf("expected both keys to be used, got %+v", seenAuth)
+	mu.Lock()
+	bothSeen := seenAuth["Bearer key-a"] && seenAuth["Bearer key-b"]
+	seen := make(map[string]bool, len(seenAuth))
+	for k, v := range seenAuth {
+		seen[k] = v
+	}
+	mu.Unlock()
+	if !bothSeen {
+		t.Fatalf("expected both keys to be used, got %+v", seen)
 	}
 	want := []string{"shared", "model-a", "model-b"}
 	if len(models) != len(want) {

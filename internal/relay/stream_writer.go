@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/utils/log"
@@ -19,6 +20,17 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 	}
 	if stopFirstTokenGuard == nil {
 		stopFirstTokenGuard = func() {}
+	}
+
+	// reader 协程退出与主循环的超时/断开路径都会关闭流，且第三方 Stream 的
+	// Close 不保证线程安全：用 sync.Once 收敛为单次调用。
+	var closeOnce sync.Once
+	closeStream := func() {
+		closeOnce.Do(func() {
+			if err := clientStream.Close(); err != nil {
+				log.Debugf("close client stream: %v", err)
+			}
+		})
 	}
 
 	// 更新活跃请求状态为流式传输
@@ -41,7 +53,7 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 	defer close(done)
 	go func() {
 		defer close(results)
-		defer clientStream.Close()
+		defer closeStream()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Warnf("stream reader panic: %v", r)
@@ -88,11 +100,11 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 				timeoutErr := firstTokenTimeout.Error(firstTokenTimeoutPhaseStreamFirstEvent)
 				log.Warnf("%v, switching channel", timeoutErr)
 				ra.recordFirstTokenTimeout(firstTokenTimeout)
-				_ = clientStream.Close()
+				closeStream()
 				return timeoutErr
 			}
 			log.Infof("client disconnected, stopping stream")
-			_ = clientStream.Close()
+			closeStream()
 			return context.Canceled
 		case r, ok := <-results:
 			if !ok {
