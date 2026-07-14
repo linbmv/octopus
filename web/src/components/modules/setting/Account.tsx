@@ -15,11 +15,13 @@ export function SettingAccount() {
     const changePassword = useChangePassword();
 
     const [newUsername, setNewUsername] = useState('');
+    const [usernameCurrentPassword, setUsernameCurrentPassword] = useState('');
     const [oldPassword, setOldPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
 
     const [showOldPassword, setShowOldPassword] = useState(false);
+    const [showUsernameCurrentPassword, setShowUsernameCurrentPassword] = useState(false);
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -28,9 +30,13 @@ export function SettingAccount() {
             toast.error(t('account.username.empty'));
             return;
         }
+        if (!usernameCurrentPassword) {
+            toast.error(t('account.password.oldEmpty'));
+            return;
+        }
 
         changeUsername.mutate(
-            { newUsername: newUsername.trim() },
+            { newUsername: newUsername.trim(), currentPassword: usernameCurrentPassword },
             {
                 onSuccess: () => {
                     toast.success(t('account.username.success'));
@@ -88,17 +94,33 @@ export function SettingAccount() {
                     <KeyRound className="size-4" />
                     {t('account.username.label')}
                 </div>
-                <div className="flex gap-2">
+                <div className="space-y-2">
                     <Input
                         value={newUsername}
                         onChange={(e) => setNewUsername(e.target.value)}
                         placeholder={t('account.username.placeholder')}
-                        className="flex-1 rounded-xl"
+                        className="rounded-xl"
                     />
+                    <div className="relative">
+                        <Input
+                            type={showUsernameCurrentPassword ? 'text' : 'password'}
+                            value={usernameCurrentPassword}
+                            onChange={(e) => setUsernameCurrentPassword(e.target.value)}
+                            placeholder={t('account.password.oldPlaceholder')}
+                            className="rounded-xl pr-10"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowUsernameCurrentPassword(!showUsernameCurrentPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            {showUsernameCurrentPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                        </button>
+                    </div>
                     <Button
                         onClick={handleChangeUsername}
-                        disabled={changeUsername.isPending || !newUsername.trim()}
-                        className="rounded-xl"
+                        disabled={changeUsername.isPending || !newUsername.trim() || !usernameCurrentPassword}
+                        className="w-full rounded-xl"
                     >
                         {changeUsername.isPending ? t('account.saving') : t('account.save')}
                     </Button>
@@ -174,4 +196,3 @@ export function SettingAccount() {
         </div>
     );
 }
-

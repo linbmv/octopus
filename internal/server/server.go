@@ -10,7 +10,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/relay"
-	"github.com/bestruirui/octopus/internal/server/handlers"
+	_ "github.com/bestruirui/octopus/internal/server/handlers"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
@@ -49,7 +49,6 @@ func Start() error {
 	r.Use(middleware.Cors())
 	r.Use(middleware.StaticEmbed("/", static.StaticFS))
 
-	registerHealthRoutes(r)
 	registerRelayRoutes(r)
 	if err := router.RegisterAll(r); err != nil {
 		return fmt.Errorf("register routes: %w", err)
@@ -76,11 +75,6 @@ func Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return httpSrv.Shutdown(ctx)
-}
-
-func registerHealthRoutes(r *gin.Engine) {
-	r.GET("/health", handlers.HealthCheck)
-	r.GET("/ready", handlers.ReadinessCheck)
 }
 
 func registerRelayRoutes(r *gin.Engine) {

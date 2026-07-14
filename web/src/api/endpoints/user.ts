@@ -183,13 +183,14 @@ export function useChangePassword() {
  * 
  * @example
  * const changeUsername = useChangeUsername();
- * changeUsername.mutate({ newUsername: 'newname' });
+ * changeUsername.mutate({ newUsername: 'newname', currentPassword: 'current-password' });
  */
 export function useChangeUsername() {
     return useMutation({
-        mutationFn: async (data: { newUsername: string }) => {
+        mutationFn: async (data: { newUsername: string; currentPassword: string }) => {
             const payload: ChangeUsernameRequest = {
                 new_username: data.newUsername,
+                current_password: data.currentPassword,
             };
             return apiClient.post<string>('/api/v1/user/change-username', payload);
         },

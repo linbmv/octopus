@@ -20,6 +20,10 @@ func init() {
 				Handle(healthCheck),
 		).
 		AddRoute(
+			router.NewRoute("/ready", http.MethodGet).
+				Handle(readinessCheck),
+		).
+		AddRoute(
 			router.NewRoute("/readiness", http.MethodGet).
 				Handle(readinessCheck),
 		).

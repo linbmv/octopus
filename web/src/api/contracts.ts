@@ -255,6 +255,7 @@ export interface UserChangePassword {
 
 export interface UserChangeUsername {
   new_username: string;
+  current_password: string;
 }
 
 export interface UserLogin {
