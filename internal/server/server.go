@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -20,7 +21,6 @@ import (
 )
 
 var httpSrv http.Server
-var serverErrCh chan error
 
 func Start() error {
 	if conf.IsDebug() {
@@ -42,23 +42,24 @@ func Start() error {
 	r.Use(middleware.StaticEmbed("/", static.StaticFS))
 
 	registerRelayRoutes(r)
-	router.RegisterAll(r)
+	if err := router.RegisterAll(r); err != nil {
+		return fmt.Errorf("register routes: %w", err)
+	}
 
 	httpSrv.Addr = fmt.Sprintf("%s:%d", conf.AppConfig.Server.Host, conf.AppConfig.Server.Port)
 	httpSrv.Handler = r
-	serverErrCh = make(chan error, 1)
+
+	// 先同步绑定端口，端口占用等错误立刻返回给启动链；
+	// 绑定成功后再交给 goroutine Serve，不再用固定 sleep 猜测启动结果。
+	ln, err := net.Listen("tcp", httpSrv.Addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", httpSrv.Addr, err)
+	}
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Errorf("http server listen and serve error: %v", err)
-			serverErrCh <- err
+		if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Errorf("http server serve error: %v", err)
 		}
 	}()
-
-	select {
-	case err := <-serverErrCh:
-		return err
-	case <-time.After(100 * time.Millisecond):
-	}
 	return nil
 }
 

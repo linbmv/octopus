@@ -96,7 +96,9 @@ func RegisterAll(engine *gin.Engine) error {
 			handlers = append(handlers, route.Middlewares...)
 			handlers = append(handlers, route.Handlers...)
 
-			registerRoute(group, route.Method, route.Path, handlers)
+			if err := registerRoute(group, route.Method, route.Path, handlers); err != nil {
+				return fmt.Errorf("register route %s %s in group %s: %w", route.Method, route.Path, router.Path, err)
+			}
 		}
 	}
 	registeredRouters = nil
@@ -104,9 +106,11 @@ func RegisterAll(engine *gin.Engine) error {
 }
 
 // registerRoute registers a single route to a Gin route group.
-func registerRoute(group *gin.RouterGroup, method string, path string, handlers []gin.HandlerFunc) {
+// 路由声明错误（空 handler、未知 HTTP method）返回 error 而非静默降级，
+// 由 RegisterAll 传播至启动入口，使其成为启动期失败。
+func registerRoute(group *gin.RouterGroup, method string, path string, handlers []gin.HandlerFunc) error {
 	if len(handlers) == 0 {
-		return
+		return fmt.Errorf("route %s has no handlers", path)
 	}
 
 	if path != "" {
@@ -131,6 +135,7 @@ func registerRoute(group *gin.RouterGroup, method string, path string, handlers 
 	case http.MethodPatch:
 		group.PATCH(path, handlers...)
 	default:
-		group.GET(path, handlers...)
+		return fmt.Errorf("unknown HTTP method %q for path %s", method, path)
 	}
+	return nil
 }

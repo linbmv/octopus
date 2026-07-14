@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,18 @@ import (
 	"testing"
 	"time"
 )
+
+// buildTestBinary 编译仓库根 main 包为临时二进制，返回其路径。
+func buildTestBinary(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "octopus-test")
+	build := exec.Command("go", "build", "-o", bin, "github.com/bestruirui/octopus")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("build test binary: %v", err)
+	}
+	return bin
+}
 
 // TestStartFailsFastOnBrokenConfig 验证 P0-2 / spec [启动] 规范：
 // 配置加载失败时，start 命令必须同步失败并以非零退出，
@@ -22,15 +36,8 @@ func TestStartFailsFastOnBrokenConfig(t *testing.T) {
 		t.Skip("skipping subprocess integration test in -short mode")
 	}
 
-	tmp := t.TempDir()
-
-	// 编译二进制（构建的是仓库根的 main 包）。
-	bin := filepath.Join(tmp, "octopus-test")
-	build := exec.Command("go", "build", "-o", bin, "github.com/bestruirui/octopus")
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		t.Fatalf("build test binary: %v", err)
-	}
+	bin := buildTestBinary(t)
+	tmp := filepath.Dir(bin)
 
 	// 写一个语法损坏的 JSON 配置，触发 conf.Load 返回 error。
 	brokenCfg := filepath.Join(tmp, "broken.json")
@@ -62,5 +69,59 @@ func TestStartFailsFastOnBrokenConfig(t *testing.T) {
 	// 错误应经由结构化日志输出（startup failed）。
 	if !strings.Contains(string(out), "startup failed") {
 		t.Errorf("expected structured 'startup failed' log in output; got:\n%s", out)
+	}
+}
+
+// TestStartFailsFastOnPortInUse 验证 P0-4 / spec [启动] 规范：
+// 端口被占用时，server.Start 的 net.Listen 应同步返回绑定错误，
+// 启动链据此非零退出，而不是靠 100ms sleep 猜测或挂起。
+func TestStartFailsFastOnPortInUse(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess integration test in -short mode")
+	}
+
+	bin := buildTestBinary(t)
+	tmp := filepath.Dir(bin)
+
+	// 抢占一个端口，让子进程绑定必失败。
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy port: %v", err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	// 写一份合法配置：host/port 指向被占端口，DB 用临时 sqlite。
+	cfg := map[string]any{
+		"server":   map[string]any{"host": "127.0.0.1", "port": port},
+		"database": map[string]any{"type": "sqlite", "path": filepath.Join(tmp, "test.db")},
+		"log":      map[string]any{"level": "info"},
+	}
+	cfgBytes, _ := json.Marshal(cfg)
+	cfgPath := filepath.Join(tmp, "config.json")
+	if err := os.WriteFile(cfgPath, cfgBytes, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "start", "--config", cfgPath)
+	cmd.Dir = tmp
+	out, err := cmd.CombinedOutput()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("start hung on port-in-use instead of exiting; output:\n%s", out)
+	}
+
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected non-zero exit on port-in-use, got err=%v; output:\n%s", err, out)
+	}
+	if exitErr.ExitCode() == 0 {
+		t.Fatalf("expected non-zero exit code, got 0; output:\n%s", out)
+	}
+	if !strings.Contains(string(out), "startup failed") {
+		t.Errorf("expected structured 'startup failed' log; got:\n%s", out)
 	}
 }
