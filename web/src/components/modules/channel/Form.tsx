@@ -95,8 +95,15 @@ export function ChannelForm({
         : [];
     const fetchModel = useFetchModel();
 
+    const fetchBaseUrls = (formData.base_urls ?? [])
+        .filter((u) => u.url.trim())
+        .map((u) => ({ ...u, url: u.url.trim(), delay: Math.max(0, Number(u.delay) || 0) }));
+    const fetchKeys = (formData.keys ?? [])
+        .filter((k) => k.channel_key.trim())
+        .map((k) => ({ enabled: k.enabled, channel_key: k.channel_key.trim() }));
     const effectiveKey =
-        formData.keys.find((k) => k.enabled && k.channel_key.trim())?.channel_key.trim() || '';
+        fetchKeys.find((k) => k.enabled && k.channel_key.trim())?.channel_key.trim() || '';
+    const canRefreshModels = fetchBaseUrls.length > 0 && Boolean(effectiveKey);
 
     const updateModels = (nextAuto: string[], nextCustom: string[]) => {
         const model = nextAuto.join(',');
@@ -106,18 +113,18 @@ export function ChannelForm({
     };
 
     const handleRefreshModels = async () => {
-        if (!formData.base_urls?.[0]?.url || !effectiveKey) return;
+        if (!canRefreshModels) return;
         fetchModel.mutate(
             {
                 type: formData.type,
-                base_urls: formData.base_urls,
-                keys: formData.keys
-                    .filter((k) => k.channel_key.trim())
-                    .map((k) => ({ enabled: k.enabled, channel_key: k.channel_key.trim() })),
+                base_urls: fetchBaseUrls,
+                keys: fetchKeys,
                 proxy: formData.proxy,
                 channel_proxy: formData.channel_proxy?.trim() || null,
                 match_regex: formData.match_regex.trim() || null,
-                custom_header: formData.custom_header?.filter((h) => h.header_key.trim()) || [],
+                custom_header: (formData.custom_header ?? [])
+                    .filter((h) => h.header_key.trim())
+                    .map((h) => ({ ...h, header_key: h.header_key.trim() })),
             },
             {
                 onSuccess: (data) => {
@@ -262,7 +269,7 @@ export function ChannelForm({
                 customModels={customModels}
                 onUpdateModels={updateModels}
                 onRefreshModels={handleRefreshModels}
-                refreshDisabled={!formData.base_urls?.[0]?.url || !effectiveKey || fetchModel.isPending}
+                refreshDisabled={!canRefreshModels || fetchModel.isPending}
                 isRefreshing={fetchModel.isPending}
             />
 

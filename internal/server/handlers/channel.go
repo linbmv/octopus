@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
@@ -11,7 +14,10 @@ import (
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
 	"github.com/bestruirui/octopus/internal/task"
+	"github.com/bestruirui/octopus/internal/utils/log"
+	"github.com/dlclark/regexp2"
 	"github.com/gin-gonic/gin"
+	"github.com/looplj/axonhub/llm"
 )
 
 func init() {
@@ -141,13 +147,137 @@ func deleteChannel(c *gin.Context) {
 	})
 	resp.Success(c, nil)
 }
+
+type fetchModelRequest struct {
+	Type          llm.APIFormat        `json:"type"`
+	BaseUrls      []model.BaseUrl      `json:"base_urls"`
+	Keys          []fetchModelKey      `json:"keys"`
+	Proxy         bool                 `json:"proxy"`
+	ChannelProxy  *string              `json:"channel_proxy"`
+	MatchRegex    *string              `json:"match_regex"`
+	CustomHeaders []model.CustomHeader `json:"custom_header"`
+}
+
+type fetchModelKey struct {
+	Enabled    *bool  `json:"enabled"`
+	ChannelKey string `json:"channel_key"`
+}
+
+func (r fetchModelRequest) toChannel() (model.Channel, error) {
+	if r.Type == "" {
+		return model.Channel{}, errors.New("channel type is required")
+	}
+
+	baseUrls := make([]model.BaseUrl, 0, len(r.BaseUrls))
+	for _, baseURL := range r.BaseUrls {
+		rawURL := strings.TrimSpace(baseURL.URL)
+		if rawURL == "" {
+			continue
+		}
+		if baseURL.Delay < 0 {
+			return model.Channel{}, errors.New("base_urls delay must be greater than or equal to 0")
+		}
+		if !isValidFetchBaseURL(rawURL) {
+			return model.Channel{}, errors.New("base_urls contains invalid URL")
+		}
+		baseUrls = append(baseUrls, model.BaseUrl{
+			URL:   rawURL,
+			Delay: baseURL.Delay,
+		})
+	}
+	if len(baseUrls) == 0 {
+		return model.Channel{}, errors.New("base_urls is required")
+	}
+
+	keys := make([]model.ChannelKey, 0, len(r.Keys))
+	hasEnabledKey := false
+	for _, key := range r.Keys {
+		channelKey := strings.TrimSpace(key.ChannelKey)
+		if channelKey == "" {
+			continue
+		}
+		enabled := true
+		if key.Enabled != nil {
+			enabled = *key.Enabled
+		}
+		if enabled {
+			hasEnabledKey = true
+		}
+		keys = append(keys, model.ChannelKey{
+			Enabled:    enabled,
+			ChannelKey: channelKey,
+		})
+	}
+	if len(keys) == 0 {
+		return model.Channel{}, errors.New("keys is required")
+	}
+	if !hasEnabledKey {
+		return model.Channel{}, errors.New("at least one enabled API key is required")
+	}
+
+	matchRegex := trimOptionalString(r.MatchRegex)
+	if matchRegex != nil {
+		if _, err := regexp2.Compile(*matchRegex, regexp2.ECMAScript); err != nil {
+			return model.Channel{}, errors.New("match_regex is invalid")
+		}
+	}
+
+	return model.Channel{
+		Name:         "fetch-model",
+		Type:         r.Type,
+		BaseUrls:     baseUrls,
+		Keys:         keys,
+		Proxy:        r.Proxy,
+		ChannelProxy: trimOptionalString(r.ChannelProxy),
+		MatchRegex:   matchRegex,
+		CustomHeader: trimCustomHeaders(r.CustomHeaders),
+	}, nil
+}
+
+func isValidFetchBaseURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	return err == nil && parsed.Scheme != "" && parsed.Host != ""
+}
+
+func trimOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func trimCustomHeaders(headers []model.CustomHeader) []model.CustomHeader {
+	result := make([]model.CustomHeader, 0, len(headers))
+	for _, header := range headers {
+		key := strings.TrimSpace(header.HeaderKey)
+		if key == "" {
+			continue
+		}
+		result = append(result, model.CustomHeader{
+			HeaderKey:   key,
+			HeaderValue: header.HeaderValue,
+		})
+	}
+	return result
+}
+
 func fetchModel(c *gin.Context) {
-	var request model.Channel
+	var request fetchModelRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
+		log.Warnf("fetch model request bind failed: %v", err)
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
-	models, err := helper.FetchModels(c.Request.Context(), request)
+	channel, err := request.toChannel()
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	models, err := helper.FetchModels(c.Request.Context(), channel)
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
