@@ -266,5 +266,6 @@ export interface UserLogin {
 export interface UserLoginResponse {
   token: string;
   expire_at: string;
+  must_change_password: boolean;
 }
 

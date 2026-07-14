@@ -3,3 +3,26 @@ build
 static/out/*
 !static/out/README.md
 .vscode
+
+# CCG workflow artifacts
+.ccg/
+.claude/plan/
+.migration-backup/
+.mindfs/
+
+# Local scripts and probes
+scripts/probe-channel/
+
+# Test artifacts
+coverage.out
+*.test
+
+# IDE and editor
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artifacts
+.DS_Store
+Thumbs.db

@@ -51,7 +51,11 @@ func login(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
 		return
 	}
-	resp.Success(c, model.UserLoginResponse{Token: token, ExpireAt: expire})
+	resp.Success(c, model.UserLoginResponse{
+		Token:              token,
+		ExpireAt:           expire,
+		MustChangePassword: op.UserMustChangePassword(),
+	})
 }
 
 func changePassword(c *gin.Context) {

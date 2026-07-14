@@ -10,4 +10,5 @@ const (
 	ErrInternalServer    = "An unexpected error occurred"
 	ErrDatabase          = "Database operation failed"
 	ErrUnauthorized      = "Authentication failed"
+	ErrPasswordChange    = "Password change required before using this resource"
 )

@@ -12,6 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// changePasswordPath 是强制改密状态下唯一放行的受保护接口。
+const changePasswordPath = "/api/v1/user/change-password"
+
 func Auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := c.GetHeader("Authorization")
@@ -22,6 +25,13 @@ func Auth() gin.HandlerFunc {
 		}
 		if !auth.VerifyJWTToken(strings.TrimPrefix(token, "Bearer ")) {
 			resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
+			c.Abort()
+			return
+		}
+		// 强制改密期间，除改密接口外的受保护接口一律拒绝，形成单一收敛点，
+		// 避免逐组挂载遗漏造成安全缺口。
+		if op.UserMustChangePassword() && c.Request.URL.Path != changePasswordPath {
+			resp.Error(c, http.StatusForbidden, resp.ErrPasswordChange)
 			c.Abort()
 			return
 		}

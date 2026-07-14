@@ -33,8 +33,8 @@ jobs:
             git checkout master
           fi
           git fetch origin dev
-          git merge origin/dev
+          git merge origin/dev --ff-only
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
-          git push origin master --force
+          git push origin master
         env:
           GITHUB_TOKEN: ${{secrets.ACTION_TOKEN}}

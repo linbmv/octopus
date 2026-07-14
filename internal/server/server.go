@@ -31,6 +31,13 @@ func Start() error {
 
 	r := gin.New()
 	r.Use(gin.CustomRecovery(func(c *gin.Context, recovered interface{}) {
+		log.Logger.Errorw("panic recovered",
+			"error", recovered,
+			"method", c.Request.Method,
+			"path", c.Request.URL.Path,
+			"client_ip", c.ClientIP(),
+			"user_agent", c.Request.UserAgent(),
+		)
 		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
 		c.Abort()
 	}))
