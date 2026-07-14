@@ -12,26 +12,25 @@ import (
 )
 
 // 登录请求体的 expire 由客户端提供，必须在服务端收敛：
-// 0 → 默认 15 分钟；-1 → 30 天"记住我"；其余负值非法，回落默认；
-// 正数按分钟签发但 clamp 到 30 天，防止已认证者自授超长凭据。
+// 0 → 默认值（配置）；-1 → 最大值（配置）；其余负值非法，回落默认；
+// 正数按分钟签发但 clamp 到最大值，防止已认证者自授超长凭据。
 // ExpiresAt 必须恒非 nil：曾因 <-1 不设过期导致对 nil NumericDate 调 Format panic。
-const (
-	defaultTokenLifetime = 15 * time.Minute
-	maxTokenLifetime     = 30 * 24 * time.Hour
-)
 
 func tokenLifetime(expiresMin int) time.Duration {
+	defaultLifetime := time.Duration(conf.AppConfig.JWT.DefaultExpiryMinutes) * time.Minute
+	maxLifetime := time.Duration(conf.AppConfig.JWT.MaxExpiryDays) * 24 * time.Hour
+
 	switch {
 	case expiresMin == -1:
-		return maxTokenLifetime
+		return maxLifetime
 	case expiresMin > 0:
 		lifetime := time.Duration(expiresMin) * time.Minute
-		if lifetime > maxTokenLifetime {
-			return maxTokenLifetime
+		if lifetime > maxLifetime {
+			return maxLifetime
 		}
 		return lifetime
 	default:
-		return defaultTokenLifetime
+		return defaultLifetime
 	}
 }
 
@@ -56,7 +55,8 @@ func GenerateJWTToken(expiresMin int) (string, string, error) {
 
 func VerifyJWTToken(token string) bool {
 	user := op.UserGet()
-	jwtToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+	claims := &jwt.RegisteredClaims{}
+	jwtToken, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
 		// 使用独立的 JWT 密钥验证
 		return []byte(user.JWTSecret), nil
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
@@ -64,13 +64,8 @@ func VerifyJWTToken(token string) bool {
 		return false
 	}
 	// 检查 token 版本：Subject 格式为 "v{version}"，不匹配则拒绝
-	claims, ok := jwtToken.Claims.(jwt.MapClaims)
-	if !ok {
-		return false
-	}
-	subject, _ := claims["sub"].(string)
 	expectedSubject := fmt.Sprintf("v%d", user.TokenVersion)
-	if subject != expectedSubject {
+	if claims.Subject != expectedSubject {
 		return false
 	}
 	return true

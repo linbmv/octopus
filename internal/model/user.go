@@ -22,18 +22,19 @@ type User struct {
 }
 
 type UserLogin struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" binding:"required,min=3,max=32"`
+	Password string `json:"password" binding:"required"`
 	Expire   int    `json:"expire"`
 }
 
 type UserChangePassword struct {
-	OldPassword string `json:"old_password"`
-	NewPassword string `json:"new_password"`
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required,min=8"`
 }
 
 type UserChangeUsername struct {
-	NewUsername string `json:"new_username"`
+	NewUsername     string `json:"new_username" binding:"required,min=3,max=32"`
+	CurrentPassword string `json:"current_password" binding:"required"`
 }
 
 type UserLoginResponse struct {

@@ -23,10 +23,16 @@ type Database struct {
 	Path string `mapstructure:"path"`
 }
 
+type JWT struct {
+	DefaultExpiryMinutes int `mapstructure:"default_expiry_minutes"`
+	MaxExpiryDays        int `mapstructure:"max_expiry_days"`
+}
+
 type Config struct {
 	Server   Server   `mapstructure:"server"`
 	Log      Log      `mapstructure:"log"`
 	Database Database `mapstructure:"database"`
+	JWT      JWT      `mapstructure:"jwt"`
 }
 
 var AppConfig Config
@@ -74,4 +80,6 @@ func setDefaults() {
 	viper.SetDefault("database.type", "sqlite")
 	viper.SetDefault("database.path", "data/data.db")
 	viper.SetDefault("log.level", "info")
+	viper.SetDefault("jwt.default_expiry_minutes", 15)
+	viper.SetDefault("jwt.max_expiry_days", 30)
 }
