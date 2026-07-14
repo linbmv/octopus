@@ -12,22 +12,25 @@ import (
 type AuditEvent string
 
 const (
-	EventUserLogin          AuditEvent = "user.login"
-	EventUserLoginFailed    AuditEvent = "user.login.failed"
-	EventUserLogout         AuditEvent = "user.logout"
-	EventPasswordChange     AuditEvent = "user.password.change"
-	EventUsernameChange     AuditEvent = "user.username.change"
-	EventChannelCreate      AuditEvent = "channel.create"
-	EventChannelUpdate      AuditEvent = "channel.update"
-	EventChannelDelete      AuditEvent = "channel.delete"
-	EventSettingsUpdate     AuditEvent = "settings.update"
-	EventTokenRevoke        AuditEvent = "token.revoke"
+	EventUserLogin            AuditEvent = "user.login"
+	EventUserLoginFailed      AuditEvent = "user.login.failed"
+	EventUserLogout           AuditEvent = "user.logout"
+	EventPasswordChange       AuditEvent = "user.password.change"
+	EventUsernameChange       AuditEvent = "user.username.change"
+	EventUsernameChangeFailed AuditEvent = "user.username.change.failed"
+	EventChannelCreate            AuditEvent = "channel.create"
+	EventChannelUpdate            AuditEvent = "channel.update"
+	EventChannelDelete            AuditEvent = "channel.delete"
+	EventSettingsUpdate           AuditEvent = "settings.update"
+	EventTokenRevoke              AuditEvent = "token.revoke"
+	EventSensitiveOperationDenied AuditEvent = "sensitive.operation.denied"
 )
 
 // AuditLog 记录用户操作审计日志
 func AuditLog(c *gin.Context, event AuditEvent, details map[string]interface{}) {
 	username, _ := c.Get("username")
 	userID, _ := c.Get("user_id")
+	requestID, _ := c.Get("request_id")
 
 	logData := map[string]interface{}{
 		"type":       "audit",
@@ -44,6 +47,9 @@ func AuditLog(c *gin.Context, event AuditEvent, details map[string]interface{}) 
 	}
 	if userID != nil {
 		logData["user_id"] = userID
+	}
+	if requestID != nil {
+		logData["request_id"] = requestID
 	}
 
 	for k, v := range details {
