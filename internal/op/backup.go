@@ -57,6 +57,9 @@ func DBExportAllStream(ctx context.Context, w io.Writer, includeLogs, includeSta
 		return err
 	}
 
+	// Users 表不导出：包含密码哈希、JWT 密钥等敏感凭据，泄露后可伪造令牌或暴力破解。
+	// 恢复时由目标实例重新初始化管理员。
+
 	if includeStats {
 		if err := streamDBDumpTable[model.StatsTotal](conn, w, &wroteField, "stats_total", "stats_total"); err != nil {
 			return err
@@ -200,6 +203,8 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 		} else {
 			res.RowsAffected["settings"] = n
 		}
+
+		// Users 表不导入：备份不包含敏感凭据，恢复后由 UserInit 重新生成管理员。
 
 		if dump.IncludeStats {
 			if n, err := createUpsertAll(tx, dump.StatsTotal, []clause.Column{{Name: "id"}}); err != nil {

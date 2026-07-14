@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -36,15 +37,17 @@ func tokenLifetime(expiresMin int) time.Duration {
 
 func GenerateJWTToken(expiresMin int) (string, string, error) {
 	now := time.Now()
+	user := op.UserGet()
 	claims := &jwt.RegisteredClaims{
 		IssuedAt:  jwt.NewNumericDate(now),
 		NotBefore: jwt.NewNumericDate(now),
 		ExpiresAt: jwt.NewNumericDate(now.Add(tokenLifetime(expiresMin))),
 		Issuer:    conf.APP_NAME,
+		// 将 token_version 编入 Subject 字段，验证时检查版本匹配
+		Subject: fmt.Sprintf("v%d", user.TokenVersion),
 	}
-	user := op.UserGet()
-	secret := user.Username + user.Password
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	// 使用独立的高熵 JWT 密钥签名，不再从 username+password 派生
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(user.JWTSecret))
 	if err != nil {
 		return "", "", err
 	}
@@ -52,12 +55,22 @@ func GenerateJWTToken(expiresMin int) (string, string, error) {
 }
 
 func VerifyJWTToken(token string) bool {
+	user := op.UserGet()
 	jwtToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		user := op.UserGet()
-		secret := user.Username + user.Password
-		return []byte(secret), nil
+		// 使用独立的 JWT 密钥验证
+		return []byte(user.JWTSecret), nil
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 	if err != nil || !jwtToken.Valid {
+		return false
+	}
+	// 检查 token 版本：Subject 格式为 "v{version}"，不匹配则拒绝
+	claims, ok := jwtToken.Claims.(jwt.MapClaims)
+	if !ok {
+		return false
+	}
+	subject, _ := claims["sub"].(string)
+	expectedSubject := fmt.Sprintf("v%d", user.TokenVersion)
+	if subject != expectedSubject {
 		return false
 	}
 	return true
