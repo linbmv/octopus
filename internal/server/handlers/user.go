@@ -43,6 +43,10 @@ func login(c *gin.Context) {
 		return
 	}
 	if err := op.UserVerify(user.Username, user.Password); err != nil {
+		middleware.AuditLog(c, middleware.EventUserLoginFailed, map[string]interface{}{
+			"username": user.Username,
+			"reason":   "invalid_credentials",
+		})
 		resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
 		return
 	}
@@ -51,6 +55,10 @@ func login(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
 		return
 	}
+	middleware.AuditLog(c, middleware.EventUserLogin, map[string]interface{}{
+		"username":   user.Username,
+		"expire_sec": user.Expire,
+	})
 	resp.Success(c, model.UserLoginResponse{
 		Token:              token,
 		ExpireAt:           expire,
@@ -64,10 +72,14 @@ func changePassword(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
+	username, _ := c.Get("username")
 	if err := op.UserChangePassword(user.OldPassword, user.NewPassword); err != nil {
 		resp.Error(c, http.StatusInternalServerError, resp.ErrDatabase)
 		return
 	}
+	middleware.AuditLog(c, middleware.EventPasswordChange, map[string]interface{}{
+		"username": username,
+	})
 	resp.Success(c, "password changed successfully")
 }
 
@@ -77,10 +89,15 @@ func changeUsername(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
+	oldUsername, _ := c.Get("username")
 	if err := op.UserChangeUsername(user.NewUsername); err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	middleware.AuditLog(c, middleware.EventUsernameChange, map[string]interface{}{
+		"old_username": oldUsername,
+		"new_username": user.NewUsername,
+	})
 	resp.Success(c, "username changed successfully")
 }
 

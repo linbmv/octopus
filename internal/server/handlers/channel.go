@@ -77,6 +77,11 @@ func createChannel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	middleware.AuditLog(c, middleware.EventChannelCreate, map[string]interface{}{
+		"channel_id":   channel.ID,
+		"channel_name": channel.Name,
+		"type":         channel.Type,
+	})
 	stats := op.StatsChannelGet(channel.ID)
 	channel.Stats = &stats
 	task.SubmitChannelMaintenance(channel)
@@ -94,6 +99,10 @@ func updateChannel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	middleware.AuditLog(c, middleware.EventChannelUpdate, map[string]interface{}{
+		"channel_id":   channel.ID,
+		"channel_name": channel.Name,
+	})
 	stats := op.StatsChannelGet(channel.ID)
 	channel.Stats = &stats
 	task.SubmitChannelMaintenance(*channel)
@@ -127,6 +136,9 @@ func deleteChannel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	middleware.AuditLog(c, middleware.EventChannelDelete, map[string]interface{}{
+		"channel_id": idNum,
+	})
 	resp.Success(c, nil)
 }
 func fetchModel(c *gin.Context) {

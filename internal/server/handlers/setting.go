@@ -63,6 +63,10 @@ func setSetting(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	middleware.AuditLog(c, middleware.EventSettingsUpdate, map[string]interface{}{
+		"key":   setting.Key,
+		"value": setting.Value,
+	})
 	switch setting.Key {
 	case model.SettingKeyModelInfoUpdateInterval:
 		hours, err := strconv.Atoi(setting.Value)
