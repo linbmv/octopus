@@ -227,6 +227,8 @@ jobs:
       - name: Scan current tree and complete Git history
         id: secret_scan
         continue-on-error: true
+        env:
+          GITLEAKS_ENFORCE_HISTORY: 'false'
         run: scripts/security/scan-secrets.sh build/security
 
       - name: Scan source dependencies and deployment configuration

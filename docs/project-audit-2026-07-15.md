@@ -221,7 +221,7 @@ Codex CLI 0.144.4 与 Claude Code 2.1.207 也都只连接本地 Octopus：
 
 源码 Trivy 同时报告 0 个 HIGH/CRITICAL 漏洞和 0 个高危 misconfiguration。六份 CycloneDX SBOM 均非空并通过 JSON/校验和验证。
 
-完整 Git 历史扫描仍有 6 个命中，全部位于提交 `479454f96d2c340ca4559b1cdc3a040ff81c9a8f` 的 README/README_zh 旧行。门禁故意 fail-closed，没有用宽泛 ignore 掩盖。
+完整 Git 历史扫描仍有 6 个命中，全部位于提交 `479454f96d2c340ca4559b1cdc3a040ff81c9a8f` 的 README/README_zh 旧行。分支质量门禁强制当前树为 0，并把完整历史报告作为 advisory artifact；正式 tag Release 仍对当前树和历史同时 fail-closed，没有用宽泛 ignore 掩盖。
 
 ## 5. P0/P1 修复落实
 

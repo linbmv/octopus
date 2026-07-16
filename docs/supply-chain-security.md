@@ -41,10 +41,13 @@ history with `--all --full-history`. Both JSON reports are fully redacted.
 
 `.gitleaksignore` contains only exact fingerprints for synthetic test fixtures
 and a documented shell-variable false positive. It does not suppress the
-credential-like findings in historical README revisions. Consequently, the
-history gate intentionally remains closed until those credentials are revoked
-and an authorized history-remediation procedure is completed. Do not add a
-blanket path, rule, or commit allowlist to make the gate green.
+credential-like findings in historical README revisions. The branch quality
+gate blocks current-tree findings and retains the complete-history report as an
+advisory artifact, so inherited history does not permanently hide new CI
+regressions. The tagged-release gate still fails closed on either current-tree
+or history findings until those credentials are revoked and an authorized
+history-remediation procedure is completed. Do not add a blanket path, rule,
+or commit allowlist to make either report appear clean.
 
 Ignored local operator/session directories are not CI inputs and must never be
 uploaded as workflow artifacts. If a local scan of such a directory finds a

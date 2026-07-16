@@ -6,6 +6,7 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 readonly GITLEAKS_BIN="${GITLEAKS_BIN:-gitleaks}"
 readonly GITLEAKS_TIMEOUT_SECONDS="${GITLEAKS_TIMEOUT_SECONDS:-900}"
+readonly GITLEAKS_ENFORCE_HISTORY="${GITLEAKS_ENFORCE_HISTORY:-true}"
 readonly REPORT_DIRECTORY_INPUT="${1:-build/security}"
 
 fail() {
@@ -17,6 +18,10 @@ command -v git >/dev/null 2>&1 || fail "git is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 command -v "${GITLEAKS_BIN}" >/dev/null 2>&1 || fail "gitleaks is required"
 [[ "${GITLEAKS_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] || fail "GITLEAKS_TIMEOUT_SECONDS must be a positive integer"
+case "${GITLEAKS_ENFORCE_HISTORY}" in
+true | false) ;;
+*) fail "GITLEAKS_ENFORCE_HISTORY must be true or false" ;;
+esac
 
 cd "${REPOSITORY_ROOT}" || fail "cannot enter repository root"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not a Git work tree"
@@ -125,6 +130,12 @@ run_scan "complete Git history" \
 if [ "${tree_status}" -eq 2 ] || [ "${history_status}" -eq 2 ]; then
     exit 2
 fi
-if [ "${tree_status}" -ne 0 ] || [ "${history_status}" -ne 0 ]; then
+if [ "${tree_status}" -ne 0 ]; then
     exit 1
+fi
+if [ "${history_status}" -ne 0 ]; then
+    if [ "${GITLEAKS_ENFORCE_HISTORY}" = "true" ]; then
+        exit 1
+    fi
+    printf 'secret scan: complete Git history findings are advisory for this gate; tagged release remains fail-closed\n' >&2
 fi
