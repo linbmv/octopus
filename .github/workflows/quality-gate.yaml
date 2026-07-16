@@ -221,7 +221,7 @@ jobs:
         env:
           GOBIN: ${{ runner.temp }}/security-tools
         run: |
-          go install "github.com/gitleaks/gitleaks/v8@${GITLEAKS_VERSION}"
+          go install "github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}"
           echo "${GOBIN}" >>"${GITHUB_PATH}"
 
       - name: Scan current tree and complete Git history
