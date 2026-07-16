@@ -9,7 +9,7 @@ import (
 	"maps"
 	"time"
 
-	"github.com/bestruirui/octopus/internal/conf"
+	observability "github.com/bestruirui/octopus/internal/metrics"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/price"
@@ -42,13 +42,16 @@ type RelayMetrics struct {
 }
 
 type OutboundRequestSummary struct {
-	RawPassthrough       bool           `json:"raw_passthrough"`
-	ParamOverrideApplied bool           `json:"param_override_applied,omitempty"`
-	BodyBytes            int            `json:"body_bytes"`
-	BodySHA256           string         `json:"body_sha256"`
-	Model                string         `json:"model,omitempty"`
-	Stream               *bool          `json:"stream,omitempty"`
-	StreamOptions        map[string]any `json:"stream_options,omitempty"`
+	RawPassthrough        bool           `json:"raw_passthrough"`
+	ParamOverrideApplied  bool           `json:"param_override_applied,omitempty"`
+	JSONRewriteApplied    bool           `json:"json_rewrite_applied,omitempty"`
+	HeaderRewriteApplied  bool           `json:"header_rewrite_applied,omitempty"`
+	RequestRewriteApplied bool           `json:"request_rewrite_applied,omitempty"`
+	BodyBytes             int            `json:"body_bytes"`
+	BodySHA256            string         `json:"body_sha256"`
+	Model                 string         `json:"model,omitempty"`
+	Stream                *bool          `json:"stream,omitempty"`
+	StreamOptions         map[string]any `json:"stream_options,omitempty"`
 }
 
 func (m *RelayMetrics) RecordUsage(usage *llm.Usage) {
@@ -79,13 +82,22 @@ func (m *RelayMetrics) RecordUsage(usage *llm.Usage) {
 	m.Stats.OutputCost = float64(usage.CompletionTokens) * modelPrice.Output * 1e-6
 }
 
-func (m *RelayMetrics) RecordOutboundRequestSummary(body []byte, rawPassthrough bool, paramOverrideApplied bool) {
+func (m *RelayMetrics) RecordOutboundRequestSummary(
+	body []byte,
+	rawPassthrough bool,
+	paramOverrideApplied bool,
+	jsonRewriteApplied bool,
+	headerRewriteApplied bool,
+) {
 	sum := sha256.Sum256(body)
 	summary := &OutboundRequestSummary{
-		RawPassthrough:       rawPassthrough,
-		ParamOverrideApplied: paramOverrideApplied,
-		BodyBytes:            len(body),
-		BodySHA256:           hex.EncodeToString(sum[:]),
+		RawPassthrough:        rawPassthrough,
+		ParamOverrideApplied:  paramOverrideApplied,
+		JSONRewriteApplied:    jsonRewriteApplied,
+		HeaderRewriteApplied:  headerRewriteApplied,
+		RequestRewriteApplied: paramOverrideApplied || jsonRewriteApplied || headerRewriteApplied,
+		BodyBytes:             len(body),
+		BodySHA256:            hex.EncodeToString(sum[:]),
 	}
 
 	var bodyMap map[string]any
@@ -97,7 +109,11 @@ func (m *RelayMetrics) RecordOutboundRequestSummary(body []byte, rawPassthrough 
 			summary.Stream = &stream
 		}
 		if streamOptions, ok := bodyMap["stream_options"].(map[string]any); ok {
-			summary.StreamOptions = streamOptions
+			// Only the protocol boolean needed to explain usage accounting is safe
+			// metadata. Never copy arbitrary extension values from a client body.
+			if includeUsage, ok := streamOptions["include_usage"].(bool); ok {
+				summary.StreamOptions = map[string]any{"include_usage": includeUsage}
+			}
 		}
 	}
 
@@ -121,27 +137,46 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 	}
 
 	channelID, channelName, finalKeyID, finalStatus := finalAttempt(attempts)
-	op.StatsTotalUpdate(globalStats)
-	op.StatsHourlyUpdate(globalStats)
-	op.StatsDailyUpdate(context.Background(), globalStats)
-	op.StatsAPIKeyUpdate(m.APIKeyID, globalStats)
+	observability.RecordRelay(success, channelID, duration)
+	statsLogger := log.WithContext(ctx)
+	if statsErr := op.StatsTotalUpdate(globalStats); statsErr != nil {
+		statsLogger.Warnw("failed to update total relay statistics", "error", statsErr)
+	}
+	if statsErr := op.StatsHourlyUpdate(globalStats); statsErr != nil {
+		statsLogger.Warnw("failed to update hourly relay statistics", "error", statsErr)
+	}
+	if statsErr := op.StatsDailyUpdate(context.Background(), globalStats); statsErr != nil {
+		statsLogger.Warnw("failed to update daily relay statistics", "error", statsErr)
+	}
+	if statsErr := op.StatsAPIKeyUpdate(m.APIKeyID, globalStats); statsErr != nil {
+		statsLogger.Warnw("failed to update API key relay statistics", "api_key_id", m.APIKeyID, "error", statsErr)
+	}
 	if channelID > 0 {
 		// 通道成功/失败和等待时间在每次 attempt 结束时已记录；这里仅把最终响应的用量成本归到实际通道，避免重复计数。
-		op.StatsChannelUpdate(channelID, model.StatsMetrics{
+		if statsErr := op.StatsChannelUpdate(channelID, model.StatsMetrics{
 			InputToken:  m.Stats.InputToken,
 			OutputToken: m.Stats.OutputToken,
 			InputCost:   m.Stats.InputCost,
 			OutputCost:  m.Stats.OutputCost,
-		})
+		}); statsErr != nil {
+			statsLogger.Warnw("failed to update channel relay statistics", "channel_id", channelID, "error", statsErr)
+		}
 	}
 
-	log.Infof(
-		"relay complete: model=%s, channel=%d(%s), final_key_id=%d, final_status=%s, "+
-			"success=%t, duration=%dms, input_token=%d, output_token=%d, input_cost=%f, "+
-			"output_cost=%f, total_cost=%f, attempts=%d",
-		m.RequestModel, channelID, channelName, finalKeyID, finalStatus,
-		success, duration.Milliseconds(), m.Stats.InputToken, m.Stats.OutputToken,
-		m.Stats.InputCost, m.Stats.OutputCost, m.Stats.InputCost+m.Stats.OutputCost, len(attempts),
+	log.WithContext(ctx).Infow("relay complete",
+		"model", m.RequestModel,
+		"channel_id", channelID,
+		"channel_name", channelName,
+		"final_key_id", finalKeyID,
+		"final_status", finalStatus,
+		"success", success,
+		"duration_ms", duration.Milliseconds(),
+		"input_token", m.Stats.InputToken,
+		"output_token", m.Stats.OutputToken,
+		"input_cost", m.Stats.InputCost,
+		"output_cost", m.Stats.OutputCost,
+		"total_cost", m.Stats.InputCost+m.Stats.OutputCost,
+		"attempts", len(attempts),
 	)
 
 	// 输出 attempts 摘要（第一阶段可观测性增强）
@@ -185,6 +220,15 @@ func finalAttempt(attempts []model.ChannelAttempt) (int, string, int, model.Atte
 }
 
 func (m *RelayMetrics) saveLog(ctx context.Context, err error, duration time.Duration, attempts []model.ChannelAttempt, channelID int, channelName string) {
+	contentMode, modeErr := op.RelayLogContentModeGet()
+	if modeErr != nil {
+		log.Warnf("failed to resolve relay log content policy: %v", modeErr)
+		return
+	}
+	if contentMode == model.RelayLogContentModeDisabled {
+		return
+	}
+
 	relayLog := model.RelayLog{
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
@@ -212,9 +256,11 @@ func (m *RelayMetrics) saveLog(ctx context.Context, err error, duration time.Dur
 		relayLog.Cost = m.Stats.InputCost + m.Stats.OutputCost
 	}
 
-	relayLog.RequestContent = truncateLogContent(m.requestContent())
-	if len(m.InternalResponse) > 0 {
-		relayLog.ResponseContent = truncateLogContent(string(m.InternalResponse))
+	if contentMode == model.RelayLogContentModeFull {
+		relayLog.RequestContent = m.requestContent()
+		if len(m.InternalResponse) > 0 {
+			relayLog.ResponseContent = string(m.InternalResponse)
+		}
 	}
 	if err != nil {
 		relayLog.Error = err.Error()
@@ -223,13 +269,6 @@ func (m *RelayMetrics) saveLog(ctx context.Context, err error, duration time.Dur
 	if logErr := op.RelayLogAdd(ctx, relayLog); logErr != nil {
 		log.Warnf("failed to save relay log: %v", logErr)
 	}
-}
-
-func truncateLogContent(content string) string {
-	if len(content) <= conf.MaxRelayLogContentBytes {
-		return content
-	}
-	return content[:conf.MaxRelayLogContentBytes] + "\n[truncated]"
 }
 
 func (m *RelayMetrics) requestContent() string {

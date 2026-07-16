@@ -8,18 +8,32 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"golang.org/x/net/proxy"
 )
 
+type customProxyClientEntry struct {
+	client   *http.Client
+	lastUsed time.Time
+}
+
+const (
+	customProxyClientTTL        = 30 * time.Minute
+	customProxyClientMaxEntries = 128
+	customProxyClientSweepEvery = 64
+)
+
 var (
-	systemDirectClient *http.Client
-	systemProxyClient  *http.Client
-	systemProxyURL     string
-	customProxyClients = make(map[string]*http.Client)
-	clientLock         sync.RWMutex
+	systemDirectClient          *http.Client
+	systemProxyClient           *http.Client
+	systemProxyURL              string
+	customProxyClients          = make(map[string]customProxyClientEntry)
+	customProxyClientNow        = time.Now
+	customProxyClientOperations uint64
+	clientLock                  sync.RWMutex
 )
 
 // GetHTTPClientSystemProxy returns a cached http.Client.
@@ -88,26 +102,115 @@ func GetHTTPClientCustomProxy(proxyURL string) (*http.Client, error) {
 		return nil, fmt.Errorf("proxy url is empty")
 	}
 
-	clientLock.RLock()
-	if client, ok := customProxyClients[proxyURL]; ok {
-		clientLock.RUnlock()
-		return client, nil
-	}
-	clientLock.RUnlock()
-
 	clientLock.Lock()
 	defer clientLock.Unlock()
+	now := customProxyClientNow()
+	customProxyClientOperations++
+	if customProxyClientOperations%customProxyClientSweepEvery == 0 {
+		sweepExpiredCustomProxyClientsLocked(now)
+	}
 
-	// 双重检查，避免并发首次创建时重复构造 Transport。
-	if client, ok := customProxyClients[proxyURL]; ok {
-		return client, nil
+	if entry, ok := customProxyClients[proxyURL]; ok {
+		if !customProxyClientExpired(entry.lastUsed, now) {
+			entry.lastUsed = now
+			customProxyClients[proxyURL] = entry
+			return entry.client, nil
+		}
+		delete(customProxyClients, proxyURL)
+		closeCustomProxyClient(entry)
 	}
 	client, err := newHTTPClientCustomProxy(proxyURL)
 	if err != nil {
 		return nil, err
 	}
-	customProxyClients[proxyURL] = client
+
+	if len(customProxyClients) >= customProxyClientMaxEntries {
+		sweepExpiredCustomProxyClientsLocked(now)
+	}
+	for len(customProxyClients) >= customProxyClientMaxEntries {
+		evictOldestCustomProxyClientLocked()
+	}
+	customProxyClients[proxyURL] = customProxyClientEntry{client: client, lastUsed: now}
 	return client, nil
+}
+
+// InvalidateCustomProxyClient removes a cached client for the supplied proxy
+// URL and closes its idle connections. Leading/trailing whitespace is ignored
+// in the same way as GetHTTPClientCustomProxy.
+func InvalidateCustomProxyClient(proxyURL string) {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		return
+	}
+
+	clientLock.Lock()
+	entry, ok := customProxyClients[proxyURL]
+	if ok {
+		delete(customProxyClients, proxyURL)
+	}
+	clientLock.Unlock()
+
+	if ok {
+		closeCustomProxyClient(entry)
+	}
+}
+
+// InvalidateAllCustomProxyClients clears all channel-specific proxy clients
+// and closes their idle connections.
+func InvalidateAllCustomProxyClients() {
+	clientLock.Lock()
+	entries := make([]customProxyClientEntry, 0, len(customProxyClients))
+	for _, entry := range customProxyClients {
+		entries = append(entries, entry)
+	}
+	customProxyClients = make(map[string]customProxyClientEntry)
+	customProxyClientOperations = 0
+	clientLock.Unlock()
+
+	for _, entry := range entries {
+		closeCustomProxyClient(entry)
+	}
+}
+
+func sweepExpiredCustomProxyClientsLocked(now time.Time) {
+	for proxyURL, entry := range customProxyClients {
+		if customProxyClientExpired(entry.lastUsed, now) {
+			delete(customProxyClients, proxyURL)
+			closeCustomProxyClient(entry)
+		}
+	}
+}
+
+func evictOldestCustomProxyClientLocked() {
+	oldestURL := ""
+	var oldest time.Time
+	found := false
+	for proxyURL, entry := range customProxyClients {
+		if !found || entry.lastUsed.Before(oldest) {
+			oldestURL = proxyURL
+			oldest = entry.lastUsed
+			found = true
+		}
+	}
+	if !found {
+		return
+	}
+	entry := customProxyClients[oldestURL]
+	delete(customProxyClients, oldestURL)
+	closeCustomProxyClient(entry)
+}
+
+func customProxyClientExpired(lastUsed, now time.Time) bool {
+	if lastUsed.IsZero() {
+		return true
+	}
+	return !now.Before(lastUsed.Add(customProxyClientTTL))
+}
+
+func closeCustomProxyClient(entry customProxyClientEntry) {
+	if entry.client != nil {
+		entry.client.CloseIdleConnections()
+	}
 }
 
 func clonedDefaultTransport() (*http.Transport, error) {
@@ -179,4 +282,10 @@ func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}
 
 	return t.base.RoundTrip(reqClone)
+}
+
+func (t *userAgentTransport) CloseIdleConnections() {
+	if closer, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
 }

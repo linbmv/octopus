@@ -23,7 +23,7 @@ func migrateChannelKeyToChannelKeys(db *gorm.DB) error {
 		return fmt.Errorf("db is nil")
 	}
 
-	dialect := db.Dialector.Name()
+	dialect := db.Name()
 
 	// column existence helper (sqlite needs exact check; gorm HasColumn may false-positive on "PRIMARY KEY")
 	hasColumn := func(table, column string) (bool, error) {
@@ -58,7 +58,7 @@ func migrateChannelKeyToChannelKeys(db *gorm.DB) error {
 		}
 
 		var quoted strings.Builder
-		db.Dialector.QuoteTo(&quoted, "key")
+		db.QuoteTo(&quoted, "key")
 		colRef := "c." + quoted.String()
 
 		insertSQL := fmt.Sprintf(`

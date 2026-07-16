@@ -30,6 +30,8 @@ export interface ChannelFormData {
     type: ChannelType;
     base_urls: Channel['base_urls'];
     custom_header: Channel['custom_header'];
+	header_rules: Channel['header_rules'];
+	json_rewrite_rules: Channel['json_rewrite_rules'];
     channel_proxy: string;
     param_override: string;
     keys: ChannelKeyFormItem[];

@@ -323,7 +323,10 @@ export function Toolbar() {
 
                 {/* 创建按钮 */}
                 <MorphingDialog>
-                    <MorphingDialogTrigger className={buttonVariants({ variant: "ghost", size: "icon", className: "rounded-xl transition-none hover:bg-transparent text-muted-foreground hover:text-foreground" })}>
+                    <MorphingDialogTrigger
+                        aria-label={t('create')}
+                        className={buttonVariants({ variant: "ghost", size: "icon", className: "rounded-xl transition-none hover:bg-transparent text-muted-foreground hover:text-foreground" })}
+                    >
                         <Plus className="size-4 transition-colors duration-300" />
                     </MorphingDialogTrigger>
 

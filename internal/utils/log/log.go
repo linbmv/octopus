@@ -21,8 +21,19 @@ var consoleEncoder = zapcore.EncoderConfig{
 }
 
 func init() {
+	Configure("info", "json")
+}
+
+func Configure(level, format string) {
+	SetLevel(level)
+	var encoder zapcore.Encoder
+	if format == "console" {
+		encoder = zapcore.NewConsoleEncoder(consoleEncoder)
+	} else {
+		encoder = zapcore.NewJSONEncoder(consoleEncoder)
+	}
 	core := zapcore.NewCore(
-		zapcore.NewConsoleEncoder(consoleEncoder),
+		encoder,
 		zapcore.AddSync(os.Stdout),
 		atomicLevel,
 	)

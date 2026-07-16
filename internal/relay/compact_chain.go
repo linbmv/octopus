@@ -22,17 +22,17 @@ func isCompactOpenAIChannel(channelType llm.APIFormat, request *llm.Request) boo
 	}
 }
 
-func (ra *relayAttempt) forwardCompact(ctx context.Context, httpClient *http.Client) (int, []byte, error) {
+func (ra *relayAttempt) forwardCompact(ctx context.Context, httpClient *http.Client) (int, http.Header, []byte, error) {
 	strategies := compactStrategyOrder(ra.channel.Type)
 	if len(strategies) == 0 {
-		return 0, nil, fmt.Errorf("channel type %s is not compatible with %s request", ra.channel.Type, llm.RequestTypeCompact)
+		return 0, nil, nil, fmt.Errorf("channel type %s is not compatible with %s request", ra.channel.Type, llm.RequestTypeCompact)
 	}
 
 	strategy := strategies[0]
 	log.Infof("compact route: channel=%s(%d), strategy=%s", ra.channel.Name, ra.channel.ID, strategy)
-	statusCode, responseBody, err := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, compactOfficialRequest(ra.internalRequest))
+	statusCode, headers, responseBody, err := ra.forwardWithAdapter(ctx, httpClient, ra.outAdapter, compactOfficialRequest(ra.internalRequest))
 	if err == nil {
 		ra.rememberCompactStrategy(ctx, strategy)
 	}
-	return statusCode, responseBody, err
+	return statusCode, headers, responseBody, err
 }

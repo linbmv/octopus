@@ -1,0 +1,11 @@
+# Exact synthetic test fixtures. These are intentionally narrow fingerprints;
+# moving either fixture causes Gitleaks to review it again.
+internal/server/middleware/logger_test.go:generic-api-key:12
+internal/op/user_init_test.go:generic-api-key:79
+internal/server/server_test.go:generic-api-key:216
+
+# Historical false positives: a redacted logger fixture and a shell variable
+# reference in documentation. No historical credential-like README findings
+# are suppressed here.
+52f8cc1c206a15152dfe22c3091c0b36a473f912:internal/server/middleware/logger_test.go:generic-api-key:12
+85c1d74bfed7d21b41661401e0f36ae37d56b807:docs/HEALTH_QUICKSTART.md:curl-auth-header:108

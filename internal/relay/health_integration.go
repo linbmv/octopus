@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,16 +32,6 @@ func InitHealthSystem(config health.HealthConfig) {
 	balancer.SetHealthWeightFunc(healthWeightForGroupItem)
 }
 
-// GetHealthManager 获取健康管理器
-func GetHealthManager() *health.HealthManager {
-	return healthManager
-}
-
-// GetHealthMetrics 获取健康指标管理器
-func GetHealthMetrics() *health.HealthMetrics {
-	return healthMetrics
-}
-
 // RefreshHealthMetrics 刷新 Prometheus 指标快照。
 func RefreshHealthMetrics() {
 	if healthMetrics == nil || healthManager == nil {
@@ -49,8 +40,10 @@ func RefreshHealthMetrics() {
 	healthMetrics.UpdateAll(healthManager)
 }
 
-// StartHealthPersistence 加载最近快照并启动周期性健康状态持久化。
-func StartHealthPersistence() error {
+func StartHealthPersistenceContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	healthPersistenceMu.Lock()
 	defer healthPersistenceMu.Unlock()
 
@@ -66,25 +59,41 @@ func StartHealthPersistence() error {
 	if persistence == nil {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := persistence.Load(); err != nil {
 		log.Warnf("failed to load health states: %v", err)
 	}
-	persistence.Start()
+	if err := persistence.StartContext(ctx); err != nil {
+		return err
+	}
 	healthPersistence = persistence
 	return nil
 }
 
-// StopHealthPersistence 停止健康状态持久化并保存最后快照。
-func StopHealthPersistence() error {
+func StopHealthPersistenceContext(ctx context.Context) error {
 	healthPersistenceMu.Lock()
 	persistence := healthPersistence
 	healthPersistence = nil
 	healthPersistenceMu.Unlock()
 
 	if persistence != nil {
-		persistence.Stop()
+		return persistence.StopContext(ctx)
 	}
 	return nil
+}
+
+type HealthPersistenceWorker struct{}
+
+func DefaultHealthPersistenceWorker() HealthPersistenceWorker { return HealthPersistenceWorker{} }
+
+func (HealthPersistenceWorker) Start(ctx context.Context) error {
+	return StartHealthPersistenceContext(ctx)
+}
+
+func (HealthPersistenceWorker) Stop(ctx context.Context) error {
+	return StopHealthPersistenceContext(ctx)
 }
 
 func healthWeightForGroupItem(item dbmodel.GroupItem) float64 {

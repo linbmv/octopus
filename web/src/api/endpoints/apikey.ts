@@ -146,7 +146,14 @@ export function useUpdateAPIKey() {
 
     return useMutation({
         mutationFn: async (data: UpdateAPIKeyRequest) => {
-            return apiClient.post<APIKey>('/api/v1/apikey/update', data);
+            return apiClient.post<APIKey>('/api/v1/apikey/update', {
+                ...data,
+                // Update is a partial DTO. Send explicit zero values when the
+                // form clears optional limits so omission means "unchanged".
+                expire_at: data.expire_at ?? 0,
+                max_cost: data.max_cost ?? 0,
+                supported_models: data.supported_models ?? '',
+            });
         },
         onSuccess: (data) => {
             logger.log('API Key 更新成功:', data);

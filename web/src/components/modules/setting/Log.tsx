@@ -2,13 +2,30 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useTranslations } from 'next-intl';
-import { ScrollText, Calendar, Trash2 } from 'lucide-react';
+import { ScrollText, Calendar, ShieldCheck, Trash2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
-import { useSettingList, useSetSetting, SettingKey } from '@/api/endpoints/setting';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+    useSettingList,
+    useSetSetting,
+    SettingKey,
+    RelayLogContentMode,
+    type RelayLogContentModeValue,
+} from '@/api/endpoints/setting';
 import { useClearLogs } from '@/api/endpoints/log';
 import { toast } from '@/components/common/Toast';
+
+const contentModeDescriptionKey = {
+    [RelayLogContentMode.Metadata]: 'log.contentMode.description.metadata',
+    [RelayLogContentMode.Full]: 'log.contentMode.description.full',
+    [RelayLogContentMode.Disabled]: 'log.contentMode.description.disabled',
+} as const satisfies Record<RelayLogContentModeValue, string>;
+
+function isRelayLogContentMode(value: string): value is RelayLogContentModeValue {
+    return Object.values(RelayLogContentMode).some(mode => mode === value);
+}
 
 export function SettingLog() {
     const t = useTranslations('setting');
@@ -18,15 +35,18 @@ export function SettingLog() {
 
     const [enabled, setEnabled] = useState(true);
     const [keepPeriod, setKeepPeriod] = useState('7');
+    const [contentMode, setContentMode] = useState<RelayLogContentModeValue>(RelayLogContentMode.Metadata);
     const [isClearing, setIsClearing] = useState(false);
 
     const initialEnabled = useRef(true);
     const initialKeepPeriod = useRef('7');
+    const initialContentMode = useRef<RelayLogContentModeValue>(RelayLogContentMode.Metadata);
 
     useEffect(() => {
         if (settings) {
             const enabledSetting = settings.find(s => s.key === SettingKey.RelayLogKeepEnabled);
             const periodSetting = settings.find(s => s.key === SettingKey.RelayLogKeepPeriod);
+            const contentModeSetting = settings.find(s => s.key === SettingKey.RelayLogContentMode);
             if (enabledSetting) {
                 const isEnabled = enabledSetting.value === 'true';
                 queueMicrotask(() => setEnabled(isEnabled));
@@ -35,6 +55,11 @@ export function SettingLog() {
             if (periodSetting) {
                 queueMicrotask(() => setKeepPeriod(periodSetting.value));
                 initialKeepPeriod.current = periodSetting.value;
+            }
+            if (contentModeSetting && isRelayLogContentMode(contentModeSetting.value)) {
+                const loadedMode = contentModeSetting.value;
+                queueMicrotask(() => setContentMode(loadedMode));
+                initialContentMode.current = loadedMode;
             }
         }
     }, [settings]);
@@ -48,6 +73,26 @@ export function SettingLog() {
                     toast.success(t('saved'));
                     initialEnabled.current = checked;
                 }
+            }
+        );
+    };
+
+    const handleContentModeChange = (value: string) => {
+        if (!isRelayLogContentMode(value)) return;
+
+        const previous = initialContentMode.current;
+        setContentMode(value);
+        setSetting.mutate(
+            { key: SettingKey.RelayLogContentMode, value },
+            {
+                onSuccess: () => {
+                    toast.success(t('saved'));
+                    initialContentMode.current = value;
+                },
+                onError: () => {
+                    setContentMode(previous);
+                    toast.error(t('log.contentMode.saveFailed'));
+                },
             }
         );
     };
@@ -86,6 +131,35 @@ export function SettingLog() {
                 <ScrollText className="h-5 w-5" />
                 {t('log.title')}
             </h2>
+
+            {/* 新日志的内容采集策略；全文必须由管理员明确选择。 */}
+            <div className="space-y-2">
+                <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                        <ShieldCheck className="h-5 w-5 text-muted-foreground" />
+                        <span className="text-sm font-medium">{t('log.contentMode.label')}</span>
+                    </div>
+                    <Select value={contentMode} onValueChange={handleContentModeChange}>
+                        <SelectTrigger className="w-48 rounded-xl">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl">
+                            <SelectItem value={RelayLogContentMode.Metadata} className="rounded-xl">
+                                {t('log.contentMode.option.metadata')}
+                            </SelectItem>
+                            <SelectItem value={RelayLogContentMode.Full} className="rounded-xl">
+                                {t('log.contentMode.option.full')}
+                            </SelectItem>
+                            <SelectItem value={RelayLogContentMode.Disabled} className="rounded-xl">
+                                {t('log.contentMode.option.disabled')}
+                            </SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                <p className={contentMode === RelayLogContentMode.Full ? 'text-xs text-amber-600 dark:text-amber-400' : 'text-xs text-muted-foreground'}>
+                    {t(contentModeDescriptionKey[contentMode])}
+                </p>
+            </div>
 
             {/* 是否启用历史日志 */}
             <div className="flex items-center justify-between gap-4">
@@ -135,4 +209,3 @@ export function SettingLog() {
         </div>
     );
 }
-

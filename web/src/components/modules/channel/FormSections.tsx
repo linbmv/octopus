@@ -1,5 +1,6 @@
 import { X, Plus, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { isProtectedAuthenticationHeader } from './request-rewrite';
 import { useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -315,7 +316,9 @@ export function CustomHeadersSection({
                             value={h.header_key}
                             onChange={(e) => onUpdate(idx, { header_key: e.target.value })}
                             placeholder={t('customHeaderKey')}
-                            className="rounded-xl flex-1"
+							aria-invalid={isProtectedAuthenticationHeader(h.header_key)}
+							title={isProtectedAuthenticationHeader(h.header_key) ? t('protectedHeaderHint') : undefined}
+							className="rounded-xl flex-1 aria-invalid:border-destructive"
                         />
                         <Input
                             type="text"

@@ -33,7 +33,7 @@ func redactSensitiveQuery(path string) string {
 	changed := false
 	for name := range values {
 		switch strings.ToLower(name) {
-		case "key", "token":
+		case "key", "token", "password", "passphrase", "secret", "api_key", "authorization":
 			values.Set(name, "REDACTED")
 			changed = true
 		}

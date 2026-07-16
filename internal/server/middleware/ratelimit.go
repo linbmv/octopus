@@ -11,11 +11,12 @@ import (
 
 // RateLimiter 实现简单的滑动窗口速率限制
 type RateLimiter struct {
-	mu       sync.RWMutex
-	buckets  map[string]*bucket
-	limit    int
-	window   time.Duration
-	cleanTTL time.Duration
+	mu        sync.RWMutex
+	buckets   map[string]*bucket
+	limit     int
+	window    time.Duration
+	cleanTTL  time.Duration
+	lastClean time.Time
 }
 
 type bucket struct {
@@ -28,12 +29,12 @@ type bucket struct {
 // window: 时间窗口大小
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
-		buckets:  make(map[string]*bucket),
-		limit:    limit,
-		window:   window,
-		cleanTTL: window * 10,
+		buckets:   make(map[string]*bucket),
+		limit:     limit,
+		window:    window,
+		cleanTTL:  window * 10,
+		lastClean: time.Now(),
 	}
-	go rl.cleanup()
 	return rl
 }
 
@@ -43,6 +44,7 @@ func (rl *RateLimiter) Allow(key string) bool {
 	defer rl.mu.Unlock()
 
 	now := time.Now()
+	rl.cleanupLocked(now)
 	b, exists := rl.buckets[key]
 	if !exists {
 		rl.buckets[key] = &bucket{
@@ -70,21 +72,18 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return true
 }
 
-// cleanup 定期清理过期桶
-func (rl *RateLimiter) cleanup() {
-	ticker := time.NewTicker(rl.window)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for key, b := range rl.buckets {
-			if now.Sub(b.lastSeen) > rl.cleanTTL {
-				delete(rl.buckets, key)
-			}
-		}
-		rl.mu.Unlock()
+// cleanupLocked performs bounded opportunistic cleanup on request traffic.
+// This avoids a permanent goroutine created from route-registration init().
+func (rl *RateLimiter) cleanupLocked(now time.Time) {
+	if now.Sub(rl.lastClean) < rl.window {
+		return
 	}
+	for key, b := range rl.buckets {
+		if now.Sub(b.lastSeen) > rl.cleanTTL {
+			delete(rl.buckets, key)
+		}
+	}
+	rl.lastClean = now
 }
 
 // RateLimit 返回基于 IP 的速率限制中间件

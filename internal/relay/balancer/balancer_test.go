@@ -7,9 +7,7 @@ import (
 )
 
 func resetSmoothWeightedState() {
-	smoothWeightedState.mu.Lock()
-	defer smoothWeightedState.mu.Unlock()
-	smoothWeightedState.groups = make(map[string]map[string]int)
+	smoothWeightedState.clear()
 	SetHealthWeightFunc(nil)
 }
 
@@ -61,6 +59,57 @@ func TestWeightedCandidatesAppliesHealthWeight(t *testing.T) {
 
 	if counts[1] != 1 || counts[2] != 10 {
 		t.Fatalf("selection counts = %#v, want health-adjusted 1:10 distribution", counts)
+	}
+}
+
+func TestWeightedCandidatesDoesNotApplyHealthWithoutCallback(t *testing.T) {
+	resetSmoothWeightedState()
+	defer resetSmoothWeightedState()
+
+	items := []model.GroupItem{
+		{ID: 1, ChannelID: 1, ModelName: "a", Weight: 1},
+		{ID: 2, ChannelID: 2, ModelName: "b", Weight: 1},
+	}
+	counts := map[int]int{}
+	for range 4 {
+		counts[(&Weighted{}).Candidates(items)[0].ChannelID]++
+	}
+	if counts[1] != 2 || counts[2] != 2 {
+		t.Fatalf("selection counts = %#v, want unchanged equal weights", counts)
+	}
+}
+
+func TestFailoverHealthOnlyReordersSamePriority(t *testing.T) {
+	resetSmoothWeightedState()
+	defer resetSmoothWeightedState()
+	SetHealthWeightFunc(func(item model.GroupItem) float64 {
+		return map[int]float64{1: 0.1, 2: 0.2, 3: 0.9}[item.ChannelID]
+	})
+
+	items := []model.GroupItem{
+		{ID: 1, ChannelID: 1, Priority: 0},
+		{ID: 2, ChannelID: 2, Priority: 1},
+		{ID: 3, ChannelID: 3, Priority: 1},
+	}
+	got := (&Failover{}).Candidates(items)
+	if got[0].ChannelID != 1 {
+		t.Fatalf("first channel = %d, health must not override failover priority", got[0].ChannelID)
+	}
+	if got[1].ChannelID != 3 || got[2].ChannelID != 2 {
+		t.Fatalf("same-priority order = [%d %d], want healthier channel first", got[1].ChannelID, got[2].ChannelID)
+	}
+}
+
+func TestFailoverKeepsStableOrderWithoutHealthCallback(t *testing.T) {
+	resetSmoothWeightedState()
+	defer resetSmoothWeightedState()
+	items := []model.GroupItem{
+		{ID: 2, ChannelID: 2, Priority: 1},
+		{ID: 1, ChannelID: 1, Priority: 1},
+	}
+	got := (&Failover{}).Candidates(items)
+	if got[0].ChannelID != 2 || got[1].ChannelID != 1 {
+		t.Fatalf("order = [%d %d], want stable input order while health is disabled", got[0].ChannelID, got[1].ChannelID)
 	}
 }
 

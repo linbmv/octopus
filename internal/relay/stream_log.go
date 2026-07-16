@@ -16,6 +16,7 @@ type streamLogCollector struct {
 	eventBytes    int
 	truncatedBody []byte
 	usage         *llm.Usage
+	completed     bool
 }
 
 func newStreamLogCollector() *streamLogCollector {
@@ -25,7 +26,13 @@ func newStreamLogCollector() *streamLogCollector {
 }
 
 func (c *streamLogCollector) Add(event *httpclient.StreamEvent) {
-	if event == nil || len(event.Data) == 0 {
+	if event == nil {
+		return
+	}
+	if isSuccessfulTerminalStreamEvent(event) {
+		c.completed = true
+	}
+	if len(event.Data) == 0 {
 		return
 	}
 	if usage := streamEventUsage(event.Data); usage != nil {
@@ -67,6 +74,26 @@ func (c *streamLogCollector) TruncatedBody() []byte {
 
 func (c *streamLogCollector) Usage() *llm.Usage {
 	return c.usage
+}
+
+func (c *streamLogCollector) Completed() bool {
+	return c.completed
+}
+
+// isSuccessfulTerminalStreamEvent identifies protocol-level completion markers.
+// A client may close the SSE connection immediately after receiving one of these
+// events; that cancellation must not turn an already completed response into a
+// client_canceled attempt or discard its final usage.
+func isSuccessfulTerminalStreamEvent(event *httpclient.StreamEvent) bool {
+	if event == nil {
+		return false
+	}
+	return bytes.Equal(event.Data, llm.DoneStreamEvent.Data) ||
+		event.Type == "response.completed" ||
+		event.Type == "message_stop" ||
+		event.Type == "speech.audio.done" ||
+		event.Type == "transcript.text.done" ||
+		event.Type == httpclient.BinaryStreamDoneEventType
 }
 
 func (c *streamLogCollector) buildTruncatedBody(current []byte) []byte {

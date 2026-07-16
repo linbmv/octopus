@@ -22,6 +22,7 @@ type runtimeURLLatency struct {
 type runtimeURLCooldown struct {
 	Until            time.Time
 	ConsecutiveFails int
+	LastTouched      time.Time
 }
 
 type runtimeURLCandidate struct {
@@ -39,8 +40,18 @@ type runtimeURLSelector struct {
 	alpha        float64
 	cooldownBase time.Duration
 	cooldownMax  time.Duration
+	stateTTL     time.Duration
+	maxEntries   int
+	sweepEvery   uint64
+	writeCount   uint64
 	now          func() time.Time
 }
+
+const (
+	runtimeURLStateTTL        = 24 * time.Hour
+	runtimeURLStateMaxEntries = 4096
+	runtimeURLStateSweepEvery = 64
+)
 
 func newRuntimeURLSelector() *runtimeURLSelector {
 	return &runtimeURLSelector{
@@ -49,6 +60,9 @@ func newRuntimeURLSelector() *runtimeURLSelector {
 		alpha:        0.3,
 		cooldownBase: 2 * time.Minute,
 		cooldownMax:  30 * time.Minute,
+		stateTTL:     runtimeURLStateTTL,
+		maxEntries:   runtimeURLStateMaxEntries,
+		sweepEvery:   runtimeURLStateSweepEvery,
 		now:          time.Now,
 	}
 }
@@ -70,6 +84,13 @@ func recordRuntimeURLFailure(channelID int, baseURL string) {
 	globalRuntimeURLSelector.RecordFailure(channelID, baseURL)
 }
 
+// InvalidateRuntimeURLState removes cached latency and cooldown state for a
+// channel. Channel update/delete handlers should call it after the persistent
+// change succeeds so stale URLs cannot influence subsequent routing.
+func InvalidateRuntimeURLState(channelID int) {
+	globalRuntimeURLSelector.InvalidateChannel(channelID)
+}
+
 func (s *runtimeURLSelector) Select(channelID int, baseURLs []model.BaseUrl) string {
 	urls := compactBaseURLs(baseURLs)
 	if len(urls) == 0 {
@@ -87,11 +108,13 @@ func (s *runtimeURLSelector) Select(channelID int, baseURLs []model.BaseUrl) str
 	for _, url := range urls {
 		key := runtimeURLKey{ChannelID: channelID, URL: url}
 		item := runtimeURLCandidate{URL: url}
-		if latency, ok := s.latencies[key]; ok {
+		if latency, ok := s.latencies[key]; ok && !runtimeURLStateExpired(latency.LastSeen, now, s.stateTTL) {
 			item.Latency = latency.ValueMS
 			item.Known = true
 		}
-		if cooldown, ok := s.cooldowns[key]; ok && now.Before(cooldown.Until) {
+		if cooldown, ok := s.cooldowns[key]; ok &&
+			!runtimeURLStateExpired(cooldown.LastTouched, now, s.stateTTL) &&
+			now.Before(cooldown.Until) {
 			item.Cooled = true
 			item.Until = cooldown.Until
 		}
@@ -139,12 +162,13 @@ func (s *runtimeURLSelector) RecordSuccess(channelID int, baseURL string, durati
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.prepareWriteLocked(now)
 
-	if current, ok := s.latencies[key]; ok {
+	if current, ok := s.latencies[key]; ok && !runtimeURLStateExpired(current.LastSeen, now, s.stateTTL) {
 		current.ValueMS = s.alpha*ms + (1-s.alpha)*current.ValueMS
 		current.LastSeen = now
 		s.latencies[key] = current
-	} else {
+	} else if s.makeLatencyRoomLocked(key, now) {
 		s.latencies[key] = runtimeURLLatency{ValueMS: ms, LastSeen: now}
 	}
 	delete(s.cooldowns, key)
@@ -159,15 +183,133 @@ func (s *runtimeURLSelector) RecordFailure(channelID int, baseURL string) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.prepareWriteLocked(now)
 
 	cooldown := s.cooldowns[key]
+	if runtimeURLStateExpired(cooldown.LastTouched, now, s.stateTTL) {
+		cooldown = runtimeURLCooldown{}
+	}
 	cooldown.ConsecutiveFails++
 	duration := s.cooldownBase * time.Duration(1<<min(cooldown.ConsecutiveFails-1, 20))
 	if duration > s.cooldownMax {
 		duration = s.cooldownMax
 	}
 	cooldown.Until = now.Add(duration)
-	s.cooldowns[key] = cooldown
+	cooldown.LastTouched = now
+	if s.makeCooldownRoomLocked(key, now) {
+		s.cooldowns[key] = cooldown
+	}
+}
+
+func (s *runtimeURLSelector) InvalidateChannel(channelID int) {
+	if channelID <= 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for key := range s.latencies {
+		if key.ChannelID == channelID {
+			delete(s.latencies, key)
+		}
+	}
+	for key := range s.cooldowns {
+		if key.ChannelID == channelID {
+			delete(s.cooldowns, key)
+		}
+	}
+}
+
+func (s *runtimeURLSelector) prepareWriteLocked(now time.Time) {
+	s.writeCount++
+	if s.sweepEvery > 0 && s.writeCount%s.sweepEvery == 0 {
+		s.sweepExpiredLocked(now)
+	}
+}
+
+func (s *runtimeURLSelector) makeLatencyRoomLocked(key runtimeURLKey, now time.Time) bool {
+	if s.maxEntries <= 0 {
+		return false
+	}
+	if _, exists := s.latencies[key]; exists {
+		return true
+	}
+	if len(s.latencies) >= s.maxEntries {
+		s.sweepExpiredLocked(now)
+	}
+	for len(s.latencies) >= s.maxEntries {
+		s.evictOldestLatencyLocked()
+	}
+	return true
+}
+
+func (s *runtimeURLSelector) makeCooldownRoomLocked(key runtimeURLKey, now time.Time) bool {
+	if s.maxEntries <= 0 {
+		return false
+	}
+	if _, exists := s.cooldowns[key]; exists {
+		return true
+	}
+	if len(s.cooldowns) >= s.maxEntries {
+		s.sweepExpiredLocked(now)
+	}
+	for len(s.cooldowns) >= s.maxEntries {
+		s.evictOldestCooldownLocked()
+	}
+	return true
+}
+
+func (s *runtimeURLSelector) sweepExpiredLocked(now time.Time) {
+	for key, latency := range s.latencies {
+		if runtimeURLStateExpired(latency.LastSeen, now, s.stateTTL) {
+			delete(s.latencies, key)
+		}
+	}
+	for key, cooldown := range s.cooldowns {
+		if runtimeURLStateExpired(cooldown.LastTouched, now, s.stateTTL) {
+			delete(s.cooldowns, key)
+		}
+	}
+}
+
+func (s *runtimeURLSelector) evictOldestLatencyLocked() {
+	var oldestKey runtimeURLKey
+	var oldest time.Time
+	found := false
+	for key, latency := range s.latencies {
+		if !found || latency.LastSeen.Before(oldest) {
+			oldestKey = key
+			oldest = latency.LastSeen
+			found = true
+		}
+	}
+	if found {
+		delete(s.latencies, oldestKey)
+	}
+}
+
+func (s *runtimeURLSelector) evictOldestCooldownLocked() {
+	var oldestKey runtimeURLKey
+	var oldest time.Time
+	found := false
+	for key, cooldown := range s.cooldowns {
+		if !found || cooldown.LastTouched.Before(oldest) {
+			oldestKey = key
+			oldest = cooldown.LastTouched
+			found = true
+		}
+	}
+	if found {
+		delete(s.cooldowns, oldestKey)
+	}
+}
+
+func runtimeURLStateExpired(lastTouched, now time.Time, ttl time.Duration) bool {
+	if lastTouched.IsZero() {
+		return true
+	}
+	return ttl > 0 && !now.Before(lastTouched.Add(ttl))
 }
 
 func compactBaseURLs(baseURLs []model.BaseUrl) []string {

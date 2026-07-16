@@ -25,6 +25,7 @@ type relayPipelineMiddleware struct {
 	pipeline.DummyMiddleware
 	attempt              *relayAttempt
 	upstreamStatusCode   int
+	upstreamHeaders      http.Header
 	upstreamResponseBody []byte
 }
 
@@ -55,6 +56,7 @@ func (m *relayPipelineMiddleware) OnOutboundRawError(ctx context.Context, err er
 	if errors.As(err, &upstreamErr) {
 		// pipeline 会把上游错误转换成统一错误返回；这里在转换前记录原始 HTTP 状态码和响应体，用于渠道 key 的后续调度决策。
 		m.upstreamStatusCode = upstreamErr.StatusCode
+		m.upstreamHeaders = upstreamErr.Headers.Clone()
 		// 保存响应体用于智能错误分类（如 503 + model_not_found）
 		m.upstreamResponseBody = upstreamErr.Body
 	}

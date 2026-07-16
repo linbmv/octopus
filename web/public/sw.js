@@ -8,7 +8,7 @@
  * - FONT cache is version-independent (fonts persist across updates)
  */
 const CACHE_PREFIX = 'octopus';
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAMES = {
     static: `${CACHE_PREFIX}-static-${CACHE_VERSION}`,
     app: `${CACHE_PREFIX}-app-${CACHE_VERSION}`,
@@ -24,6 +24,23 @@ const SW_MESSAGE_TYPE = {
 
 // Precache (PWA essentials)
 const PRECACHE_URLS = ['/', '/manifest.json', '/web-app-manifest-192x192.png', '/web-app-manifest-512x512.png', '/logo-dark.svg'];
+
+const NETWORK_ONLY_PREFIXES = ['/api', '/v1', '/v1beta'];
+const NETWORK_ONLY_PATHS = new Set(['/health', '/ready', '/readiness', '/liveness', '/metrics']);
+
+function pathMatchesPrefix(pathname, prefix) {
+    return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function isNetworkOnlyPath(pathname) {
+    return NETWORK_ONLY_PATHS.has(pathname) || NETWORK_ONLY_PREFIXES.some((prefix) => pathMatchesPrefix(pathname, prefix));
+}
+
+function isExplicitStaticAsset(pathname) {
+    if (pathname === '/manifest.json') return true;
+    if (pathname.startsWith('/locale/') && pathname.endsWith('.json')) return true;
+    return /\.(?:avif|bmp|css|gif|ico|jpe?g|js|map|png|svg|webmanifest|webp|woff2?|ttf)$/i.test(pathname);
+}
 
 // ============ 安装事件 ============
 self.addEventListener('install', (event) => {
@@ -62,8 +79,15 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // 跳过 API 请求和开发环境 HMR
-    if (url.pathname.startsWith('/api/') || url.pathname.includes('webpack-hmr')) {
+    // API、鉴权相关模型目录和健康/观测端点必须始终直连网络。尤其不能把
+    // 按 Authorization/x-api-key 过滤的 /v1/models 响应放进共享 Cache Storage。
+    if (isNetworkOnlyPath(url.pathname) || url.pathname.includes('webpack-hmr')) {
+        return;
+    }
+
+    // 页面导航：Network First，离线时仅返回静态 app shell。
+    if (request.mode === 'navigate') {
+        event.respondWith(networkFirst(request, CACHE_NAMES.app, { fallbackUrl: '/' }));
         return;
     }
 
@@ -79,20 +103,11 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // /_next/data/ (预取数据)：Network First
-    if (url.pathname.startsWith('/_next/data/')) {
-        event.respondWith(networkFirst(request, CACHE_NAMES.app));
-        return;
+    // 仅明确的静态资源进入 Cache Storage。未知 GET 路径以及未来的动态
+    // Next data/API 路径保持浏览器默认 network-only，避免新增接口被意外缓存。
+    if (isExplicitStaticAsset(url.pathname)) {
+        event.respondWith(staleWhileRevalidate(request, CACHE_NAMES.app));
     }
-
-    // 页面导航：Network First，离线时返回缓存
-    if (request.mode === 'navigate') {
-        event.respondWith(networkFirst(request, CACHE_NAMES.app, { fallbackUrl: '/' }));
-        return;
-    }
-
-    // 其他静态资源（public 目录）：Stale While Revalidate
-    event.respondWith(staleWhileRevalidate(request, CACHE_NAMES.app));
 });
 
 // ============ 缓存策略 ============

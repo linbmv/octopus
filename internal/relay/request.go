@@ -9,14 +9,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/conf"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/resp"
+	"github.com/bestruirui/octopus/internal/tracing"
+	"github.com/bestruirui/octopus/internal/utils/bodylimit"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/transformer"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+)
+
+var (
+	errNonStreamRequestTimeout         = errors.New("non-streaming upstream request timed out")
+	errRelayRequestBodyTooLarge        = errors.New("relay request body too large")
+	errRelayContentEncodingUnsupported = errors.New("relay request content encoding is unsupported")
 )
 
 // Handler 返回处理入站请求并转发到上游服务的 Gin handler。
@@ -27,8 +38,38 @@ func Handler(inboundType llm.APIFormat) gin.HandlerFunc {
 		if err != nil {
 			return
 		}
+		requestCtx, cancel := newRelayRequestContext(
+			c.Request.Context(),
+			run.internalRequest,
+			conf.Current().Relay.NonStreamTimeoutSeconds,
+		)
+		defer cancel()
+		ctx, span := tracing.Tracer().Start(requestCtx, "relay.request")
+		defer span.End()
+		span.SetAttributes(
+			attribute.String("gen_ai.request.model", run.internalRequest.Model),
+			attribute.String("gen_ai.operation.name", string(inboundType)),
+		)
+		c.Request = c.Request.WithContext(ctx)
 		run.run()
+		if c.Writer.Status() >= http.StatusInternalServerError {
+			span.SetStatus(codes.Error, http.StatusText(c.Writer.Status()))
+		}
 	}
+}
+
+// newRelayRequestContext applies one deadline to the entire non-streaming
+// upstream lifecycle. Keeping it outside individual attempts prevents every
+// retry/key/channel from receiving a fresh budget. Streaming requests retain
+// their phase-specific connection/first-token/idle guards instead.
+func newRelayRequestContext(parent context.Context, request *llm.Request, timeoutSeconds int) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if timeoutSeconds <= 0 || request == nil || (request.Stream != nil && *request.Stream) {
+		return parent, func() {}
+	}
+	return context.WithTimeoutCause(parent, time.Duration(timeoutSeconds)*time.Second, errNonStreamRequestTimeout)
 }
 
 func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transformer.Inbound) (*relayRun, error) {
@@ -52,10 +93,11 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 	}
 
 	apiKeyID := c.GetInt("api_key_id")
-	iter := newRelayIterator(group, apiKeyID, internalRequest, c.Request.Context())
+	selectedBaseURLs := make(map[int]string)
+	iter := newRelayIteratorWithBaseURLs(group, apiKeyID, internalRequest, c.Request.Context(), selectedBaseURLs)
 	if iter.Len() == 0 {
 		err := errors.New("no available channel")
-		resp.Error(c, http.StatusServiceUnavailable, err.Error())
+		respondRelayError(c, http.StatusServiceUnavailable, err)
 		return nil, err
 	}
 
@@ -70,25 +112,76 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 			StartTime:       time.Now(),
 			InternalRequest: internalRequest,
 		},
-		iter:        iter,
-		iterStack:   []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
-		iterHistory: []*balancer.Iterator{iter},
-		group:       group,
+		iter:             iter,
+		iterStack:        []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:      []*balancer.Iterator{iter},
+		group:            group,
+		selectedBaseURLs: selectedBaseURLs,
 	}, nil
 }
 
 func newRelayIterator(group dbmodel.Group, apiKeyID int, request *llm.Request, ctx context.Context) *balancer.Iterator {
+	return newRelayIteratorWithBaseURLs(group, apiKeyID, request, ctx, make(map[int]string))
+}
+
+func newRelayIteratorWithBaseURLs(
+	group dbmodel.Group,
+	apiKeyID int,
+	request *llm.Request,
+	ctx context.Context,
+	selectedBaseURLs map[int]string,
+) *balancer.Iterator {
 	candidates := nestedFallbackCandidates(group)
 	if request == nil || request.RequestType != llm.RequestTypeCompact {
 		requestModel := ""
 		if request != nil {
 			requestModel = request.Model
 		}
-		return balancer.NewIteratorFromCandidates(group, apiKeyID, requestModel, candidates, nil)
+		ranks := capabilityCandidateRanks(candidates, request, ctx, selectedBaseURLs)
+		return balancer.NewIteratorFromCandidates(group, apiKeyID, requestModel, candidates, ranks)
 	}
 	group.Items = candidates
 	ranks := compactCandidateRanks(group, ctx)
 	return balancer.NewIteratorFromCandidates(group, apiKeyID, request.Model, candidates, ranks)
+}
+
+func capabilityCandidateRanks(
+	candidates []dbmodel.GroupItem,
+	request *llm.Request,
+	ctx context.Context,
+	selectedBaseURLs map[int]string,
+) map[int]int {
+	if request == nil {
+		return nil
+	}
+	required := dbmodel.RequiredCapabilities(request)
+	ranks := make(map[int]int, len(candidates))
+	for _, item := range candidates {
+		if item.ID == 0 || item.ChannelID == 0 || item.Type == dbmodel.GroupItemTypeGroup {
+			continue
+		}
+		channel, err := op.ChannelGet(item.ChannelID, ctx)
+		if err != nil {
+			continue
+		}
+		endpoint := selectedBaseURLForChannel(channel, selectedBaseURLs)
+		ranks[item.ID] = op.CapabilityChannelRank(ctx, channel, item.ModelName, required, endpoint)
+	}
+	return ranks
+}
+
+func selectedBaseURLForChannel(channel *dbmodel.Channel, selected map[int]string) string {
+	if channel == nil {
+		return ""
+	}
+	if endpoint, ok := selected[channel.ID]; ok {
+		return endpoint
+	}
+	endpoint := selectRuntimeBaseURL(channel)
+	if selected != nil {
+		selected[channel.ID] = endpoint
+	}
+	return endpoint
 }
 
 // nestedFallbackCandidates returns group items ordered with direct channels before nested groups.
@@ -168,9 +261,17 @@ func parseRequest(c *gin.Context, inboundType llm.APIFormat, inAdapter transform
 		return nil, err
 	}
 
-	httpRequest, err := httpclient.ReadHTTPRequest(c.Request)
+	httpRequest, err := readRelayHTTPRequest(c, inboundType)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, errRelayRequestBodyTooLarge) {
+			resp.ErrorWithCode(c, http.StatusRequestEntityTooLarge, "REQUEST_BODY_TOO_LARGE", "request body too large")
+			return nil, err
+		}
+		if errors.Is(err, errRelayContentEncodingUnsupported) {
+			resp.ErrorWithCode(c, http.StatusUnsupportedMediaType, "REQUEST_CONTENT_ENCODING_UNSUPPORTED", "compressed request bodies are not supported")
+			return nil, err
+		}
+		resp.Error(c, http.StatusBadRequest, "failed to read request body")
 		return nil, err
 	}
 
@@ -188,4 +289,53 @@ func parseRequest(c *gin.Context, inboundType llm.APIFormat, inAdapter transform
 	}
 
 	return internalRequest, nil
+}
+
+func readRelayHTTPRequest(c *gin.Context, inboundType llm.APIFormat) (*httpclient.Request, error) {
+	if c == nil || c.Request == nil {
+		return nil, errors.New("HTTP request is missing")
+	}
+	encoding := strings.TrimSpace(c.GetHeader("Content-Encoding"))
+	if encoding != "" && !strings.EqualFold(encoding, "identity") {
+		return nil, fmt.Errorf("%w: %s", errRelayContentEncodingUnsupported, encoding)
+	}
+
+	config := conf.Current().Relay
+	maxBytes := config.MaxJSONRequestBytes
+	if inboundType == llm.APIFormatOpenAIImageEdit || inboundType == llm.APIFormatOpenAIImageVariation {
+		maxBytes = config.MaxImageRequestBytes
+	}
+	if maxBytes <= 0 || c.Request.ContentLength > maxBytes {
+		return nil, errRelayRequestBodyTooLarge
+	}
+	body, buffered := bodylimit.BufferedBody(c.Request.Context())
+	if buffered {
+		if int64(len(body)) > maxBytes {
+			return nil, errRelayRequestBodyTooLarge
+		}
+	} else {
+		var err error
+		body, err = bodylimit.ReadAll(c.Request.Body, maxBytes)
+		if err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.Is(err, bodylimit.ErrTooLarge) || errors.As(err, &maxBytesErr) {
+				return nil, fmt.Errorf("%w: %v", errRelayRequestBodyTooLarge, err)
+			}
+			return nil, fmt.Errorf("read request body: %w", err)
+		}
+	}
+	c.Request.ContentLength = int64(len(body))
+
+	return &httpclient.Request{
+		Method:     c.Request.Method,
+		URL:        c.Request.URL.String(),
+		Path:       c.Request.URL.Path,
+		Query:      c.Request.URL.Query(),
+		Headers:    c.Request.Header,
+		Body:       body,
+		Auth:       &httpclient.AuthConfig{},
+		RequestID:  c.GetString("request_id"),
+		ClientIP:   c.ClientIP(),
+		RawRequest: c.Request,
+	}, nil
 }

@@ -24,7 +24,7 @@ func migrateChannelTypeToAxonhub(db *gorm.DB) error {
 		return nil
 	}
 
-	switch db.Dialector.Name() {
+	switch db.Name() {
 	case "mysql":
 		if err := db.Exec("ALTER TABLE `channels` MODIFY COLUMN `type` varchar(191)").Error; err != nil {
 			return fmt.Errorf("failed to alter channels.type: %w", err)
@@ -37,7 +37,7 @@ func migrateChannelTypeToAxonhub(db *gorm.DB) error {
 
 	typeExpr := `CAST("type" AS TEXT)`
 	typeColumn := `"type"`
-	switch db.Dialector.Name() {
+	switch db.Name() {
 	case "mysql":
 		typeExpr = "CAST(`type` AS CHAR)"
 		typeColumn = "`type`"

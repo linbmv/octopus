@@ -13,6 +13,7 @@ const (
 
 type Group struct {
 	ID   int    `json:"id" gorm:"primaryKey"`
+	UUID string `json:"uuid,omitempty" gorm:"size:36;uniqueIndex"`
 	Name string `json:"name" gorm:"unique;not null"`
 	// Enabled 临时启用/禁用整个分组（不影响成员和渠道本身）。零值经迁移回填为 true，存量与新建分组默认启用。
 	Enabled           bool        `json:"enabled" gorm:"not null;default:true"`
@@ -30,6 +31,7 @@ const (
 
 type GroupItem struct {
 	ID            int    `json:"id" gorm:"primaryKey"`
+	UUID          string `json:"uuid,omitempty" gorm:"size:36;uniqueIndex"`
 	GroupID       int    `json:"group_id" gorm:"not null;index:idx_group_item_unique,unique"`
 	Type          string `json:"type" gorm:"not null;default:channel;index:idx_group_item_unique,unique"`
 	ChannelID     int    `json:"channel_id" gorm:"index:idx_group_item_unique,unique"`
@@ -71,8 +73,8 @@ type GroupItemAddRequest struct {
 // GroupItemUpdateRequest 更新 item 请求
 type GroupItemUpdateRequest struct {
 	ID       int   `json:"id" binding:"required"`
-	Priority int   `json:"priority,omitempty"`
-	Weight   int   `json:"weight,omitempty"`
+	Priority *int  `json:"priority,omitempty"`
+	Weight   *int  `json:"weight,omitempty"`
 	Disabled *bool `json:"disabled,omitempty"` // 仅在禁用状态变更时发送
 }
 type GroupIDAndLLMName struct {

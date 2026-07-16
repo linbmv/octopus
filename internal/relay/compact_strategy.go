@@ -12,6 +12,8 @@ import (
 
 type compactStrategy string
 
+type compactStrategyUpdateFunc func(itemID, groupID int, strategy dbmodel.CompactStrategy, updatedAt time.Time, ctx context.Context) error
+
 // rememberCompactStrategy 把探明可用的 compact 策略持久化到 group item，
 // 供 request.go 的 compactCandidateRanks 在候选排序时优先官方兼容渠道。
 // 247c02b 后 compact 只走官方端点，原进程内策略缓存已无读方，随之移除。
@@ -23,11 +25,22 @@ func (ra *relayAttempt) rememberCompactStrategy(ctx context.Context, strategy co
 	if ra.groupItem.ID == 0 || ra.groupItem.GroupID == 0 || ra.groupItem.CompactStrategy == persistedStrategy {
 		return
 	}
-	if err := op.GroupItemCompactStrategyUpdate(ra.groupItem.ID, ra.groupItem.GroupID, persistedStrategy, time.Now(), ctx); err != nil {
+	update := compactStrategyUpdateFunc(op.GroupItemCompactStrategyUpdate)
+	if ra.compactStrategyUpdater != nil {
+		update = ra.compactStrategyUpdater
+	}
+	if err := update(ra.groupItem.ID, ra.groupItem.GroupID, persistedStrategy, time.Now(), ctx); err != nil {
 		log.Warnf("failed to persist compact strategy for group item %d: %v", ra.groupItem.ID, err)
 		return
 	}
 	ra.groupItem.CompactStrategy = persistedStrategy
+}
+
+func (ra *relayAttempt) applyCompactCompatibilityDecision(ctx context.Context, decision ErrorDecision) {
+	if decision.CompactAction != CompactCompatibilityMarkIncompatible {
+		return
+	}
+	ra.rememberCompactStrategy(ctx, compactStrategy(dbmodel.CompactStrategyIncompatible))
 }
 
 // compactStrategyOrder 返回渠道类型支持的 compact 策略序，

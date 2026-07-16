@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/bestruirui/octopus/internal/conf"
 )
 
 // errFirstTokenTimeout 标记首字超时触发的 context 取消原因，用于和客户端断开等其他取消区分。
@@ -18,6 +20,7 @@ const (
 	firstTokenTimeoutDisabled firstTokenTimeoutSource = iota
 	firstTokenTimeoutManual
 	firstTokenTimeoutAdaptive
+	firstTokenTimeoutGlobal
 )
 
 type firstTokenTimeoutConfig struct {
@@ -38,24 +41,47 @@ func (c firstTokenTimeoutConfig) Reason() string {
 		return "manual_first_token_timeout"
 	case firstTokenTimeoutAdaptive:
 		return "auto_first_token_timeout"
+	case firstTokenTimeoutGlobal:
+		return "global_first_event_timeout"
 	default:
 		return "first_token_timeout"
 	}
 }
 
+type firstTokenTimeoutError struct {
+	config firstTokenTimeoutConfig
+	phase  firstTokenTimeoutPhase
+}
+
+func (e *firstTokenTimeoutError) Error() string {
+	if e == nil {
+		return errFirstTokenTimeout.Error()
+	}
+	return fmt.Sprintf("%s:%s (%ds)", e.config.Reason(), e.phase, int(e.config.Duration.Seconds()))
+}
+
+func (e *firstTokenTimeoutError) Unwrap() error {
+	return errFirstTokenTimeout
+}
+
 func (c firstTokenTimeoutConfig) Error(phase firstTokenTimeoutPhase) error {
-	return fmt.Errorf("%s:%s (%ds)", c.Reason(), phase, int(c.Duration.Seconds()))
+	return &firstTokenTimeoutError{config: c, phase: phase}
 }
 
 func isFirstTokenTimeoutError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var timeoutErr *firstTokenTimeoutError
+	if errors.As(err, &timeoutErr) || errors.Is(err, errFirstTokenTimeout) {
+		return true
+	}
 	msg := err.Error()
 	return strings.Contains(msg, errFirstTokenTimeout.Error()) ||
 		strings.Contains(msg, "first_token_timeout") ||
 		strings.Contains(msg, "manual_first_token_timeout") ||
-		strings.Contains(msg, "auto_first_token_timeout")
+		strings.Contains(msg, "auto_first_token_timeout") ||
+		strings.Contains(msg, "global_first_event_timeout")
 }
 
 // newFirstTokenGuard 构造首字超时守卫：
@@ -86,22 +112,40 @@ func newFirstTokenGuard(parent context.Context, timeout time.Duration) (ctx cont
 }
 
 func (ra *relayAttempt) firstTokenTimeout() firstTokenTimeoutConfig {
-	if ra.group.FirstTokenTimeOut > 0 {
+	if ra == nil {
+		return firstTokenTimeoutConfig{}
+	}
+	adaptiveTimeout := time.Duration(0)
+	hasAdaptiveTimeout := false
+	if ra.channel != nil && ra.metrics != nil && smartHealthEnabled() && healthManager != nil && healthManager.HasAdaptiveTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel) {
+		adaptiveTimeout = healthManager.GetTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
+		hasAdaptiveTimeout = adaptiveTimeout > 0
+	}
+	return selectFirstTokenTimeout(
+		ra.group.FirstTokenTimeOut,
+		adaptiveTimeout,
+		hasAdaptiveTimeout,
+		conf.Current().Relay.StreamFirstEventTimeoutSeconds,
+	)
+}
+
+func selectFirstTokenTimeout(manualSeconds int, adaptive time.Duration, hasAdaptive bool, globalSeconds int) firstTokenTimeoutConfig {
+	if manualSeconds > 0 {
 		return firstTokenTimeoutConfig{
-			Duration: time.Duration(ra.group.FirstTokenTimeOut) * time.Second,
+			Duration: time.Duration(manualSeconds) * time.Second,
 			Source:   firstTokenTimeoutManual,
 		}
 	}
-	if !smartHealthEnabled() || healthManager == nil {
-		return firstTokenTimeoutConfig{}
+	if hasAdaptive && adaptive > 0 {
+		return firstTokenTimeoutConfig{Duration: adaptive, Source: firstTokenTimeoutAdaptive}
 	}
-	if !healthManager.HasAdaptiveTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel) {
-		return firstTokenTimeoutConfig{}
+	if globalSeconds > 0 {
+		return firstTokenTimeoutConfig{
+			Duration: time.Duration(globalSeconds) * time.Second,
+			Source:   firstTokenTimeoutGlobal,
+		}
 	}
-	return firstTokenTimeoutConfig{
-		Duration: healthManager.GetTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel),
-		Source:   firstTokenTimeoutAdaptive,
-	}
+	return firstTokenTimeoutConfig{}
 }
 
 func (ra *relayAttempt) recordFirstTokenTimeout(timeout firstTokenTimeoutConfig) {
@@ -117,12 +161,6 @@ func (ra *relayAttempt) recordFirstTokenTimeout(timeout firstTokenTimeoutConfig)
 }
 
 func (ra *relayAttempt) isAdaptiveFirstTokenTimeout(err error) bool {
-	if !isFirstTokenTimeoutError(err) || ra.firstTokenTimeout().Source != firstTokenTimeoutAdaptive {
-		return false
-	}
-	// Shadow mode 下自动超时不算真正的自动超时（不影响熔断/fallback）
-	if smartHealthEnabled() && healthManager != nil && healthManager.IsShadowMode() {
-		return false
-	}
-	return true
+	var timeoutErr *firstTokenTimeoutError
+	return errors.As(err, &timeoutErr) && timeoutErr.config.Source == firstTokenTimeoutAdaptive
 }

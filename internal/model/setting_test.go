@@ -17,7 +17,8 @@ func TestSettingValidateHealthWeightedBalancerEnabled(t *testing.T) {
 func TestDefaultSettingsIncludeHealthWeightedBalancerEnabled(t *testing.T) {
 	want := map[SettingKey]string{
 		SettingKeyCircuitBreakerThreshold:       "2",
-		SettingKeyHealthWeightedBalancerEnabled: "true",
+		SettingKeyRelayLogContentMode:           string(RelayLogContentModeMetadata),
+		SettingKeyHealthWeightedBalancerEnabled: "false",
 		SettingKeyHealthMinAdaptiveTimeout:      "15",
 		SettingKeyHealthSlowModelMinTimeout:     "25",
 		SettingKeyHealthRecoveryProbeEvery:      "20",
@@ -38,6 +39,26 @@ func TestDefaultSettingsIncludeHealthWeightedBalancerEnabled(t *testing.T) {
 	}
 }
 
+func TestSettingValidateRelayLogContentMode(t *testing.T) {
+	for _, value := range []string{
+		string(RelayLogContentModeMetadata),
+		string(RelayLogContentModeFull),
+		string(RelayLogContentModeDisabled),
+	} {
+		setting := Setting{Key: SettingKeyRelayLogContentMode, Value: value}
+		if err := setting.Validate(); err != nil {
+			t.Fatalf("Validate(%q) error = %v", value, err)
+		}
+	}
+
+	for _, value := range []string{"", "true", "FULL", "body"} {
+		setting := Setting{Key: SettingKeyRelayLogContentMode, Value: value}
+		if err := setting.Validate(); err == nil {
+			t.Fatalf("Validate(%q) error = nil, want enum validation error", value)
+		}
+	}
+}
+
 func TestSettingValidateHealthPolicyIntegers(t *testing.T) {
 	keys := []SettingKey{
 		SettingKeyHealthMinAdaptiveTimeout,
@@ -54,6 +75,55 @@ func TestSettingValidateHealthPolicyIntegers(t *testing.T) {
 		invalid := Setting{Key: key, Value: "bad"}
 		if err := invalid.Validate(); err == nil {
 			t.Fatalf("%s invalid integer error = nil", key)
+		}
+	}
+}
+
+func TestSettingValidateSchedulerIntervals(t *testing.T) {
+	tests := []struct {
+		name    string
+		setting Setting
+		wantErr bool
+	}{
+		{name: "stats integer", setting: Setting{Key: SettingKeyStatsSaveInterval, Value: "15"}},
+		{name: "stats disabled", setting: Setting{Key: SettingKeyStatsSaveInterval, Value: "0"}},
+		{name: "stats non integer", setting: Setting{Key: SettingKeyStatsSaveInterval, Value: "later"}, wantErr: true},
+		{name: "stats negative", setting: Setting{Key: SettingKeyStatsSaveInterval, Value: "-1"}, wantErr: true},
+		{name: "price negative", setting: Setting{Key: SettingKeyModelInfoUpdateInterval, Value: "-1"}, wantErr: true},
+		{name: "sync negative", setting: Setting{Key: SettingKeySyncLLMInterval, Value: "-1"}, wantErr: true},
+		{name: "unknown key", setting: Setting{Key: SettingKey("not_a_setting"), Value: "1"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.setting.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestSettingValidateRejectsNonFiniteMultiplier(t *testing.T) {
+	for _, value := range []string{"NaN", "+Inf", "-Inf"} {
+		setting := Setting{Key: SettingKeyHealthMaxMultiplierStack, Value: value}
+		if err := setting.Validate(); err == nil {
+			t.Fatalf("Validate(%q) error = nil, want error", value)
+		}
+	}
+}
+
+func TestSettingSchemasCoverAllDefaults(t *testing.T) {
+	defaults := DefaultSettings()
+	if len(defaults) != len(settingSchemas) {
+		t.Fatalf("default count = %d, schema count = %d", len(defaults), len(settingSchemas))
+	}
+	for i := range defaults {
+		if err := defaults[i].Validate(); err != nil {
+			t.Fatalf("default %s=%q is invalid: %v", defaults[i].Key, defaults[i].Value, err)
 		}
 	}
 }

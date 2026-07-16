@@ -13,7 +13,7 @@ function toExpireAt(date: Date, time: string): number {
     return Math.floor(d.getTime() / 1000);
 }
 
-function parseExpireDate(expireAt?: number): Date | undefined {
+export function parseExpireDate(expireAt?: number): Date | undefined {
     if (!expireAt) return undefined;
     const d = new Date(expireAt * 1000);
     return isNaN(d.getTime()) ? undefined : d;
@@ -33,12 +33,39 @@ function normalizeMoneyInput(input: string): string {
     return rest.length > 0 ? `${intPart}.${rest.join('').slice(0, 6)}` : intPart;
 }
 
-function toggleModel(current: string | undefined, model: string): string | undefined {
+export function toggleAPIKeyModel(current: string | undefined, model: string): string | undefined {
     const models = current ? current.split(',').filter(Boolean) : [];
     const next = models.includes(model)
         ? models.filter((m) => m !== model)
         : [...models, model];
     return next.length ? next.join(',') : undefined;
+}
+
+export interface APIKeyFormInitialState {
+    form: APIKeyFormValues;
+    maxCostInput: string;
+    expireTime: string;
+}
+
+export function apiKeyToFormState(apiKey?: APIKey): APIKeyFormInitialState {
+    let expireTime = '00:00';
+    if (apiKey?.expire_at) {
+        const date = new Date(apiKey.expire_at * 1000);
+        if (!Number.isNaN(date.getTime())) {
+            expireTime = `${date.getUTCHours().toString().padStart(2, '0')}:${date.getUTCMinutes().toString().padStart(2, '0')}`;
+        }
+    }
+    return {
+        form: {
+            name: apiKey?.name ?? '',
+            enabled: apiKey?.enabled ?? true,
+            expire_at: apiKey?.expire_at,
+            max_cost: apiKey?.max_cost,
+            supported_models: apiKey?.supported_models,
+        },
+        maxCostInput: apiKey?.max_cost != null ? String(apiKey.max_cost) : '',
+        expireTime,
+    };
 }
 
 export function hasAPIKeyModel(supported: string | undefined, model: string): boolean {
@@ -48,25 +75,11 @@ export function hasAPIKeyModel(supported: string | undefined, model: string): bo
 export function useAPIKeyFormState(apiKey?: APIKey) {
     const { data: groups = [] } = useGroupList();
 
-    const [form, setForm] = useState<APIKeyFormValues>(() => ({
-        name: apiKey?.name ?? '',
-        enabled: apiKey?.enabled ?? true,
-        expire_at: apiKey?.expire_at,
-        max_cost: apiKey?.max_cost,
-        supported_models: apiKey?.supported_models,
-    }));
-    const [maxCostInput, setMaxCostInput] = useState(() =>
-        apiKey?.max_cost != null ? String(apiKey.max_cost) : ''
-    );
-    const [expireTime, setExpireTime] = useState(() => {
-        if (apiKey?.expire_at) {
-            const d = new Date(apiKey.expire_at * 1000);
-            if (!isNaN(d.getTime())) {
-                return `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
-            }
-        }
-        return '00:00';
-    });
+    const [initialState] = useState(() => apiKeyToFormState(apiKey));
+
+	const [form, setForm] = useState<APIKeyFormValues>(initialState.form);
+	const [maxCostInput, setMaxCostInput] = useState(initialState.maxCostInput);
+	const [expireTime, setExpireTime] = useState(initialState.expireTime);
     const [expireOpen, setExpireOpen] = useState(false);
 
     const availableModels = useMemo(() => {
@@ -124,7 +137,7 @@ export function useAPIKeyFormState(apiKey?: APIKey) {
     }, [updateForm]);
 
     const handleToggleModel = useCallback((model: string) => {
-        updateForm({ supported_models: toggleModel(form.supported_models, model) });
+		updateForm({ supported_models: toggleAPIKeyModel(form.supported_models, model) });
     }, [form.supported_models, updateForm]);
 
     return {

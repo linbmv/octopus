@@ -1,590 +1,67 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
-import { Clock, Cpu, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, DatabaseZap } from 'lucide-react';
-import { useTranslations } from 'next-intl';
-import { motion, AnimatePresence } from 'motion/react';
-import JsonView from '@uiw/react-json-view';
-import { githubDarkTheme } from '@uiw/react-json-view/githubDark';
-import { githubLightTheme } from '@uiw/react-json-view/githubLight';
-import { useTheme } from 'next-themes';
-import { type RelayLog, type ChannelAttempt } from '@/api/endpoints/log';
-import { getModelIcon } from '@/lib/model-icons';
+import { useMemo } from 'react';
+import { ArrowDownToLine, ArrowRight, ArrowUpFromLine, Clock, Cpu, DatabaseZap, DollarSign, KeyRound, Pin, Zap } from 'lucide-react';
+import { useLocale, useTranslations } from 'next-intl';
+import { type RelayLog } from '@/api/endpoints/log';
+import { TooltipProvider } from '@/components/animate-ui/components/animate/tooltip';
 import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
-import { CopyIconButton } from '@/components/common/CopyButton';
+import { MorphingDialog, MorphingDialogTrigger } from '@/components/ui/morphing-dialog';
+import { getModelIcon } from '@/lib/model-icons';
 import { parseUsageCacheTokens } from '@/lib/usage-cache-tokens';
-import {
-    MorphingDialog,
-    MorphingDialogTrigger,
-    MorphingDialogContainer,
-    MorphingDialogContent,
-    MorphingDialogClose,
-    MorphingDialogTitle,
-    MorphingDialogDescription,
-    useMorphingDialog,
-} from '@/components/ui/morphing-dialog';
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/animate-ui/components/animate/tooltip';
-
-function formatTime(timestamp: number): string {
-    const date = new Date(timestamp * 1000);
-    return date.toLocaleString('zh-CN', {
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-    });
-}
-
-function formatDuration(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(2)}s`;
-}
-
-function attemptStatusLabel(status: ChannelAttempt['status']): string {
-    switch (status) {
-        case 'success':
-            return '成功';
-        case 'failed':
-            return '失败';
-        case 'client_canceled':
-            return '客户端断开';
-        case 'circuit_break':
-            return '熔断';
-        case 'skipped':
-            return '跳过';
-        default:
-            return status;
-    }
-}
-
-function attemptStatusClass(status: ChannelAttempt['status']): string {
-    switch (status) {
-        case 'success':
-            return 'bg-primary/15 text-primary';
-        case 'circuit_break':
-            return 'bg-amber-500/15 text-amber-600 dark:text-amber-400';
-        case 'client_canceled':
-            return 'bg-sky-500/15 text-sky-700 dark:text-sky-300';
-        case 'skipped':
-            return 'bg-muted text-muted-foreground';
-        case 'failed':
-        default:
-            return 'bg-destructive/15 text-destructive';
-    }
-}
-
-// 仅显示本次实际使用的渠道 key 备注；无备注返回空字符串，由调用方决定是否渲染。
-function formatAttemptKey(attempt: ChannelAttempt): string {
-    return attempt.channel_key_remark?.trim() ?? '';
-}
-
-interface RetryBadgeWithTooltipProps {
-    channelName: string;
-    brandColor: string;
-    attempts: ChannelAttempt[];
-}
-
-function RetryBadgeWithTooltip({ channelName, brandColor, attempts }: RetryBadgeWithTooltipProps) {
-    return (
-        <Tooltip>
-            <TooltipTrigger asChild>
-                <Badge
-                    variant="secondary"
-                    className="shrink-0 text-xs px-1.5 py-0 cursor-help"
-                    style={{ backgroundColor: `${brandColor}15`, color: brandColor }}
-                >
-                    <RotateCw className="size-3 mr-1 opacity-80" />
-                    {channelName}
-                </Badge>
-            </TooltipTrigger>
-            <TooltipContent className="border bg-card p-2 min-w-[280px] shadow-sm rounded-3xl flex flex-col gap-1">
-                {attempts.map((attempt, idx) => (
-                    <div key={idx} className="flex flex-col w-full">
-                        <div className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors">
-                            <Badge
-                                className={cn(
-                                    "h-5 shrink-0 px-1.5 text-[10px] font-bold uppercase shadow-none border-0",
-                                    attemptStatusClass(attempt.status)
-                                )}
-                            >
-                                {attemptStatusLabel(attempt.status)}
-                            </Badge>
-                            <div className="flex min-w-0 flex-col flex-1">
-                                <div className="flex min-w-0 items-center gap-1.5">
-                                    <span className="truncate text-xs font-semibold text-foreground">
-                                        {attempt.channel_name}
-                                    </span>
-                                    {attempt.sticky && <Pin className="size-3 shrink-0 text-amber-500" />}
-                                </div>
-                                <span className="text-[10px] text-muted-foreground">
-                                    {[attempt.model_name, formatAttemptKey(attempt), formatDuration(attempt.duration)].filter(Boolean).join(' • ')}
-                                </span>
-                            </div>
-                        </div>
-                        {
-                            idx < attempts.length - 1 && (
-                                <div className="flex justify-center py-0.5">
-                                    <ArrowDown className="size-3 text-muted-foreground/30" />
-                                </div>
-                            )
-                        }
-                    </div>
-                ))}
-            </TooltipContent>
-        </Tooltip >
-    );
-}
-
-function DeferredJsonContent({ content, fallbackText }: { content: string | undefined; fallbackText: string }) {
-    const { resolvedTheme } = useTheme();
-    const { isOpen } = useMorphingDialog();
-    const [shouldRender, setShouldRender] = useState(false);
-
-    const parsed = useMemo(() => {
-        if (!content) return { isJson: false, data: null };
-        try {
-            return { isJson: true, data: JSON.parse(content) };
-        } catch {
-            return { isJson: false, data: content };
-        }
-    }, [content]);
-
-    useEffect(() => {
-        if (isOpen) {
-            const timer = setTimeout(() => setShouldRender(true), 300);
-            return () => clearTimeout(timer);
-        }
-    }, [isOpen]);
-
-    if (!isOpen) {
-        if (shouldRender) setShouldRender(false);
-        return null;
-    }
-
-    if (!content) {
-        return (
-            <pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap wrap-break-word leading-relaxed">
-                {fallbackText}
-            </pre>
-        );
-    }
-
-    return (
-        <AnimatePresence mode="wait">
-            {!shouldRender ? (
-                <motion.div
-                    key="loading"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.15 }}
-                    className="p-4 flex items-center justify-center h-full"
-                >
-                    <Loader2 className="h-5 w-5 text-muted-foreground animate-spin" />
-                </motion.div>
-            ) : parsed.isJson ? (
-                <motion.div
-                    key="json"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="p-4"
-                >
-                    <JsonView
-                        value={parsed.data as object}
-                        style={{
-                            ...(resolvedTheme === 'dark' ? githubDarkTheme : githubLightTheme),
-                            fontSize: '12px',
-                            fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-                            backgroundColor: 'transparent',
-                        }}
-                        displayDataTypes={false}
-                        displayObjectSize={false}
-                        collapsed={false}
-                    />
-                </motion.div>
-            ) : (
-                <motion.pre
-                    key="text"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="p-4 text-xs text-muted-foreground whitespace-pre-wrap wrap-break-word font-mono leading-relaxed"
-                >
-                    {content}
-                </motion.pre>
-            )}
-        </AnimatePresence>
-    );
-}
+import { cn } from '@/lib/utils';
+import { RetryBadgeWithTooltip } from './AttemptHistory';
+import { formatLogDuration, formatLogTime } from './format';
+import { LogDetails } from './LogDetails';
 
 export function LogCard({ log }: { log: RelayLog }) {
     const t = useTranslations('log.card');
-    const { Avatar: ModelAvatar, color: brandColor } = useMemo(
-        () => getModelIcon(log.actual_model_name),
-        [log.actual_model_name]
-    );
-    const requestAPIKeyName = useMemo(() => log.request_api_key_name?.trim() ?? '', [log.request_api_key_name]);
-    const usageCacheTokens = useMemo(() => parseUsageCacheTokens(log.response_content), [log.response_content]);
-    // 单次尝试时主卡片直接展示本次使用的 key 备注：优先成功尝试，否则取最后一次尝试。
-    const keyRemark = useMemo(() => {
-        const attempts = log.attempts ?? [];
-        if (attempts.length === 0) return '';
-        const success = attempts.find((a) => a.status === 'success');
-        const target = success ?? attempts[attempts.length - 1];
-        return target.channel_key_remark?.trim() ?? '';
-    }, [log.attempts]);
-
-    const hasError = !!log.error;
-    const hasMultipleAttempts = log.attempts && log.attempts.length > 1;
-    const [isDiagnosticExpanded, setIsDiagnosticExpanded] = useState(false);
+    const locale = useLocale();
+    const { Avatar: ModelAvatar, color } = useMemo(() => getModelIcon(log.actual_model_name), [log.actual_model_name]);
+    const usage = useMemo(() => parseUsageCacheTokens(log.response_content), [log.response_content]);
+    const requestKey = log.request_api_key_name?.trim() ?? '';
+    const attempts = log.attempts ?? [];
+    const multiple = attempts.length > 1;
+    const hasError = Boolean(log.error);
+    const successfulAttempt = attempts.find((attempt) => attempt.status === 'success') ?? attempts.at(-1);
+    const keyRemark = successfulAttempt?.channel_key_remark?.trim() ?? '';
 
     return (
         <TooltipProvider>
             <MorphingDialog>
-                <MorphingDialogTrigger
-                    className={cn(
-                        "rounded-3xl border bg-card w-full text-left",
-                        hasError ? "border-destructive/40" : "border-border",
-                    )}
-                >
-                    <div className={cn("p-4 grid grid-cols-[auto_1fr] gap-4", hasError ? "items-start" : "items-center")}>
+                <MorphingDialogTrigger className={cn('w-full rounded-3xl border bg-card text-left', hasError ? 'border-destructive/40' : 'border-border')}>
+                    <article className={cn('grid grid-cols-[auto_1fr] gap-4 p-4', hasError ? 'items-start' : 'items-center')}>
                         <ModelAvatar size={40} />
-                        <div className="min-w-0 flex flex-col gap-3">
-                            <div className="flex items-center gap-2 min-w-0 text-sm">
-                                <span className="font-semibold text-card-foreground truncate" title={log.request_model_name}>
-                                    {log.request_model_name}
-                                </span>
+                        <div className="flex min-w-0 flex-col gap-3">
+                            <header className="flex min-w-0 items-center gap-2 text-sm">
+                                <span className="truncate font-semibold text-card-foreground" title={log.request_model_name}>{log.request_model_name}</span>
                                 <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/50" />
-                                {hasMultipleAttempts ? (
-                                    <RetryBadgeWithTooltip
-                                        channelName={log.channel_name}
-                                        brandColor={brandColor}
-                                        attempts={log.attempts!}
-                                    />
-                                ) : (
-                                    <Badge
-                                        variant="secondary"
-                                        className="shrink-0 text-xs px-1.5 py-0"
-                                        style={{ backgroundColor: `${brandColor}15`, color: brandColor }}
-                                    >
-                                        {log.channel_name}
-                                    </Badge>
-                                )}
-                                <span className="text-muted-foreground truncate" title={log.actual_model_name}>
-                                    {log.actual_model_name}
-                                </span>
-                                {!hasMultipleAttempts && keyRemark && (
-                                    <span className="flex items-center gap-1 shrink-0 text-xs text-muted-foreground" title={keyRemark}>
-                                        <KeyRound className="size-3 shrink-0 text-sky-500" />
-                                        <span className="truncate max-w-[8rem]">{keyRemark}</span>
-                                    </span>
-                                )}
-                                {log.attempts?.some(a => a.sticky) && (
-                                    <Pin className="size-3.5 shrink-0 text-amber-500" />
-                                )}
-                            </div>
+                                {multiple ? <RetryBadgeWithTooltip channelName={log.channel_name} brandColor={color} attempts={attempts} /> : <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-xs" style={{ backgroundColor: `${color}15`, color }}>{log.channel_name}</Badge>}
+                                <span className="truncate text-muted-foreground" title={log.actual_model_name}>{log.actual_model_name}</span>
+                                {!multiple && keyRemark && <span className="flex max-w-[8rem] shrink-0 items-center gap-1 truncate text-xs text-muted-foreground" title={keyRemark}><KeyRound className="size-3 text-sky-500" />{keyRemark}</span>}
+                                {attempts.some((attempt) => attempt.sticky) && <Pin className="size-3.5 shrink-0 text-amber-500" />}
+                            </header>
                             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground">
-                                <div className="flex items-center gap-1.5">
-                                    <Clock className="size-3.5 shrink-0" style={{ color: brandColor }} />
-                                    <span>{formatTime(log.time)}</span>
-                                </div>
-                                {requestAPIKeyName && (
-                                    <div className="flex items-center gap-1.5">
-                                        <KeyRound className="size-3.5 shrink-0 text-orange-500" />
-                                        <span className="truncate" title={requestAPIKeyName}>
-                                            {requestAPIKeyName}
-                                        </span>
-                                    </div>
-                                )}
-                                <div className="flex items-center gap-1.5">
-                                    <Zap className="size-3.5 shrink-0 text-amber-500" />
-                                    <span>{t('firstToken')} {formatDuration(log.ftut)}</span>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                    <Cpu className="size-3.5 shrink-0 text-blue-500" />
-                                    <span>{t('totalTime')} {formatDuration(log.use_time)}</span>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                    <ArrowDownToLine className="size-3.5 shrink-0 text-green-500" />
-                                    <span>{t('input')} {log.input_tokens.toLocaleString()}</span>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                    <ArrowUpFromLine className="size-3.5 shrink-0 text-purple-500" />
-                                    <span>{t('output')} {log.output_tokens.toLocaleString()}</span>
-                                </div>
-                                {usageCacheTokens && usageCacheTokens.cachedReadTokens > 0 && (
-                                    <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400" title={usageCacheTokens.sourcePath}>
-                                        <DatabaseZap className="size-3.5 shrink-0" />
-                                        <span>{t('cacheRead')} {usageCacheTokens.cachedReadTokens.toLocaleString()}</span>
-                                    </div>
-                                )}
-                                {usageCacheTokens && usageCacheTokens.cachedWriteTokens > 0 && (
-                                    <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400" title={usageCacheTokens.sourcePath}>
-                                        <DatabaseZap className="size-3.5 shrink-0" />
-                                        <span>{t('cacheWrite')} {usageCacheTokens.cachedWriteTokens.toLocaleString()}</span>
-                                    </div>
-                                )}
-                                <div className="flex items-center gap-1.5">
-                                    <DollarSign className="size-3.5 shrink-0 text-emerald-500" />
-                                    <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                                        {t('cost')} {Number(log.cost).toFixed(6)}
-                                    </span>
-                                </div>
+                                <Metric icon={Clock}>{formatLogTime(log.time, locale)}</Metric>
+                                {requestKey && <Metric icon={KeyRound}>{requestKey}</Metric>}
+                                <Metric icon={Zap}>{t('firstToken')} {formatLogDuration(log.ftut)}</Metric>
+                                <Metric icon={Cpu}>{t('totalTime')} {formatLogDuration(log.use_time)}</Metric>
+                                <Metric icon={ArrowDownToLine}>{t('input')} {log.input_tokens.toLocaleString()}</Metric>
+                                <Metric icon={ArrowUpFromLine}>{t('output')} {log.output_tokens.toLocaleString()}</Metric>
+                                {usage?.cachedReadTokens ? <Metric icon={DatabaseZap}>{t('cacheRead')} {usage.cachedReadTokens.toLocaleString()}</Metric> : null}
+                                {usage?.cachedWriteTokens ? <Metric icon={DatabaseZap}>{t('cacheWrite')} {usage.cachedWriteTokens.toLocaleString()}</Metric> : null}
+                                <Metric icon={DollarSign}>{t('cost')} {Number(log.cost).toFixed(6)}</Metric>
                             </div>
-                            {hasError && (
-                                <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 overflow-hidden">
-                                    <p className="text-xs text-destructive line-clamp-2">{log.error}</p>
-                                </div>
-                            )}
+                            {hasError && <div className="overflow-hidden rounded-xl border border-destructive/20 bg-destructive/10 p-2.5"><p className="line-clamp-2 text-xs text-destructive">{log.error}</p></div>}
                         </div>
-                    </div>
+                    </article>
                 </MorphingDialogTrigger>
-
-                <MorphingDialogContainer>
-                    <MorphingDialogContent className="relative w-[calc(100vw-2rem)] md:w-[80vw] bg-card text-card-foreground px-6 py-4 rounded-3xl h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
-                        <MorphingDialogClose className="top-4 right-5 text-muted-foreground hover:text-foreground transition-colors" />
-                        <MorphingDialogTitle className="flex items-center gap-2 mb-3 text-sm">
-                            <ModelAvatar size={28} />
-                            <span className="font-semibold text-card-foreground">{log.request_model_name}</span>
-                            <ArrowRight className="size-3.5 text-muted-foreground/50" />
-                            {hasMultipleAttempts ? (
-                                <RetryBadgeWithTooltip
-                                    channelName={log.channel_name}
-                                    brandColor={brandColor}
-                                    attempts={log.attempts!}
-                                />
-                            ) : (
-                                <Badge
-                                    variant="secondary"
-                                    className="text-xs px-1.5 py-0"
-                                    style={{ backgroundColor: `${brandColor}15`, color: brandColor }}
-                                >
-                                    {log.channel_name}
-                                </Badge>
-                            )}
-                            <span className="text-muted-foreground">{log.actual_model_name}</span>
-                            {log.attempts?.some(a => a.sticky) && (
-                                <Pin className="size-3.5 shrink-0 text-amber-500" />
-                            )}
-                        </MorphingDialogTitle>
-
-                        <MorphingDialogDescription className="flex-1 min-h-0">
-                            <div className="flex flex-col min-h-0 h-full gap-4">
-                                {(hasError || hasMultipleAttempts) && (
-                                    <div className={cn(
-                                        "flex-initial min-h-0 flex flex-col rounded-2xl border overflow-hidden max-h-[40%]",
-                                        hasError
-                                            ? "bg-destructive/5 border-destructive/20"
-                                            : "bg-secondary/30 border-border/50"
-                                    )}>
-                                        <div
-                                            className={cn(
-                                                "flex items-center gap-2 px-3 py-2.5 shrink-0 cursor-pointer select-none hover:bg-muted/50 transition-colors",
-                                                hasError && "hover:bg-destructive/10"
-                                            )}
-                                            onClick={() => setIsDiagnosticExpanded(!isDiagnosticExpanded)}
-                                        >
-                                            {hasError ? (
-                                                <AlertCircle className="size-4 text-destructive" />
-                                            ) : (
-                                                <RotateCw className="size-4 text-muted-foreground" />
-                                            )}
-                                            <span className={cn(
-                                                "text-sm font-medium",
-                                                hasError ? "text-destructive" : "text-secondary-foreground"
-                                            )}>
-                                                {hasError ? t('errorInfo') : t('retryDetails')}
-                                            </span>
-                                            <div className="ml-auto flex items-center gap-2">
-                                                {hasMultipleAttempts && (
-                                                    <Badge
-                                                        variant="outline"
-                                                        className={cn(
-                                                            "text-xs border-0",
-                                                            hasError
-                                                                ? "bg-destructive/10 text-destructive"
-                                                                : "bg-secondary text-secondary-foreground"
-                                                        )}
-                                                    >
-                                                        {log.total_attempts || log.attempts!.length} {t('attempts')}
-                                                    </Badge>
-                                                )}
-                                                {isDiagnosticExpanded ? (
-                                                    <ChevronUp className="size-4 text-muted-foreground" />
-                                                ) : (
-                                                    <ChevronDown className="size-4 text-muted-foreground" />
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        <AnimatePresence initial={false}>
-                                            {isDiagnosticExpanded && (
-                                                <motion.div
-                                                    initial={{ height: 0, opacity: 0 }}
-                                                    animate={{ height: "auto", opacity: 1 }}
-                                                    exit={{ height: 0, opacity: 0 }}
-                                                    transition={{ duration: 0.2, ease: "easeInOut" }}
-                                                    className="overflow-hidden flex flex-col min-h-0"
-                                                >
-                                                    <div className="flex-1 overflow-auto p-2.5 md:p-3 flex flex-col gap-4">
-                                                        {hasError && (
-                                                            <div className="relative pl-1">
-                                                                <div className="absolute right-0 top-0">
-                                                                    <CopyIconButton
-                                                                        text={log.error ?? ''}
-                                                                        className="p-1 rounded-md text-destructive/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                                                                        copyIconClassName="size-4"
-                                                                        checkIconClassName="size-4"
-                                                                    />
-                                                                </div>
-                                                                <p className="text-sm text-destructive whitespace-pre-wrap wrap-break-word pr-8 leading-relaxed">
-                                                                    {log.error}
-                                                                </p>
-                                                            </div>
-                                                        )}
-
-                                                        {hasMultipleAttempts && (
-                                                            <div className="flex flex-col gap-2">
-                                                                {log.attempts!.map((attempt, idx) => (
-                                                                    <div
-                                                                        key={idx}
-                                                                        className={cn(
-                                                                            "text-xs p-2.5 rounded-xl border transition-colors flex flex-col gap-2",
-                                                                            attempt.status === 'success'
-                                                                                ? "bg-primary/5 border-primary/20 hover:bg-primary/10"
-                                                                                : attempt.status === 'failed'
-                                                                                  ? "bg-destructive/5 border-destructive/20 hover:bg-destructive/10"
-                                                                                  : "bg-muted/30 border-border hover:bg-muted/50"
-                                                                        )}
-                                                                    >
-                                                                        <div className="flex items-start gap-2">
-                                                                            <Badge
-                                                                                className={cn(
-                                                                                    "h-5 shrink-0 px-1.5 text-[10px] font-bold uppercase shadow-none border-0",
-                                                                                    attemptStatusClass(attempt.status)
-                                                                                )}
-                                                                            >
-                                                                                {attemptStatusLabel(attempt.status)}
-                                                                            </Badge>
-                                                                            <div className="min-w-0 flex-1">
-                                                                                <div className="flex min-w-0 items-center gap-1.5">
-                                                                                    <span className="font-semibold text-foreground truncate">
-                                                                                        {attempt.channel_name}
-                                                                                    </span>
-                                                                                    {attempt.sticky && <Pin className="size-3.5 shrink-0 text-amber-500" />}
-                                                                                </div>
-                                                                                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                                                                                    <span>{attempt.model_name}</span>
-                                                                                    <span>{formatAttemptKey(attempt)}</span>
-                                                                                    <span>第 {attempt.attempt_num} 次</span>
-                                                                                </div>
-                                                                            </div>
-                                                                            <span className="text-muted-foreground tabular-nums font-mono">
-                                                                                {formatDuration(attempt.duration)}
-                                                                            </span>
-                                                                        </div>
-                                                                        {attempt.msg && (
-                                                                            <div className="text-destructive/90 pl-2 border-l-2 border-destructive/30 text-[11px] leading-relaxed">
-                                                                                {attempt.msg}
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </motion.div>
-                                            )}
-                                        </AnimatePresence>
-                                    </div>
-                                )}
-                                <div className="flex-1 min-h-0 overflow-hidden">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full min-h-0">
-                                        <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
-                                            <div className="flex items-center gap-2 px-3 md:px-4 py-2.5 md:py-3 border-b border-border bg-muted/50 shrink-0">
-                                                <Send className="size-4 text-green-500" />
-                                                <span className="text-sm font-medium text-card-foreground">{t('requestContent')}</span>
-                                                <Badge variant="secondary" className="ml-auto text-xs">
-                                                    {log.input_tokens.toLocaleString()} {t('tokens')}
-                                                </Badge>
-                                            </div>
-                                            <div className="flex-1 overflow-auto min-h-0">
-                                                <DeferredJsonContent content={log.request_content} fallbackText={t('noRequestContent')} />
-                                            </div>
-                                        </div>
-                                        <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
-                                            <div className="flex items-center gap-2 px-3 md:px-4 py-2.5 md:py-3 border-b border-border bg-muted/50 shrink-0">
-                                                <MessageSquare className="size-4 text-purple-500" />
-                                                <span className="text-sm font-medium text-card-foreground">{t('responseContent')}</span>
-                                                <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-                                                    {usageCacheTokens && usageCacheTokens.cachedReadTokens > 0 && (
-                                                        <Badge
-                                                            variant="secondary"
-                                                            className="text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                                            title={usageCacheTokens.sourcePath}
-                                                        >
-                                                            缓存读 {usageCacheTokens.cachedReadTokens.toLocaleString()}
-                                                        </Badge>
-                                                    )}
-                                                    {usageCacheTokens && usageCacheTokens.cachedWriteTokens > 0 && (
-                                                        <Badge
-                                                            variant="secondary"
-                                                            className="text-xs bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                                                            title={usageCacheTokens.sourcePath}
-                                                        >
-                                                            缓存写 {usageCacheTokens.cachedWriteTokens.toLocaleString()}
-                                                        </Badge>
-                                                    )}
-                                                    <Badge variant="secondary" className="text-xs">
-                                                        {log.output_tokens.toLocaleString()} {t('tokens')}
-                                                    </Badge>
-                                                </div>
-                                            </div>
-                                            <div className="flex-1 overflow-auto min-h-0">
-                                                <DeferredJsonContent content={log.response_content} fallbackText={t('noResponseContent')} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </MorphingDialogDescription>
-
-                        <div className="flex flex-wrap items-center gap-3 md:gap-4 pt-4 mt-auto text-xs text-muted-foreground shrink-0">
-                            <div className="flex items-center gap-1.5">
-                                <Clock className="size-3.5" style={{ color: brandColor }} />
-                                <span className="tabular-nums">{formatTime(log.time)}</span>
-                            </div>
-                            {requestAPIKeyName && (
-                                <div className="flex min-w-0 items-center gap-1.5">
-                                    <KeyRound className="size-3.5 shrink-0 text-orange-500" />
-                                    <span className="truncate" title={requestAPIKeyName}>
-                                        {requestAPIKeyName}
-                                    </span>
-                                </div>
-                            )}
-                            <div className="flex items-center gap-1.5">
-                                <Zap className="size-3.5 text-amber-500" />
-                                <span>{t('firstTokenTime')}: {formatDuration(log.ftut)}</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                                <Cpu className="size-3.5 text-blue-500" />
-                                <span>{t('totalTime')}: {formatDuration(log.use_time)}</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                                <DollarSign className="size-3.5 text-emerald-500" />
-                                <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                                    {t('cost')}: {Number(log.cost).toFixed(6)}
-                                </span>
-                            </div>
-                        </div>
-                    </MorphingDialogContent>
-                </MorphingDialogContainer>
+                <LogDetails log={log} />
             </MorphingDialog>
         </TooltipProvider>
     );
+}
+
+function Metric({ icon: Icon, children }: { icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {
+    return <div className="flex items-center gap-1.5"><Icon className="size-3.5 shrink-0" /><span>{children}</span></div>;
 }

@@ -2,20 +2,21 @@ package op
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"sync"
+	"sort"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/cache"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xstrings"
+	"gorm.io/gorm"
 )
 
 var channelCache = cache.New[int, model.Channel](16)
 var channelKeyCache = cache.New[int, model.ChannelKey](16)
-var channelKeyCacheNeedUpdate = make(map[int]struct{})
-var channelKeyCacheNeedUpdateLock sync.Mutex
+var channelKeyCacheNeedUpdate = newDirtySet()
 var channelService = NewChannelService(channelCache, channelKeyCache)
 
 type ChannelService struct {
@@ -45,10 +46,19 @@ func (s *ChannelService) List(ctx context.Context) ([]model.Channel, error) {
 	for _, channel := range s.channels.GetAll() {
 		channels = append(channels, channel)
 	}
+	sort.Slice(channels, func(i, j int) bool { return channels[i].ID < channels[j].ID })
 	return channels, nil
 }
 
 func ChannelCreate(channel *model.Channel, ctx context.Context) error {
+	if err := model.ValidateChannel(channel); err != nil {
+		return fmt.Errorf("%w: invalid channel: %v", ErrInvalidInput, err)
+	}
+	for _, existing := range channelCache.GetAll() {
+		if existing.Name == channel.Name {
+			return fmt.Errorf("%w: channel name already exists", ErrConflict)
+		}
+	}
 	if err := db.GetDB().WithContext(ctx).Create(channel).Error; err != nil {
 		return err
 	}
@@ -83,9 +93,7 @@ func ChannelKeyUpdate(key model.ChannelKey) error {
 	}
 	channelCache.Set(key.ChannelID, ch)
 	channelKeyCache.Set(key.ID, key)
-	channelKeyCacheNeedUpdateLock.Lock()
-	channelKeyCacheNeedUpdate[key.ID] = struct{}{}
-	channelKeyCacheNeedUpdateLock.Unlock()
+	channelKeyCacheNeedUpdate.mark(key.ID)
 	return nil
 }
 func ChannelBaseUrlUpdate(channelID int, baseUrl []model.BaseUrl) error {
@@ -107,14 +115,11 @@ func ChannelBaseUrlUpdate(channelID int, baseUrl []model.BaseUrl) error {
 
 // ChannelKeySaveDB 将运行时更新过的 ChannelKey 缓存写入数据库。
 func ChannelKeySaveDB(ctx context.Context) error {
-	channelKeyCacheNeedUpdateLock.Lock()
-	keyIDs := make([]int, 0, len(channelKeyCacheNeedUpdate))
-	for id := range channelKeyCacheNeedUpdate {
-		keyIDs = append(keyIDs, id)
-	}
-	channelKeyCacheNeedUpdate = make(map[int]struct{})
-	channelKeyCacheNeedUpdateLock.Unlock()
-
+	// Snapshot versions are acknowledged only after every write succeeds. A
+	// concurrent ChannelKeyUpdate advances its version and therefore survives
+	// clearUnchanged for the next retry.
+	dirtySnapshot := channelKeyCacheNeedUpdate.snapshot()
+	keyIDs := dirtyIDs(dirtySnapshot)
 	if len(keyIDs) == 0 {
 		return nil
 	}
@@ -126,110 +131,59 @@ func ChannelKeySaveDB(ctx context.Context) error {
 			continue
 		}
 		if err := dbConn.Save(&k).Error; err != nil {
-			return err
+			return fmt.Errorf("save channel key %d: %w", id, err)
 		}
 	}
+	channelKeyCacheNeedUpdate.clearUnchanged(dirtySnapshot)
 	return nil
 }
 
 func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model.Channel, error) {
+	if err := model.ValidateChannelUpdate(req); err != nil {
+		return nil, fmt.Errorf("%w: invalid channel update: %v", ErrInvalidInput, err)
+	}
 	_, ok := channelCache.Get(req.ID)
 	if !ok {
-		return nil, fmt.Errorf("channel not found")
+		return nil, fmt.Errorf("%w: channel not found", ErrNotFound)
+	}
+	if req.Name != nil {
+		for id, existing := range channelCache.GetAll() {
+			if id != req.ID && existing.Name == *req.Name {
+				return nil, fmt.Errorf("%w: channel name already exists", ErrConflict)
+			}
+		}
 	}
 
 	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
-	// 使用 PatchHelper 简化字段更新逻辑，降低圈复杂度
-	helper := NewPatchHelper()
-	helper.ApplyField("name", req.Name)
-	helper.ApplyField("type", req.Type)
-	helper.ApplyField("enabled", req.Enabled)
-	helper.ApplyField("base_urls", req.BaseUrls)
-	helper.ApplyField("model", req.Model)
-	helper.ApplyField("custom_model", req.CustomModel)
-	helper.ApplyField("proxy", req.Proxy)
-	helper.ApplyField("auto_sync", req.AutoSync)
-	helper.ApplyField("auto_group", req.AutoGroup)
-	helper.ApplyField("custom_header", req.CustomHeader)
-	helper.ApplyField("channel_proxy", req.ChannelProxy)
-	helper.ApplyField("param_override", req.ParamOverride)
-	helper.ApplyField("raw_passthrough", req.RawPassthrough)
-	helper.ApplyField("rpm_limit", req.RPMLimit)
-	helper.ApplyField("max_concurrency", req.MaxConcurrency)
-	helper.ApplyField("match_regex", req.MatchRegex)
-	helper.ApplyField("user_agent", req.UserAgent)
-
-	// 只有当有字段需要更新时才执行 UPDATE
-	if helper.HasUpdates() {
-		if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Select(helper.SelectFields()).Updates(helper.Updates()).Error; err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("failed to update channel: %w", err)
-		}
+	if err := applyChannelPatchTx(tx, req); err != nil {
+		tx.Rollback()
+		return nil, err
 	}
-
-	// 删除 keys
-	if len(req.KeysToDelete) > 0 {
-		if err := tx.Where("id IN ? AND channel_id = ?", req.KeysToDelete, req.ID).Delete(&model.ChannelKey{}).Error; err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("failed to delete channel keys: %w", err)
-		}
+	if err := deleteChannelKeysTx(tx, req.ID, req.KeysToDelete); err != nil {
+		tx.Rollback()
+		return nil, err
 	}
-
-	// 更新 keys（逐条，只更新提供的字段）
-	if len(req.KeysToUpdate) > 0 {
-		for _, ku := range req.KeysToUpdate {
-			updates := map[string]interface{}{}
-			resetRuntimeState := false
-			if ku.Enabled != nil {
-				updates["enabled"] = *ku.Enabled
-				if *ku.Enabled {
-					resetRuntimeState = true
-				}
-			}
-			if ku.ChannelKey != nil {
-				updates["channel_key"] = *ku.ChannelKey
-				resetRuntimeState = true
-			}
-			if ku.Remark != nil {
-				updates["remark"] = *ku.Remark
-			}
-			if resetRuntimeState {
-				updates["status_code"] = 0
-				updates["last_use_time_stamp"] = 0
-			}
-			if len(updates) == 0 {
-				continue
-			}
-			if err := tx.Model(&model.ChannelKey{}).
-				Where("id = ? AND channel_id = ?", ku.ID, req.ID).
-				Updates(updates).Error; err != nil {
-				tx.Rollback()
-				return nil, fmt.Errorf("failed to update channel key %d: %w", ku.ID, err)
-			}
-		}
+	if err := updateChannelKeysTx(tx, req.ID, req.KeysToUpdate); err != nil {
+		tx.Rollback()
+		return nil, err
 	}
-
-	// 新增 keys
-	if len(req.KeysToAdd) > 0 {
-		newKeys := make([]model.ChannelKey, 0, len(req.KeysToAdd))
-		for _, ka := range req.KeysToAdd {
-			newKeys = append(newKeys, model.ChannelKey{
-				ChannelID:  req.ID,
-				Enabled:    ka.Enabled,
-				ChannelKey: ka.ChannelKey,
-				Remark:     ka.Remark,
-			})
-		}
-		if err := tx.Create(&newKeys).Error; err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("failed to create channel keys: %w", err)
-		}
+	if err := addChannelKeysTx(tx, req.ID, req.KeysToAdd); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := invalidateCapabilityEvidenceForChannelUpdateTx(tx, req); err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("invalidate channel capability evidence: %w", err)
 	}
 
 	if err := tx.Commit().Error; err != nil {
@@ -245,13 +199,188 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	return &channel, nil
 }
 
+func applyChannelPatchTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {
+	helper := NewPatchHelper()
+	helper.ApplyField("name", req.Name)
+	helper.ApplyField("type", req.Type)
+	helper.ApplyField("enabled", req.Enabled)
+	if err := applyChannelJSONPatchField(helper, "base_urls", req.BaseUrls); err != nil {
+		return err
+	}
+	helper.ApplyField("model", req.Model)
+	helper.ApplyField("custom_model", req.CustomModel)
+	helper.ApplyField("proxy", req.Proxy)
+	helper.ApplyField("auto_sync", req.AutoSync)
+	helper.ApplyField("auto_group", req.AutoGroup)
+	if err := applyChannelJSONPatchField(helper, "custom_header", req.CustomHeader); err != nil {
+		return err
+	}
+	if err := applyChannelJSONPatchField(helper, "header_rules", req.HeaderRules); err != nil {
+		return err
+	}
+	if err := applyChannelJSONPatchField(helper, "json_rewrite_rules", req.JSONRewriteRules); err != nil {
+		return err
+	}
+	helper.ApplyField("channel_proxy", req.ChannelProxy)
+	helper.ApplyField("param_override", req.ParamOverride)
+	helper.ApplyField("raw_passthrough", req.RawPassthrough)
+	helper.ApplyField("rpm_limit", req.RPMLimit)
+	helper.ApplyField("max_concurrency", req.MaxConcurrency)
+	helper.ApplyField("match_regex", req.MatchRegex)
+	helper.ApplyField("user_agent", req.UserAgent)
+
+	if !helper.HasUpdates() {
+		return nil
+	}
+	result := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Select(helper.SelectFields()).Updates(helper.Updates())
+	if result.Error != nil {
+		return fmt.Errorf("failed to update channel: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		var count int64
+		if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Count(&count).Error; err != nil {
+			return fmt.Errorf("failed to verify channel update: %w", err)
+		}
+		if count != 1 {
+			return fmt.Errorf("%w: channel not found", ErrNotFound)
+		}
+	}
+	return nil
+}
+
+// GORM serializers are not invoked for map-based Updates values. Encode JSON
+// slice patches explicitly so SQLite, PostgreSQL, and MySQL receive the same
+// representation used by serializer:json on create/read paths.
+func applyChannelJSONPatchField[T any](helper *PatchHelper, field string, value *[]T) error {
+	if value == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(*value)
+	if err != nil {
+		return fmt.Errorf("encode channel %s patch: %w", field, err)
+	}
+	helper.ApplyField(field, string(encoded))
+	return nil
+}
+
+func deleteChannelKeysTx(tx *gorm.DB, channelID int, keyIDs []int) error {
+	if len(keyIDs) == 0 {
+		return nil
+	}
+	var count int64
+	if err := tx.Model(&model.ChannelKey{}).Where("id IN ? AND channel_id = ?", keyIDs, channelID).Count(&count).Error; err != nil {
+		return fmt.Errorf("failed to verify channel keys to delete: %w", err)
+	}
+	if count != int64(len(keyIDs)) {
+		return fmt.Errorf("%w: one or more channel keys to delete were not found", ErrNotFound)
+	}
+	if err := tx.Where("id IN ? AND channel_id = ?", keyIDs, channelID).Delete(&model.ChannelKey{}).Error; err != nil {
+		return fmt.Errorf("failed to delete channel keys: %w", err)
+	}
+	return nil
+}
+
+func updateChannelKeysTx(tx *gorm.DB, channelID int, keys []model.ChannelKeyUpdateRequest) error {
+	for _, key := range keys {
+		updates := channelKeyUpdates(key)
+		if len(updates) == 0 {
+			continue
+		}
+		result := tx.Model(&model.ChannelKey{}).
+			Where("id = ? AND channel_id = ?", key.ID, channelID).
+			Updates(updates)
+		if result.Error != nil {
+			return fmt.Errorf("failed to update channel key %d: %w", key.ID, result.Error)
+		}
+		if result.RowsAffected == 0 {
+			var count int64
+			if err := tx.Model(&model.ChannelKey{}).Where("id = ? AND channel_id = ?", key.ID, channelID).Count(&count).Error; err != nil {
+				return fmt.Errorf("failed to verify channel key %d update: %w", key.ID, err)
+			}
+			if count != 1 {
+				return fmt.Errorf("%w: channel key %d not found", ErrNotFound, key.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func channelKeyUpdates(key model.ChannelKeyUpdateRequest) map[string]interface{} {
+	updates := make(map[string]interface{}, 5)
+	resetRuntimeState := false
+	if key.Enabled != nil {
+		updates["enabled"] = *key.Enabled
+		resetRuntimeState = *key.Enabled
+	}
+	if key.ChannelKey != nil {
+		updates["channel_key"] = *key.ChannelKey
+		resetRuntimeState = true
+	}
+	if key.Remark != nil {
+		updates["remark"] = *key.Remark
+	}
+	if resetRuntimeState {
+		updates["status_code"] = 0
+		updates["last_use_time_stamp"] = 0
+	}
+	return updates
+}
+
+func addChannelKeysTx(tx *gorm.DB, channelID int, keys []model.ChannelKeyAddRequest) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	newKeys := make([]model.ChannelKey, 0, len(keys))
+	for _, key := range keys {
+		newKeys = append(newKeys, model.ChannelKey{
+			ChannelID:  channelID,
+			Enabled:    key.Enabled,
+			ChannelKey: key.ChannelKey,
+			Remark:     key.Remark,
+		})
+	}
+	if err := tx.Create(&newKeys).Error; err != nil {
+		return fmt.Errorf("failed to create channel keys: %w", err)
+	}
+	return nil
+}
+
+func invalidateCapabilityEvidenceForChannelUpdateTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {
+	if !tx.Migrator().HasTable(&model.CapabilityEvidence{}) {
+		return nil
+	}
+	if req.Type != nil || req.BaseUrls != nil || req.Model != nil || req.CustomModel != nil ||
+		req.Proxy != nil || req.ChannelProxy != nil || req.CustomHeader != nil ||
+		req.HeaderRules != nil || req.JSONRewriteRules != nil || req.ParamOverride != nil ||
+		req.UserAgent != nil || req.RawPassthrough != nil {
+		return deleteCapabilityEvidenceChannelTx(tx, req.ID)
+	}
+	keyIDs := append([]int(nil), req.KeysToDelete...)
+	for _, key := range req.KeysToUpdate {
+		if key.ChannelKey != nil || key.Enabled != nil {
+			keyIDs = append(keyIDs, key.ID)
+		}
+	}
+	return deleteCapabilityEvidenceKeysTx(tx, req.ID, keyIDs)
+}
+
 func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 	oldChannel, ok := channelCache.Get(id)
 	if !ok {
-		return fmt.Errorf("channel not found")
+		return fmt.Errorf("%w: channel not found", ErrNotFound)
 	}
-	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Update("enabled", enabled).Error; err != nil {
-		return err
+	result := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Update("enabled", enabled)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		var count int64
+		if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Count(&count).Error; err != nil {
+			return fmt.Errorf("failed to verify channel enable update: %w", err)
+		}
+		if count != 1 {
+			return fmt.Errorf("%w: channel not found", ErrNotFound)
+		}
 	}
 	oldChannel.Enabled = enabled
 	channelCache.Set(id, oldChannel)
@@ -261,14 +390,18 @@ func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 func ChannelDel(id int, ctx context.Context) error {
 	ch, ok := channelCache.Get(id)
 	if !ok {
-		return fmt.Errorf("channel not found")
+		return fmt.Errorf("%w: channel not found", ErrNotFound)
 	}
 
 	// 开启事务
 	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("failed to begin transaction: %w", tx.Error)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
@@ -293,6 +426,13 @@ func ChannelDel(id int, ctx context.Context) error {
 		return fmt.Errorf("failed to delete channel keys: %w", err)
 	}
 
+	if tx.Migrator().HasTable(&model.CapabilityEvidence{}) {
+		if err := deleteCapabilityEvidenceChannelTx(tx, id); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to delete channel capability evidence: %w", err)
+		}
+	}
+
 	// 删除统计数据
 	if err := tx.Where("channel_id = ?", id).Delete(&model.StatsChannel{}).Error; err != nil {
 		tx.Rollback()
@@ -300,9 +440,14 @@ func ChannelDel(id int, ctx context.Context) error {
 	}
 
 	// 删除渠道
-	if err := tx.Delete(&model.Channel{}, id).Error; err != nil {
+	result := tx.Delete(&model.Channel{}, id)
+	if result.Error != nil {
 		tx.Rollback()
-		return fmt.Errorf("failed to delete channel: %w", err)
+		return fmt.Errorf("failed to delete channel: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		tx.Rollback()
+		return fmt.Errorf("%w: channel not found", ErrNotFound)
 	}
 
 	if err := tx.Commit().Error; err != nil {
@@ -316,7 +461,12 @@ func ChannelDel(id int, ctx context.Context) error {
 			channelKeyCache.Del(k.ID)
 		}
 	}
-	StatsChannelDel(id)
+	if err := StatsChannelDel(id); err != nil {
+		// The channel and its statistics were already deleted atomically above;
+		// report a failure from the defensive post-commit cleanup without
+		// returning a misleading rollback-style error to the caller.
+		log.Warnf("channel %d deleted but post-commit stats cleanup failed: %v", id, err)
+	}
 
 	// 刷新受影响的分组缓存
 	for _, groupID := range affectedGroupIDs {
@@ -376,10 +526,9 @@ func channelRefreshCache(ctx context.Context) error {
 		log.Warnf("failed to get channels: %v", err)
 		return err
 	}
+	channelCache.Clear()
 	channelKeyCache.Clear()
-	channelKeyCacheNeedUpdateLock.Lock()
-	channelKeyCacheNeedUpdate = make(map[int]struct{})
-	channelKeyCacheNeedUpdateLock.Unlock()
+	channelKeyCacheNeedUpdate.reset()
 	for _, channel := range channels {
 		channelCache.Set(channel.ID, channel)
 		for _, k := range channel.Keys {

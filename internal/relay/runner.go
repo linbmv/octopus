@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/utils/log"
+	"github.com/gin-gonic/gin"
 )
 
 func (r *relayRun) run() {
@@ -18,6 +20,15 @@ func (r *relayRun) run() {
 	for {
 		select {
 		case <-ctx.Done():
+			if isNonStreamRequestTimeout(ctx) {
+				timeoutErr := newTerminalRelayError(http.StatusGatewayTimeout, errNonStreamRequestTimeout)
+				log.Infof("non-streaming request deadline reached, stopping retry")
+				r.metrics.Save(context.WithoutCancel(ctx), false, timeoutErr, r.attempts())
+				if !r.c.Writer.Written() {
+					respondRelayError(r.c, http.StatusGatewayTimeout, timeoutErr)
+				}
+				return
+			}
 			log.Infof("request context canceled, stopping retry")
 			r.metrics.Save(ctx, r.c.Writer.Written(), nil, r.attempts())
 			return
@@ -29,7 +40,7 @@ func (r *relayRun) run() {
 			var terminalErr *terminalRelayError
 			if errors.As(err, &terminalErr) {
 				r.metrics.Save(ctx, false, err, r.attempts())
-				resp.Error(r.c, terminalErr.StatusCode(), terminalErr.Error())
+				respondRelayError(r.c, terminalErr.StatusCode(), terminalErr)
 				return
 			}
 			lastErr = err
@@ -47,7 +58,7 @@ func (r *relayRun) run() {
 		var terminalErr *terminalRelayError
 		if errors.As(err, &terminalErr) {
 			r.metrics.Save(ctx, false, err, r.attempts())
-			resp.Error(r.c, terminalErr.StatusCode(), terminalErr.Error())
+			respondRelayError(r.c, terminalErr.StatusCode(), terminalErr)
 			return
 		}
 		if written {
@@ -65,7 +76,37 @@ func (r *relayRun) run() {
 		lastErr = errors.New("all channels failed")
 	}
 	r.metrics.Save(ctx, false, lastErr, r.attempts())
-	resp.Error(r.c, http.StatusBadGateway, lastErr.Error())
+	respondRelayError(r.c, http.StatusBadGateway, lastErr)
+}
+
+const (
+	relayUpstreamErrorCode    = "UPSTREAM_ERROR"
+	relayUpstreamErrorMessage = "Upstream service unavailable"
+)
+
+// respondRelayError keeps actionable client-side errors intact while ensuring
+// transport, channel, and internal details never cross the public 5xx boundary.
+// The original error remains available in structured server logs for diagnosis.
+func respondRelayError(c *gin.Context, status int, err error) {
+	if status < http.StatusInternalServerError {
+		message := http.StatusText(status)
+		if err != nil && err.Error() != "" {
+			message = err.Error()
+		}
+		resp.Error(c, status, message)
+		return
+	}
+
+	log.WithContext(c.Request.Context()).Errorw(
+		"relay request failed",
+		"status_code", status,
+		"error", err,
+	)
+	resp.ErrorWithCode(c, status, relayUpstreamErrorCode, relayUpstreamErrorMessage)
+}
+
+func isNonStreamRequestTimeout(ctx context.Context) bool {
+	return ctx != nil && errors.Is(context.Cause(ctx), errNonStreamRequestTimeout)
 }
 
 func (r *relayRun) attempts() []dbmodel.ChannelAttempt {
@@ -147,7 +188,7 @@ func (r *relayRun) pushNestedGroupIterator(parent *relayIteratorFrame, item dbmo
 		return nil
 	}
 	parent.iter.RedirectFor(item, 0, parent.group.Name, targetGroup.ID, targetGroup.Name, parent.depth+1, "enter nested group")
-	childIter := newRelayIterator(*targetGroup, r.c.GetInt("api_key_id"), r.internalRequest, r.c.Request.Context())
+	childIter := newRelayIteratorWithBaseURLs(*targetGroup, r.c.GetInt("api_key_id"), r.internalRequest, r.c.Request.Context(), r.selectedBaseURLs)
 	r.iterHistory = append(r.iterHistory, childIter)
 	r.iterStack = append(r.iterStack, &relayIteratorFrame{
 		group: *targetGroup,
@@ -184,13 +225,17 @@ func (r *relayRun) buildRealAttempt(
 		return nil, nil
 	}
 
+	baseURL := selectedBaseURLForChannel(channel, r.selectedBaseURLs)
 	keyOptions := channel.AvailableKeysForAttempt(stickyKeyID)
+	keyOptions = op.RankChannelKeysByCapability(
+		r.c.Request.Context(), channel, keyOptions, item.ModelName,
+		dbmodel.RequiredCapabilities(r.internalRequest), baseURL,
+	)
 	if len(keyOptions) == 0 {
 		r.iter.Skip(channel.ID, 0, channel.Name, "no available key")
 		return nil, nil
 	}
 
-	baseURL := selectRuntimeBaseURL(channel)
 	for keyIndex, usedKey := range keyOptions {
 		keyRemark := cleanKeyRemark(usedKey.Remark)
 		if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {

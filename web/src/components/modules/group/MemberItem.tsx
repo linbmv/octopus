@@ -146,7 +146,7 @@ export function MemberItem({
                         </TooltipContent>
                     </Tooltip>
                     <span className="text-[10px] text-muted-foreground truncate leading-tight">
-                        {isChannelMember ? member.channel_name : '(分组)'}
+                        {isChannelMember ? member.channel_name : t('item.group')}
                     </span>
                 </div>
 

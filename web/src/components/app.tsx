@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from "motion/react"
 import { useAuth } from '@/api/endpoints/user';
 import { LoginForm } from '@/components/modules/login';
+import { PasswordChangeRequired } from '@/components/modules/password-change-required';
 import { APIKeyDashboard } from '@/components/modules/apikey-dashboard';
 import { ContentLoader } from '@/route/content-loader';
 import { NavBar, useNavStore } from '@/components/modules/navbar';
@@ -22,7 +23,7 @@ function timeout(ms: number) {
 }
 
 export function AppContainer() {
-    const { isAuthenticated, isAPIKeyAuth, isLoading: authLoading } = useAuth();
+    const { isAuthenticated, isAPIKeyAuth, mustChangePassword, isLoading: authLoading } = useAuth();
     const { activeItem, direction } = useNavStore();
     const t = useTranslations('navbar');
     const queryClient = useQueryClient();
@@ -49,8 +50,8 @@ export function AppContainer() {
 
     useEffect(() => {
         if (authLoading) return;
-        if (!isAuthenticated) {
-            setBootstrapComplete(true);
+        if (!isAuthenticated || mustChangePassword) {
+            bootstrapStartedRef.current = false;
             return;
         }
 
@@ -58,6 +59,9 @@ export function AppContainer() {
         bootstrapStartedRef.current = true;
 
         let cancelled = false;
+		queueMicrotask(() => {
+			if (!cancelled) setBootstrapComplete(false);
+		});
 
         (async () => {
             try {
@@ -168,13 +172,13 @@ export function AppContainer() {
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [authLoading, isAuthenticated]);
+    }, [authLoading, isAuthenticated, mustChangePassword]);
 
     // 加载状态
     const isLoading =
         authLoading ||
         !logoAnimationComplete ||
-        (isAuthenticated && !bootstrapComplete);
+        (isAuthenticated && !mustChangePassword && !bootstrapComplete);
 
     // 加载页面
     if (isLoading) {
@@ -199,6 +203,16 @@ export function AppContainer() {
         return (
             <AnimatePresence mode="wait">
                 <LoginForm key="login" />
+            </AnimatePresence>
+        );
+    }
+
+    // A password-change-required session must not mount the navigation or any
+    // business queries; the backend permits only status and password change.
+    if (mustChangePassword) {
+        return (
+            <AnimatePresence mode="wait">
+                <PasswordChangeRequired key="password-change-required" />
             </AnimatePresence>
         );
     }

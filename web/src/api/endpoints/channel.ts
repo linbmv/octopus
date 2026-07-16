@@ -8,8 +8,10 @@ import type {
     Channel as ContractChannel,
     ChannelKey,
     CustomHeader,
+	HeaderRule,
+	JSONRewriteRule,
 } from '../contracts';
-export type { BaseUrl, ChannelKey, CustomHeader } from '../contracts';
+export type { BaseUrl, ChannelKey, CustomHeader, HeaderRule, JSONRewriteRule } from '../contracts';
 /**
  * 渠道类型枚举
  */
@@ -42,9 +44,11 @@ export type Channel = Omit<ContractChannel, 'auto_group' | 'stats' | 'type'> & {
 };
 
 // Internal type: backend may return null for slice fields; normalize to [] in select()
-type ChannelServer = Omit<Channel, 'base_urls' | 'custom_header' | 'keys'> & {
+type ChannelServer = Omit<Channel, 'base_urls' | 'custom_header' | 'header_rules' | 'json_rewrite_rules' | 'keys'> & {
     base_urls: BaseUrl[] | null;
     custom_header: CustomHeader[] | null;
+	header_rules: HeaderRule[] | null;
+	json_rewrite_rules: JSONRewriteRule[] | null;
     keys: ChannelKey[] | null;
 };
 
@@ -63,6 +67,8 @@ export type CreateChannelRequest = {
     auto_sync?: boolean;
     auto_group?: AutoGroupType;
     custom_header?: CustomHeader[];
+	header_rules?: HeaderRule[];
+	json_rewrite_rules?: JSONRewriteRule[];
     channel_proxy?: string | null;
     param_override?: string | null;
     match_regex?: string | null;
@@ -87,6 +93,8 @@ export type UpdateChannelRequest = {
     auto_sync?: boolean;
     auto_group?: AutoGroupType;
     custom_header?: CustomHeader[];
+	header_rules?: HeaderRule[];
+	json_rewrite_rules?: JSONRewriteRule[];
     channel_proxy?: string | null;
     param_override?: string | null;
     match_regex?: string | null;
@@ -108,6 +116,55 @@ export type FetchModelRequest = {
     channel_proxy?: string | null;
     match_regex?: string | null;
     custom_header?: CustomHeader[];
+};
+
+export type CapabilityKind = 'text' | 'stream' | 'tool' | 'vision';
+export type CapabilityStatus = 'supported' | 'unsupported' | 'unauthorized' | 'not_implemented' | 'transient';
+
+export type CapabilityEvidence = {
+    id: number;
+    channel_id: number;
+    channel_key_id: number;
+    model: string;
+    wire_protocol: string;
+    capability: CapabilityKind;
+    endpoint?: string;
+    status: CapabilityStatus;
+    error_class?: string;
+    error_message?: string;
+    http_status?: number;
+    source: string;
+    probed_at: string;
+    expires_at: string;
+    key_remark?: string;
+    key_enabled: boolean;
+    fresh: boolean;
+};
+
+export type CapabilityProbeReport = {
+    requested: number;
+    accepted: number;
+    coalesced: number;
+    dropped: number;
+    budget_rejected: number;
+    reserved_cost_usd: number;
+    total_reserved_usd: number;
+    remaining_cost_usd: number;
+    queue: {
+		accepted: number;
+		coalesced: number;
+		dropped: number;
+		failures: number;
+		queue_depth: number;
+		queue_limit: number;
+		concurrency: number;
+    };
+};
+
+export type ProbeCapabilitiesRequest = {
+    models?: string[];
+    capabilities?: CapabilityKind[];
+    max_cost_usd?: number;
 };
 
 /**
@@ -132,6 +189,8 @@ export function useChannelList() {
                 ...item,
                 base_urls: item.base_urls ?? [],
                 custom_header: item.custom_header ?? [],
+				header_rules: item.header_rules ?? [],
+				json_rewrite_rules: item.json_rewrite_rules ?? [],
                 keys: item.keys ?? [],
             }) satisfies Channel,
             formatted: {
@@ -345,6 +404,28 @@ export function useSyncChannel() {
         },
         onError: (error) => {
             logger.error('渠道同步失败:', error);
+        },
+    });
+}
+
+export function useChannelCapabilities(channelId: number) {
+    return useQuery({
+        queryKey: ['channels', channelId, 'capabilities'],
+        queryFn: async () => apiClient.get<CapabilityEvidence[]>(`/api/v1/channel/${channelId}/capabilities`),
+        enabled: channelId > 0,
+        refetchInterval: 5000,
+    });
+}
+
+export function useProbeChannelCapabilities(channelId: number) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (request: ProbeCapabilitiesRequest = {}) => apiClient.post<CapabilityProbeReport>(`/api/v1/channel/${channelId}/capabilities/probe`, request),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['channels', channelId, 'capabilities'] });
+        },
+        onError: (error) => {
+            logger.error('渠道能力探测失败:', error);
         },
     });
 }

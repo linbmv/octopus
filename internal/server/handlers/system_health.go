@@ -8,6 +8,7 @@ import (
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
+	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 )
 
@@ -61,7 +62,7 @@ func healthCheck(c *gin.Context) {
 		Status:    overallStatus,
 		Timestamp: time.Now().Format(time.RFC3339),
 		Uptime:    time.Since(startTime).String(),
-		Version:   conf.APP_NAME,
+		Version:   conf.Version,
 		Checks:    checks,
 	}
 
@@ -112,9 +113,10 @@ func checkDatabase() CheckResult {
 	}
 
 	if err := sqlDB.Ping(); err != nil {
+		log.Errorf("health database ping failed: %v", err)
 		return CheckResult{
 			Status:  "unhealthy",
-			Message: err.Error(),
+			Message: "database unavailable",
 		}
 	}
 

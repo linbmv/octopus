@@ -97,16 +97,20 @@ case ErrorLevelChannel:
 3. ✅ 支持 400 + quota/billing 错误的智能分类
 4. ✅ 新增 `ClassifyWithHeaders()` 函数
 5. ✅ 新增 60+ 测试用例覆盖高级场景
+6. ✅ relay 生产路径将上游响应 headers 传入 `decideRelayError()` / `ClassifyWithHeaders()`
+7. ✅ 识别 HTTP 200 / SSE error、1308/1310 用量上限与 Gemini `RESOURCE_EXHAUSTED`
 
 **输出**：更智能的错误分类，覆盖更多边缘场景
 
 ### Phase 4：前端可观测性 ✅ 已完成
 
 1. ✅ 在 attempt 日志里记录 `error_level`（key/channel/client）
-2. ⏳ 在统计页面展示不同级别的错误分布（待前端实现）
-3. ⏳ 在渠道详情页展示 key 级 vs 渠道级错误趋势（待前端实现）
+2. ✅ 同时记录有界、结构化的 `error_reason`，成功、取消和跳过 attempt 保持空值
+3. ✅ 提供最近 1–168 小时的错误级别统计 API；合并未刷盘缓存与数据库日志，最多扫描最新 10,000 条
+4. ✅ 在统计页面展示 key/channel/client 错误分布和容量截断提示
+5. ✅ 在渠道详情页展示 key 级 vs 渠道级错误计数与小时趋势
 
-**输出**：后端已支持 error_level 记录，前端可视化待实现
+**输出**：从上游响应分类、attempt 持久化、后端聚合查询到前端分布/渠道趋势的完整可观测性闭环
 
 ## 风险与缓解
 
@@ -168,13 +172,22 @@ case ErrorLevelChannel:
 - ✅ 重构 `canRetryNextKey()` 使用新分类器
 - ✅ 70+ 测试用例
 
-**Phase 3 & 4（提交 `7866ac5`）**
+**Phase 3（提交 `7866ac5`）**
 - ✅ 新增 `ClassifyWithHeaders()` 支持 header 分析
 - ✅ 429 Retry-After 智能分类（>60s = 渠道级）
 - ✅ X-RateLimit-Scope header 支持
 - ✅ 400 quota/billing 错误检测
 - ✅ attempt 日志增加 `error_level` 字段
 - ✅ 60+ 新增测试用例
+
+**Phase 4 闭环（2026-07-16）**
+- ✅ 修复生产 relay 分类未携带上游 headers 的缺口；长 `Retry-After` / 渠道范围限流不会错误轮换 Key
+- ✅ HTTP 200 soft error 与首个 SSE error event 进入同一分类器；未向客户端写入时仍可安全切换 Key/渠道
+- ✅ 1308/1310 与 Gemini `RESOURCE_EXHAUSTED` 在任意 HTTP 状态或 SSE 包装下均归为 Key 级
+- ✅ failed attempt 持久化 `error_level` 与 `error_reason`；传输错误和软 2xx 错误统一归为 channel 级
+- ✅ 新增 `/api/v1/stats/error-levels` 有界查询，支持全局分布和按渠道小时趋势
+- ✅ 首页展示错误级别分布，渠道详情展示 key/channel 趋势与计数
+- ✅ contracts、三语 locale、Go focused tests 和 Vitest 已覆盖新链路
 
 ### 测试覆盖
 
@@ -195,17 +208,11 @@ case ErrorLevelChannel:
 
 ### 未来改进（可选）
 
-1. **前端可视化**：
-   - 统计页面展示错误级别分布饼图
-   - 渠道详情页展示 key 级 vs 渠道级错误趋势
-   - 实时错误分类监控面板
+1. **更多高级场景**（如有需要）：
+   - 在引入 Key 冷却管理器后，使用 1308/RESOURCE_EXHAUSTED 响应中的重置时间做精确冷却
+   - 扩展更多供应商私有错误码的结构化解析
 
-2. **更多高级场景**（如有需要）：
-   - SSE error 动态分类
-   - 1308 配额错误的精确冷却时间
-   - Gemini RESOURCE_EXHAUSTED 解析
-
-3. **冷却策略**（如有需要）：
+2. **冷却策略**（如有需要）：
    - Key 级指数退避冷却
    - 渠道级熔断机制
    - 基于 error_level 的自适应冷却时长

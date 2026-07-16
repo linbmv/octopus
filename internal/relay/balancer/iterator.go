@@ -3,7 +3,9 @@ package balancer
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bestruirui/octopus/internal/model"
 )
@@ -221,6 +223,33 @@ func (s *AttemptSpan) FirstTokenDuration() (time.Duration, bool) {
 
 // End 结束尝试：设置状态，自动计算耗时，追加到 Iterator
 func (s *AttemptSpan) End(status model.AttemptStatus, msg string) {
+	s.end(status, msg, "", "")
+}
+
+// EndClassified ends a failed upstream attempt and persists the classifier's
+// scope and reason alongside the human-readable transport error. Keeping the
+// values on the attempt makes observability independent of unstructured Msg.
+func (s *AttemptSpan) EndClassified(status model.AttemptStatus, msg string, level model.AttemptErrorLevel, reason string) {
+	s.end(status, msg, level, boundedErrorReason(reason))
+}
+
+const maxAttemptErrorReasonRunes = 256
+
+func boundedErrorReason(reason string) string {
+	reason = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, reason))
+	runes := []rune(reason)
+	if len(runes) > maxAttemptErrorReasonRunes {
+		return string(runes[:maxAttemptErrorReasonRunes])
+	}
+	return reason
+}
+
+func (s *AttemptSpan) end(status model.AttemptStatus, msg string, level model.AttemptErrorLevel, reason string) {
 	if s.ended {
 		return
 	}
@@ -228,6 +257,8 @@ func (s *AttemptSpan) End(status model.AttemptStatus, msg string) {
 	s.attempt.Status = status
 	s.attempt.Duration = int(time.Since(s.startTime).Milliseconds())
 	s.attempt.Msg = msg
+	s.attempt.ErrorLevel = level
+	s.attempt.ErrorReason = reason
 	// 记录首 token 用时（仅流式成功时有值）
 	if s.firstTokenTime != nil {
 		s.attempt.FirstTokenTime = int(s.firstTokenTime.Sub(s.startTime).Milliseconds())

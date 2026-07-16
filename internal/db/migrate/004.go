@@ -24,7 +24,9 @@ func migrateGroupsEnabledDefault(db *gorm.DB) error {
 		return nil
 	}
 
-	if err := db.Exec("UPDATE groups SET enabled = ?", true).Error; err != nil {
+	groupsTable := quoteIdentifier(db.Dialector, "groups")
+	enabledColumn := quoteIdentifier(db.Dialector, "enabled")
+	if err := db.Exec(fmt.Sprintf("UPDATE %s SET %s = ?", groupsTable, enabledColumn), true).Error; err != nil {
 		return fmt.Errorf("failed to backfill groups.enabled: %w", err)
 	}
 	return nil

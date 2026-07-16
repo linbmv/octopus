@@ -1,7 +1,10 @@
 package errorclass
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -108,6 +111,26 @@ func getStatusCodeMeta(statusCode int) statusCodeMeta {
 // 支持高级场景：429 Retry-After、400 quota errors
 // headers 使用 http.Header 类型以支持大小写无关的 header 查找
 func ClassifyWithHeaders(statusCode int, headers http.Header, responseBody []byte) Classification {
+	contentType := ""
+	if headers != nil {
+		contentType = headers.Get("Content-Type")
+	}
+	return ClassifyResponse(statusCode, headers, responseBody, contentType)
+}
+
+// ClassifyResponse is the single response classification entry point used by
+// ordinary HTTP responses, HTTP-200 soft errors, and buffered SSE error events.
+// For successful binary responses, a non-text content type disables body
+// keyword scanning so arbitrary payload bytes cannot become routing signals.
+func ClassifyResponse(statusCode int, headers http.Header, responseBody []byte, contentType string) Classification {
+	// Structured quota and embedded/SSE errors can arrive behind HTTP 200, so
+	// inspect the bounded body before the ordinary 2xx success fast path.
+	if shouldInspectResponseBody(statusCode, contentType, responseBody) {
+		if classification, ok := classifyEmbeddedError(statusCode, responseBody, allowsPlainTextMarkers(contentType)); ok {
+			return classification
+		}
+	}
+
 	// 2xx 成功
 	if statusCode >= 200 && statusCode < 300 {
 		return Classification{Level: ErrorLevelNone, Reason: "success"}
@@ -144,6 +167,184 @@ func ClassifyWithHeaders(statusCode int, headers http.Header, responseBody []byt
 		Level:  meta.Level,
 		Reason: http.StatusText(statusCode),
 	}
+}
+
+func allowsPlainTextMarkers(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	return contentType == "" || strings.Contains(contentType, "text/plain") || strings.Contains(contentType, "text/html")
+}
+
+func shouldInspectResponseBody(statusCode int, contentType string, responseBody []byte) bool {
+	if len(responseBody) == 0 {
+		return false
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		return true
+	}
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if contentType == "" {
+		return true
+	}
+	return strings.Contains(contentType, "json") ||
+		strings.Contains(contentType, "text/") ||
+		strings.Contains(contentType, "event-stream") ||
+		strings.Contains(contentType, "xml")
+}
+
+type embeddedError struct {
+	typeName string
+	code     string
+	status   string
+	message  string
+	present  bool
+}
+
+func classifyEmbeddedError(statusCode int, responseBody []byte, allowPlainTextMarkers bool) (Classification, bool) {
+	if len(responseBody) == 0 {
+		return Classification{}, false
+	}
+
+	body := lowerScanBody(responseBody)
+	detail, sseErrorEvent := parseEmbeddedError(responseBody)
+	errorType := strings.ToLower(firstNonEmpty(detail.typeName, detail.code))
+	status := strings.ToUpper(detail.status)
+	message := strings.ToUpper(detail.message)
+
+	// Anthropic-compatible usage-limit envelopes use either error.type or
+	// error.code. They are key/account quota failures even when HTTP status is
+	// 200 or when they are delivered as an SSE error event.
+	if errorType == "1308" || errorType == "1310" {
+		return Classification{Level: ErrorLevelKey, Reason: errorType + " usage quota exceeded"}, true
+	}
+
+	// Gemini normally sends this with code=429, but relays may preserve only
+	// status/message or wrap it behind HTTP 200. Keep the match structural where
+	// possible and retain the bounded text fallback for imperfect gateways.
+	if status == "RESOURCE_EXHAUSTED" || strings.Contains(message, "RESOURCE_EXHAUSTED") ||
+		(detail.present && strings.Contains(strings.ToUpper(body), "RESOURCE_EXHAUSTED")) {
+		return Classification{Level: ErrorLevelKey, Reason: "Gemini RESOURCE_EXHAUSTED quota"}, true
+	}
+
+	switch errorType {
+	case "api_error", "overloaded_error", "service_unavailable_error", "server_is_overloaded", "1305":
+		return Classification{Level: ErrorLevelChannel, Reason: "upstream " + errorType}, true
+	case "rate_limit_error", "rate_limit_exceeded", "too_many_requests", "authentication_error":
+		return Classification{Level: ErrorLevelKey, Reason: "upstream " + errorType}, true
+	case "invalid_request_error", "validation_error":
+		return Classification{Level: ErrorLevelClient, Reason: "upstream " + errorType}, true
+	}
+
+	// For 2xx only, a structured error envelope or explicit SSE error is still
+	// a failure. Unknown SSE error types stay key-scoped (matching the reference
+	// classifier's conservative rotation policy); known plain-text soft-error
+	// markers receive the same scope as their HTTP counterparts.
+	if statusCode >= 200 && statusCode < 300 {
+		if detail.present || sseErrorEvent {
+			return Classification{Level: ErrorLevelKey, Reason: "HTTP 2xx structured/SSE error"}, true
+		}
+		trimmedBody := strings.TrimSpace(body)
+		jsonLike := strings.HasPrefix(trimmedBody, "{") || strings.HasPrefix(trimmedBody, "[")
+		if allowPlainTextMarkers && !jsonLike {
+			if bodyContainsAny(body, "rate limit", "rate_limit", "too many requests", "quota exceeded", "insufficient_quota", "请求过快") {
+				return Classification{Level: ErrorLevelKey, Reason: "HTTP 2xx rate/quota soft error"}, true
+			}
+			if bodyContainsAny(body, "overloaded", "service unavailable", "temporarily unavailable", "model overloaded", "负载过高", "服务繁忙") {
+				return Classification{Level: ErrorLevelChannel, Reason: "HTTP 2xx upstream soft error"}, true
+			}
+		}
+	}
+
+	return Classification{}, false
+}
+
+func parseEmbeddedError(responseBody []byte) (embeddedError, bool) {
+	scanBody := responseBody
+	if len(scanBody) > maxErrorBodyScanBytes {
+		scanBody = scanBody[:maxErrorBodyScanBytes]
+	}
+	if detail, ok := parseEmbeddedErrorJSON(scanBody); ok {
+		return detail, false
+	}
+
+	sseErrorEvent := false
+	for _, rawLine := range strings.Split(string(scanBody), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.EqualFold(line, "event: error") || strings.EqualFold(line, "event:error") {
+			sseErrorEvent = true
+			continue
+		}
+		if !strings.HasPrefix(strings.ToLower(line), "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(line[len("data:"):])
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		if detail, ok := parseEmbeddedErrorJSON([]byte(payload)); ok {
+			return detail, sseErrorEvent
+		}
+	}
+	return embeddedError{}, sseErrorEvent
+}
+
+func parseEmbeddedErrorJSON(body []byte) (embeddedError, bool) {
+	var root map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil {
+		return embeddedError{}, false
+	}
+
+	detail := embeddedError{}
+	if value, ok := root["error"]; ok && value != nil {
+		switch typed := value.(type) {
+		case map[string]any:
+			detail.present = true
+			detail.typeName = mapScalar(typed, "type")
+			detail.code = mapScalar(typed, "code")
+			detail.status = mapScalar(typed, "status")
+			detail.message = mapScalar(typed, "message")
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				detail.present = true
+				detail.message = typed
+			}
+		}
+	}
+	rootType := mapScalar(root, "type")
+	if strings.EqualFold(rootType, "error") || strings.EqualFold(rootType, "response.failed") {
+		detail.present = true
+	}
+	if detail.status == "" {
+		detail.status = mapScalar(root, "status")
+	}
+	return detail, detail.present
+}
+
+func mapScalar(value map[string]any, key string) string {
+	raw, ok := value[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch typed := raw.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return typed.String()
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // Classify 基于状态码 + 响应体智能分类错误级别

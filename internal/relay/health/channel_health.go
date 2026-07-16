@@ -1,11 +1,11 @@
 package health
 
 import (
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/relay/errorclass"
+	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
 // HealthKey 健康状态的唯一标识
@@ -29,32 +29,6 @@ const (
 	OutcomeFormatError
 	OutcomeUpstreamError
 )
-
-// String 返回 outcome 的字符串表示
-func (o HealthOutcome) String() string {
-	switch o {
-	case OutcomeSuccess:
-		return "success"
-	case OutcomeFirstTokenTimeout:
-		return "first_token_timeout"
-	case OutcomeNetworkError:
-		return "network_error"
-	case OutcomeClientCancel:
-		return "client_cancel"
-	case OutcomeClientError:
-		return "client_error"
-	case OutcomeRateLimit:
-		return "rate_limit"
-	case OutcomeModelError:
-		return "model_error"
-	case OutcomeFormatError:
-		return "format_error"
-	case OutcomeUpstreamError:
-		return "upstream_error"
-	default:
-		return "unknown"
-	}
-}
 
 // HealthEvent 健康事件
 type HealthEvent struct {
@@ -154,16 +128,6 @@ type HealthConfig struct {
 	EstimatorConfig EstimatorConfig
 }
 
-type TimeoutPolicy struct {
-	Source             string  `json:"source"`
-	MinTimeoutMS       int64   `json:"min_timeout_ms"`
-	SlowModelProfile   bool    `json:"slow_model_profile"`
-	TimeoutRate        float64 `json:"timeout_rate"`
-	TimeoutRateBackoff bool    `json:"timeout_rate_backoff"`
-	ShadowMode         bool    `json:"shadow_mode"`
-	ShadowHitRate      float64 `json:"shadow_hit_rate,omitempty"` // shadow 模式命中率
-}
-
 // DefaultHealthConfig 默认配置
 func DefaultHealthConfig() HealthConfig {
 	return HealthConfig{
@@ -244,7 +208,9 @@ func (h *ChannelHealth) OnEvent(event HealthEvent) {
 
 		// 记录成功样本的延迟
 		if event.FirstTokenTime > 0 {
-			h.Stats.Estimator.Add(float64(event.FirstTokenTime.Milliseconds()), 1.0)
+			if err := h.Stats.Estimator.Add(float64(event.FirstTokenTime.Milliseconds()), 1.0); err != nil {
+				log.Warnf("failed to record health latency sample: channel_id=%d, key_id=%d, error=%v", h.Key.ChannelID, h.Key.KeyID, err)
+			}
 		}
 
 	case OutcomeFirstTokenTimeout:
@@ -257,10 +223,12 @@ func (h *ChannelHealth) OnEvent(event HealthEvent) {
 
 		// 记录超时样本（关键修复：使用权重 1.0）
 		if event.TimeoutBudget > 0 {
-			h.Stats.Estimator.Add(
+			if err := h.Stats.Estimator.Add(
 				float64(event.TimeoutBudget.Milliseconds()),
 				h.Config.TimeoutSampleWeight,
-			)
+			); err != nil {
+				log.Warnf("failed to record health timeout sample: channel_id=%d, key_id=%d, error=%v", h.Key.ChannelID, h.Key.KeyID, err)
+			}
 		}
 
 	case OutcomeNetworkError:
@@ -350,8 +318,38 @@ func (h *ChannelHealth) recomputeLocked() {
 		}
 	}
 
-	// 计算健康度评分
-	h.Score = h.Stats.SuccessRate
+	// 健康分由成功率、有效样本数和首字节 P95 共同构成。窗口样本未达到
+	// MinSamplesForPosterior 前，置信度按比例增长，避免新渠道的一次失败或
+	// 偶发慢首字被放大成完整惩罚。
+	sampleTarget := h.Config.MinSamplesForPosterior
+	if sampleTarget <= 0 {
+		sampleTarget = 10
+	}
+	confidence := float64(len(h.Stats.RecentResults)) / float64(sampleTarget)
+	if confidence > 1 {
+		confidence = 1
+	}
+	successScore := 1 - confidence*(1-h.Stats.SuccessRate)
+
+	latencyScore := 1.0
+	if h.Stats.FirstTokenP95 > 0 {
+		latencyBudget := h.Config.DefaultTimeout
+		if isSlowFirstTokenModelWithKeywords(h.Key.Model, h.Config.SlowModelKeywords) && h.Config.SlowModelMinAdaptiveTimeout > latencyBudget {
+			latencyBudget = h.Config.SlowModelMinAdaptiveTimeout
+		}
+		if latencyBudget <= 0 {
+			latencyBudget = 15 * time.Second
+		}
+		rawLatencyScore := float64(latencyBudget) / float64(h.Stats.FirstTokenP95)
+		if rawLatencyScore > 1 {
+			rawLatencyScore = 1
+		}
+		if rawLatencyScore < 0 {
+			rawLatencyScore = 0
+		}
+		latencyScore = 1 - confidence*(1-rawLatencyScore)
+	}
+	h.Score = 0.8*successScore + 0.2*latencyScore
 
 	// 快速恢复机制
 	if h.Stats.ConsecutiveSuccess >= h.Config.FastRecoveryThreshold {
@@ -372,178 +370,3 @@ func (h *ChannelHealth) recomputeLocked() {
 }
 
 // GetTimeout 获取自适应超时
-func (h *ChannelHealth) GetTimeout() time.Duration {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	// 样本数不足，使用冷启动超时
-	if h.Stats.TotalCount < int64(h.Config.MinSamplesForAdaptiveTimeout) {
-		return h.Config.ColdStartTimeout
-	}
-
-	// 获取 P50 和 P95
-	p50, ok50 := h.Stats.Estimator.Quantile(0.50)
-	p95, ok95 := h.Stats.Estimator.Quantile(0.95)
-
-	if !ok50 || !ok95 || p50 <= 0 || p95 <= 0 || p95 < p50 {
-		return h.Config.DefaultTimeout
-	}
-
-	// 根据 CV 选择 multiplier
-	cv := h.Stats.CV
-	multiplier := h.Config.HighJitterMultiplier
-
-	if cv < h.Config.StableCV {
-		multiplier = h.Config.StableMultiplier
-	} else if cv < h.Config.ModerateCV {
-		multiplier = h.Config.ModerateMultiplier
-	}
-
-	slowModel := isSlowFirstTokenModelWithKeywords(h.Key.Model, h.Config.SlowModelKeywords)
-	if slowModel && h.Config.SlowModelMultiplier > 0 {
-		multiplier *= h.Config.SlowModelMultiplier
-	}
-
-	timeoutRate := h.timeoutRateLocked()
-	if timeoutRate >= h.Config.TimeoutRateBackoffThreshold && h.Config.TimeoutRateBackoffMultiplier > 0 {
-		multiplier *= h.Config.TimeoutRateBackoffMultiplier
-	}
-
-	// 防止 multiplier 过度叠加
-	if h.Config.MaxMultiplierStack > 0 && multiplier > h.Config.MaxMultiplierStack {
-		multiplier = h.Config.MaxMultiplierStack
-	}
-
-	// 计算超时 = P95 × multiplier
-	timeout := time.Duration(p95*multiplier) * time.Millisecond
-
-	// 边界限制
-	if timeout < h.Config.MinTimeout {
-		timeout = h.Config.MinTimeout
-	}
-	if timeout < h.Config.MinAdaptiveTimeout {
-		timeout = h.Config.MinAdaptiveTimeout
-	}
-	if slowModel && timeout < h.Config.SlowModelMinAdaptiveTimeout {
-		timeout = h.Config.SlowModelMinAdaptiveTimeout
-	}
-	if timeout > h.Config.MaxTimeout {
-		timeout = h.Config.MaxTimeout
-	}
-
-	// 连续超时保护：增加 15%
-	if h.Stats.ConsecutiveTimeout >= 2 {
-		timeout = time.Duration(float64(timeout) * 1.15)
-		if timeout > h.Config.MaxTimeout {
-			timeout = h.Config.MaxTimeout
-		}
-	}
-
-	return timeout
-}
-
-func (h *ChannelHealth) GetTimeoutPolicy() TimeoutPolicy {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	slowModel := isSlowFirstTokenModelWithKeywords(h.Key.Model, h.Config.SlowModelKeywords)
-	minTimeout := h.Config.MinAdaptiveTimeout
-	if slowModel && h.Config.SlowModelMinAdaptiveTimeout > minTimeout {
-		minTimeout = h.Config.SlowModelMinAdaptiveTimeout
-	}
-	timeoutRate := h.timeoutRateLocked()
-	backoff := timeoutRate >= h.Config.TimeoutRateBackoffThreshold && h.Config.TimeoutRateBackoffMultiplier > 0
-	source := "adaptive"
-	if h.Stats.TotalCount < int64(h.Config.MinSamplesForAdaptiveTimeout) {
-		source = "cold_start"
-	}
-
-	// 计算 shadow 命中率
-	shadowHitRate := 0.0
-	if h.Config.ShadowMode && h.Stats.ShadowLastWindowSize > 0 {
-		shadowHitRate = float64(h.Stats.ShadowAutoTimeoutWouldTrigger) / float64(h.Stats.ShadowLastWindowSize)
-	}
-
-	return TimeoutPolicy{
-		Source:             source,
-		MinTimeoutMS:       minTimeout.Milliseconds(),
-		SlowModelProfile:   slowModel,
-		TimeoutRate:        timeoutRate,
-		TimeoutRateBackoff: backoff,
-		ShadowMode:         h.Config.ShadowMode,
-		ShadowHitRate:      shadowHitRate,
-	}
-}
-
-func (h *ChannelHealth) timeoutRateLocked() float64 {
-	if h.Stats.TotalCount <= 0 {
-		return 0
-	}
-	return float64(h.Stats.TimeoutCount) / float64(h.Stats.TotalCount)
-}
-
-// RecordShadowTimeout 记录 shadow 模式下的超时事件
-func (h *ChannelHealth) RecordShadowTimeout() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	h.Stats.ShadowAutoTimeoutWouldTrigger++
-	// 使用滑动窗口大小作为分母
-	windowSize := h.Config.WindowSize
-	if windowSize <= 0 {
-		windowSize = 50
-	}
-	// 只保留最近 N 次的统计
-	if h.Stats.TotalCount > 0 && h.Stats.TotalCount <= int64(windowSize) {
-		h.Stats.ShadowLastWindowSize = int(h.Stats.TotalCount)
-	} else {
-		h.Stats.ShadowLastWindowSize = windowSize
-	}
-}
-
-func isSlowFirstTokenModelWithKeywords(model string, keywords []string) bool {
-	model = strings.ToLower(model)
-	for _, keyword := range keywords {
-		keyword = strings.TrimSpace(strings.ToLower(keyword))
-		if keyword != "" && strings.Contains(model, keyword) {
-			return true
-		}
-	}
-	return false
-}
-
-// GetScore 获取健康度评分
-func (h *ChannelHealth) GetScore() float64 {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.Score
-}
-
-// GetStats 获取统计信息（只读副本）
-func (h *ChannelHealth) GetStats() HealthStats {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	// 返回副本，避免外部修改
-	stats := h.Stats
-	stats.RecentResults = make([]bool, len(h.Stats.RecentResults))
-	copy(stats.RecentResults, h.Stats.RecentResults)
-
-	return stats
-}
-
-// RestoreStats replaces persisted counters and estimator-derived values, then
-// recomputes derived score fields while holding the health lock.
-func (h *ChannelHealth) RestoreStats(stats HealthStats, score float64) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	estimator := h.Stats.Estimator
-	h.Stats = stats
-	h.Stats.Estimator = estimator
-	if h.Stats.RecentResults == nil {
-		h.Stats.RecentResults = make([]bool, 0, h.Config.WindowSize)
-	}
-	h.Score = score
-	h.recomputeLocked()
-}

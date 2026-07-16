@@ -12,6 +12,7 @@ func TestRedactSensitiveQuery(t *testing.T) {
 		{"stream token", "/api/v1/log/stream?token=abcdef123456", "/api/v1/log/stream?token=REDACTED"},
 		{"mixed with normal params", "/v1beta/models/x:generateContent?alt=sse&key=sk-1", "/v1beta/models/x:generateContent?alt=sse&key=REDACTED"},
 		{"case insensitive", "/p?KEY=sk-1", "/p?KEY=REDACTED"},
+		{"rejected backup password", "/api/v1/setting/export?password=do-not-log&include_stats=true", "/api/v1/setting/export?include_stats=true&password=REDACTED"},
 		{"no query untouched", "/api/v1/group/list", "/api/v1/group/list"},
 		{"other params untouched", "/api/v1/log/list?page=2&size=10", "/api/v1/log/list?page=2&size=10"},
 	}

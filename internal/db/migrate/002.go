@@ -19,7 +19,7 @@ func dropLegacyChannelColumns(db *gorm.DB) error {
 		return fmt.Errorf("db is nil")
 	}
 
-	dialect := db.Dialector.Name()
+	dialect := db.Name()
 
 	// column existence helper
 	hasColumn := func(table, column string) bool {

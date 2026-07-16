@@ -36,6 +36,35 @@ type StatsAPIKey struct {
 	StatsMetrics
 }
 
+// StatsErrorLevelCounts is the aggregate of classified failed relay attempts.
+// Unclassified legacy attempts and non-failure decisions are deliberately not
+// folded into these counters.
+type StatsErrorLevelCounts struct {
+	Key     int64 `json:"key"`
+	Channel int64 `json:"channel"`
+	Client  int64 `json:"client"`
+}
+
+type StatsErrorLevelTrendPoint struct {
+	BucketStart int64 `json:"bucket_start"`
+	StatsErrorLevelCounts
+}
+
+// StatsErrorLevels describes a bounded, time-windowed scan over RelayLog
+// attempts. Truncated tells callers that Capacity newest logs were used and
+// older logs inside the requested window were intentionally excluded.
+type StatsErrorLevels struct {
+	From        int64                       `json:"from"`
+	To          int64                       `json:"to"`
+	WindowHours int                         `json:"window_hours"`
+	ChannelID   int                         `json:"channel_id,omitempty"`
+	ScannedLogs int                         `json:"scanned_logs"`
+	Capacity    int                         `json:"capacity"`
+	Truncated   bool                        `json:"truncated"`
+	Counts      StatsErrorLevelCounts       `json:"counts"`
+	Trend       []StatsErrorLevelTrendPoint `json:"trend"`
+}
+
 // Add aggregates another StatsMetrics into the current one.
 func (s *StatsMetrics) Add(delta StatsMetrics) {
 	s.InputToken += delta.InputToken

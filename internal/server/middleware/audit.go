@@ -1,10 +1,9 @@
 package middleware
 
 import (
-	"encoding/json"
-	"log"
 	"time"
 
+	projectlog "github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 )
 
@@ -12,17 +11,17 @@ import (
 type AuditEvent string
 
 const (
-	EventUserLogin            AuditEvent = "user.login"
-	EventUserLoginFailed      AuditEvent = "user.login.failed"
-	EventUserLogout           AuditEvent = "user.logout"
-	EventPasswordChange       AuditEvent = "user.password.change"
-	EventUsernameChange       AuditEvent = "user.username.change"
-	EventUsernameChangeFailed AuditEvent = "user.username.change.failed"
+	EventUserLogin                AuditEvent = "user.login"
+	EventUserLoginFailed          AuditEvent = "user.login.failed"
+	EventUserLogout               AuditEvent = "user.logout"
+	EventPasswordChange           AuditEvent = "user.password.change"
+	EventUsernameChange           AuditEvent = "user.username.change"
+	EventUsernameChangeFailed     AuditEvent = "user.username.change.failed"
 	EventChannelCreate            AuditEvent = "channel.create"
 	EventChannelUpdate            AuditEvent = "channel.update"
 	EventChannelDelete            AuditEvent = "channel.delete"
+	EventChannelCapabilityProbe   AuditEvent = "channel.capability.probe"
 	EventSettingsUpdate           AuditEvent = "settings.update"
-	EventTokenRevoke              AuditEvent = "token.revoke"
 	EventSensitiveOperationDenied AuditEvent = "sensitive.operation.denied"
 )
 
@@ -31,6 +30,7 @@ func AuditLog(c *gin.Context, event AuditEvent, details map[string]interface{}) 
 	username, _ := c.Get("username")
 	userID, _ := c.Get("user_id")
 	requestID, _ := c.Get("request_id")
+	traceID, _ := c.Get("trace_id")
 
 	logData := map[string]interface{}{
 		"type":       "audit",
@@ -51,11 +51,17 @@ func AuditLog(c *gin.Context, event AuditEvent, details map[string]interface{}) 
 	if requestID != nil {
 		logData["request_id"] = requestID
 	}
+	if traceID != nil {
+		logData["trace_id"] = traceID
+	}
 
 	for k, v := range details {
 		logData[k] = v
 	}
 
-	jsonData, _ := json.Marshal(logData)
-	log.Println(string(jsonData))
+	fields := make([]interface{}, 0, len(logData)*2)
+	for key, value := range logData {
+		fields = append(fields, key, value)
+	}
+	projectlog.WithContext(c.Request.Context()).Infow("audit event", fields...)
 }

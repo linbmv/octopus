@@ -1,0 +1,14 @@
+# Runtime images consume only pre-built binaries and Docker runtime assets.
+# Keeping the context minimal prevents local data, credentials, caches, and
+# unrelated source files from entering BuildKit uploads or provenance inputs.
+*
+
+!build/
+build/*
+!build/docker/
+!build/docker/**
+
+!scripts/
+scripts/*
+!scripts/dockerfiles/
+!scripts/dockerfiles/**

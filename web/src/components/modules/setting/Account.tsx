@@ -1,16 +1,20 @@
 'use client';
 
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { User, KeyRound, Lock, Eye, EyeOff } from 'lucide-react';
+import { User, KeyRound, Lock, Eye, EyeOff, LogOut } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useChangeUsername, useChangePassword, useAuth } from '@/api/endpoints/user';
 import { toast } from '@/components/common/Toast';
+import { passwordHasValidLength } from '@/lib/password';
+import { WebAuthnSettings } from './WebAuthn';
 
 export function SettingAccount() {
     const t = useTranslations('setting');
-    const { logout } = useAuth();
+    const { clearAuth, logout } = useAuth();
+    const queryClient = useQueryClient();
     const changeUsername = useChangeUsername();
     const changePassword = useChangePassword();
 
@@ -19,6 +23,7 @@ export function SettingAccount() {
     const [oldPassword, setOldPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+    const [loggingOut, setLoggingOut] = useState(false);
 
     const [showOldPassword, setShowOldPassword] = useState(false);
     const [showUsernameCurrentPassword, setShowUsernameCurrentPassword] = useState(false);
@@ -40,7 +45,8 @@ export function SettingAccount() {
             {
                 onSuccess: () => {
                     toast.success(t('account.username.success'));
-                    setTimeout(() => logout(), 1000);
+                    queryClient.clear();
+                    clearAuth();
                 },
                 onError: () => {
                     toast.error(t('account.username.failed'));
@@ -62,8 +68,12 @@ export function SettingAccount() {
             toast.error(t('account.password.mismatch'));
             return;
         }
-        if (newPassword.length < 6) {
+        if (!passwordHasValidLength(newPassword)) {
             toast.error(t('account.password.tooShort'));
+            return;
+        }
+        if (newPassword === oldPassword) {
+            toast.error(t('account.password.unchanged'));
             return;
         }
 
@@ -72,13 +82,24 @@ export function SettingAccount() {
             {
                 onSuccess: () => {
                     toast.success(t('account.password.success'));
-                    setTimeout(() => logout(), 1000);
+                    queryClient.clear();
+                    clearAuth();
                 },
                 onError: () => {
                     toast.error(t('account.password.failed'));
                 },
             }
         );
+    };
+
+    const handleLogout = async () => {
+        setLoggingOut(true);
+        try {
+            await logout();
+            queryClient.clear();
+        } finally {
+            setLoggingOut(false);
+        }
     };
 
     return (
@@ -193,6 +214,23 @@ export function SettingAccount() {
                     </Button>
                 </div>
             </div>
+
+            <div className="border-t border-border" />
+
+            <WebAuthnSettings />
+
+            <div className="border-t border-border" />
+
+            <Button
+                type="button"
+                variant="outline"
+                onClick={handleLogout}
+                disabled={loggingOut}
+                className="w-full rounded-xl"
+            >
+                <LogOut className="size-4" />
+                {loggingOut ? t('account.loggingOut') : t('account.logout')}
+            </Button>
         </div>
     );
 }

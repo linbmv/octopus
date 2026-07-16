@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -8,10 +9,17 @@ import (
 )
 
 func clearSessions() {
-	globalSession.Range(func(key, value any) bool {
-		globalSession.Delete(key)
-		return true
-	})
+	globalSession.clear()
+}
+
+func TestBoundedErrorReasonRemovesControlsAndCapsRunes(t *testing.T) {
+	got := boundedErrorReason("  reason\r\n" + strings.Repeat("界", maxAttemptErrorReasonRunes+20))
+	if strings.ContainsAny(got, "\r\n") {
+		t.Fatalf("reason retained control characters: %q", got)
+	}
+	if len([]rune(got)) != maxAttemptErrorReasonRunes {
+		t.Fatalf("reason rune length = %d, want %d", len([]rune(got)), maxAttemptErrorReasonRunes)
+	}
 }
 
 func TestNewIteratorMovesStickyChannelAndKeepsStickyKeyID(t *testing.T) {
@@ -256,6 +264,30 @@ func TestStartAttemptRecordsKeyRemark(t *testing.T) {
 	}
 	if attempts[0].ChannelKeyRemark != "linwolfer" {
 		t.Fatalf("ChannelKeyRemark = %q, want linwolfer", attempts[0].ChannelKeyRemark)
+	}
+}
+
+func TestAttemptSpanPersistsClassificationOnlyForClassifiedFailure(t *testing.T) {
+	group := model.Group{Items: []model.GroupItem{{ChannelID: 1, ModelName: "m"}}}
+	iter := NewIterator(group, 1, "m")
+	if !iter.Next() {
+		t.Fatal("iterator should contain candidate")
+	}
+
+	failed := iter.StartAttempt(1, 11, "channel", "key")
+	failed.EndClassified(model.AttemptFailed, "rate limited", model.AttemptErrorLevelKey, "HTTP 429")
+	success := iter.StartAttempt(1, 12, "channel", "key-2")
+	success.End(model.AttemptSuccess, "")
+
+	attempts := iter.Attempts()
+	if len(attempts) != 2 {
+		t.Fatalf("attempt count = %d", len(attempts))
+	}
+	if attempts[0].ErrorLevel != model.AttemptErrorLevelKey || attempts[0].ErrorReason != "HTTP 429" {
+		t.Fatalf("classified failure = %+v", attempts[0])
+	}
+	if attempts[1].ErrorLevel != "" || attempts[1].ErrorReason != "" {
+		t.Fatalf("successful attempt must not carry classification: %+v", attempts[1])
 	}
 }
 

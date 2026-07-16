@@ -302,13 +302,6 @@ func (m *HealthManager) IsEnabled() bool {
 	return m.enabled
 }
 
-// Reset 重置所有状态
-func (m *HealthManager) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.states = make(map[HealthKey]*ChannelHealth)
-}
-
 // Cleanup 清理过期状态
 func (m *HealthManager) Cleanup(ctx context.Context, ttl time.Duration) {
 	m.mu.Lock()
@@ -372,8 +365,7 @@ func mapToOutcome(
 	// 根据 Reason 精确匹配（基于 classifier.go 实际输出）
 	reason := classification.Reason
 
-	// 429 限流
-	if len(reason) >= 14 && reason[:14] == "429 rate limit" {
+	if strings.HasPrefix(reason, "429 rate limit") {
 		return OutcomeRateLimit
 	}
 
@@ -383,12 +375,12 @@ func mapToOutcome(
 	}
 
 	// 404 其他 - 渠道级
-	if len(reason) >= 3 && reason[:3] == "404" {
+	if strings.HasPrefix(reason, "404") {
 		return OutcomeUpstreamError
 	}
 
 	// 400 quota/billing - Key 级限流
-	if len(reason) >= 5 && (reason[:5] == "quota" || reason[:7] == "billing") {
+	if strings.HasPrefix(reason, "quota") || strings.HasPrefix(reason, "billing") {
 		return OutcomeRateLimit
 	}
 
@@ -398,12 +390,12 @@ func mapToOutcome(
 	}
 
 	// 503 model permission - Key 级权限问题
-	if len(reason) >= 19 && reason[:19] == "503 model permission" {
+	if strings.HasPrefix(reason, "503 model permission") {
 		return OutcomeRateLimit
 	}
 
 	// 503 其他 - 渠道级
-	if len(reason) >= 3 && reason[:3] == "503" {
+	if strings.HasPrefix(reason, "503") {
 		return OutcomeUpstreamError
 	}
 

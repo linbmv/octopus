@@ -48,59 +48,75 @@ func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key s
 	// 这样 Doubao/Gemini 在 axonhub 已经支持的 embedding/image 能力不会被项目内旧判断挡住。
 	switch requestType {
 	case llm.RequestTypeEmbedding:
-		switch channelType {
-		case llm.APIFormatOpenAIChatCompletion,
-			llm.APIFormatOpenAIResponse,
-			llm.APIFormatOpenAIEmbedding:
-			return openai.NewOutboundTransformer(baseURL, key)
-		case llm.APIFormatGeminiContents:
-			return gemini.NewOutboundTransformer(baseURL, key)
-		case dbmodel.ChannelTypeDoubao:
-			return doubao.NewOutboundTransformer(baseURL, key)
-		default:
-			return nil, fmt.Errorf("channel type %s is not compatible with %s request", channelType, requestType)
-		}
+		return newEmbeddingOutbound(channelType, baseURL, key)
 	case llm.RequestTypeImage:
-		switch channelType {
-		case llm.APIFormatOpenAIChatCompletion,
-			llm.APIFormatOpenAIResponse,
-			llm.APIFormatOpenAIImageGeneration,
-			llm.APIFormatOpenAIImageEdit,
-			llm.APIFormatOpenAIImageVariation:
-			return openai.NewOutboundTransformer(baseURL, key)
-		case llm.APIFormatGeminiContents:
-			return gemini.NewOutboundTransformer(baseURL, key)
-		case dbmodel.ChannelTypeDoubao:
-			return doubao.NewOutboundTransformer(baseURL, key)
-		default:
-			return nil, fmt.Errorf("channel type %s is not compatible with %s request", channelType, requestType)
-		}
+		return newImageOutbound(channelType, baseURL, key)
 	case llm.RequestTypeCompact:
-		switch channelType {
-		case llm.APIFormatOpenAIResponse,
-			llm.APIFormatOpenAIResponseCompact:
-			// Compact 只承接官方 /v1/responses/compact 远程压缩入口。
-			return responses.NewOutboundTransformer(baseURL, key)
-		default:
-			// 非官方 Responses 渠道不处理 Compact；让客户端自行走本地 compact。
-			return nil, fmt.Errorf("channel type %s is not compatible with %s request", channelType, requestType)
-		}
+		return newCompactOutbound(channelType, baseURL, key)
 	case llm.RequestTypeChat:
-		switch channelType {
-		case llm.APIFormatOpenAIChatCompletion:
-			return openai.NewOutboundTransformer(baseURL, key)
-		case llm.APIFormatOpenAIResponse:
-			return responses.NewOutboundTransformer(baseURL, key)
-		case llm.APIFormatAnthropicMessage:
-			return anthropic.NewOutboundTransformer(baseURL, key)
-		case llm.APIFormatGeminiContents:
-			return gemini.NewOutboundTransformer(baseURL, key)
-		case dbmodel.ChannelTypeDoubao:
-			return doubao.NewOutboundTransformer(baseURL, key)
-		default:
-			return nil, fmt.Errorf("channel type %s is not compatible with %s request", channelType, requestType)
-		}
+		return newChatOutbound(channelType, baseURL, key)
 	default:
 		return nil, fmt.Errorf("%s request is not supported by relay", requestType)
+	}
+}
+
+func newEmbeddingOutbound(channelType llm.APIFormat, baseURL, key string) (transformer.Outbound, error) {
+	switch channelType {
+	case llm.APIFormatOpenAIChatCompletion,
+		llm.APIFormatOpenAIResponse,
+		llm.APIFormatOpenAIEmbedding:
+		return openai.NewOutboundTransformer(baseURL, key)
+	case llm.APIFormatGeminiContents:
+		return gemini.NewOutboundTransformer(baseURL, key)
+	case dbmodel.ChannelTypeDoubao:
+		return doubao.NewOutboundTransformer(baseURL, key)
+	default:
+		return nil, fmt.Errorf("channel type %s is not compatible with embedding request", channelType)
+	}
+}
+
+func newImageOutbound(channelType llm.APIFormat, baseURL, key string) (transformer.Outbound, error) {
+	switch channelType {
+	case llm.APIFormatOpenAIChatCompletion,
+		llm.APIFormatOpenAIResponse,
+		llm.APIFormatOpenAIImageGeneration,
+		llm.APIFormatOpenAIImageEdit,
+		llm.APIFormatOpenAIImageVariation:
+		return openai.NewOutboundTransformer(baseURL, key)
+	case llm.APIFormatGeminiContents:
+		return gemini.NewOutboundTransformer(baseURL, key)
+	case dbmodel.ChannelTypeDoubao:
+		return doubao.NewOutboundTransformer(baseURL, key)
+	default:
+		return nil, fmt.Errorf("channel type %s is not compatible with image request", channelType)
+	}
+}
+
+func newCompactOutbound(channelType llm.APIFormat, baseURL, key string) (transformer.Outbound, error) {
+	switch channelType {
+	case llm.APIFormatOpenAIResponse,
+		llm.APIFormatOpenAIResponseCompact:
+		// Compact 只承接官方 /v1/responses/compact 远程压缩入口。
+		return responses.NewOutboundTransformer(baseURL, key)
+	default:
+		// 非官方 Responses 渠道不处理 Compact；让客户端自行走本地 compact。
+		return nil, fmt.Errorf("channel type %s is not compatible with compact request", channelType)
+	}
+}
+
+func newChatOutbound(channelType llm.APIFormat, baseURL, key string) (transformer.Outbound, error) {
+	switch channelType {
+	case llm.APIFormatOpenAIChatCompletion:
+		return openai.NewOutboundTransformer(baseURL, key)
+	case llm.APIFormatOpenAIResponse:
+		return responses.NewOutboundTransformer(baseURL, key)
+	case llm.APIFormatAnthropicMessage:
+		return anthropic.NewOutboundTransformer(baseURL, key)
+	case llm.APIFormatGeminiContents:
+		return gemini.NewOutboundTransformer(baseURL, key)
+	case dbmodel.ChannelTypeDoubao:
+		return doubao.NewOutboundTransformer(baseURL, key)
+	default:
+		return nil, fmt.Errorf("channel type %s is not compatible with chat request", channelType)
 	}
 }

@@ -60,6 +60,32 @@ func TestChannelHealth_BasicFlow(t *testing.T) {
 	}
 }
 
+func TestChannelHealthScoreCombinesConfidenceSuccessAndLatency(t *testing.T) {
+	config := DefaultHealthConfig()
+	config.MinSamplesForPosterior = 10
+	config.DefaultTimeout = 10 * time.Second
+
+	smallSample := NewChannelHealth(HealthKey{ChannelID: 1, KeyID: 1, Model: "m"}, config)
+	matureFailure := NewChannelHealth(HealthKey{ChannelID: 2, KeyID: 1, Model: "m"}, config)
+	smallSample.OnEvent(HealthEvent{Outcome: OutcomeUpstreamError, At: time.Now()})
+	for range 10 {
+		matureFailure.OnEvent(HealthEvent{Outcome: OutcomeUpstreamError, At: time.Now()})
+	}
+	if smallSample.GetScore() <= matureFailure.GetScore() {
+		t.Fatalf("small-sample score %.3f must be less penalized than mature score %.3f", smallSample.GetScore(), matureFailure.GetScore())
+	}
+
+	fast := NewChannelHealth(HealthKey{ChannelID: 3, KeyID: 1, Model: "m"}, config)
+	slow := NewChannelHealth(HealthKey{ChannelID: 4, KeyID: 1, Model: "m"}, config)
+	for range 10 {
+		fast.OnEvent(HealthEvent{Outcome: OutcomeSuccess, FirstTokenTime: time.Second, At: time.Now()})
+		slow.OnEvent(HealthEvent{Outcome: OutcomeSuccess, FirstTokenTime: 30 * time.Second, At: time.Now()})
+	}
+	if fast.GetScore() <= slow.GetScore() {
+		t.Fatalf("fast score %.3f must exceed slow P95 score %.3f", fast.GetScore(), slow.GetScore())
+	}
+}
+
 // TestChannelHealth_AdaptiveTimeout 测试自适应超时
 func TestChannelHealth_AdaptiveTimeout(t *testing.T) {
 	config := DefaultHealthConfig()
@@ -355,11 +381,12 @@ func TestChannelHealth_CVCalculation(t *testing.T) {
 	health2 := NewChannelHealth(key, config)
 	for i := 0; i < 30; i++ {
 		var latency int
-		if i%3 == 0 {
+		switch i % 3 {
+		case 0:
 			latency = 1000 // 非常快
-		} else if i%3 == 1 {
+		case 1:
 			latency = 5000 // 中等
-		} else {
+		default:
 			latency = 15000 // 非常慢
 		}
 		event := HealthEvent{

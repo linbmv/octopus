@@ -45,3 +45,17 @@ func TestSettingsServiceMissingSetting(t *testing.T) {
 		t.Fatal("GetString missing key returned nil error")
 	}
 }
+
+func TestSettingsServiceRejectsInvalidValueBeforePersistence(t *testing.T) {
+	store := cache.New[model.SettingKey, string](1)
+	store.Set(model.SettingKeyStatsSaveInterval, "10")
+	service := NewSettingsService(store)
+
+	if err := service.SetString(context.Background(), model.SettingKeyStatsSaveInterval, "not-an-integer"); err == nil {
+		t.Fatal("SetString invalid interval returned nil error")
+	}
+	value, ok := store.Get(model.SettingKeyStatsSaveInterval)
+	if !ok || value != "10" {
+		t.Fatalf("cached value = %q, %v; want unchanged value 10", value, ok)
+	}
+}

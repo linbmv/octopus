@@ -11,11 +11,30 @@
             "apikey": "密钥登录"
         },
         "error": {
-            "generic": "登录失败,请检查登录凭据"
+            "generic": "登录失败,请检查登录凭据",
+            "webauthnUnavailable": "当前浏览器或设备不支持 WebAuthn。",
+            "webauthnCancelled": "安全密钥验证已取消。",
+            "webauthnFailed": "安全密钥验证失败，请重试。"
         },
         "button": {
             "loading": "登录中...",
             "submit": "登录"
+        }
+    },
+    "passwordChangeRequired": {
+        "title": "修改临时密码",
+        "description": "为确保安全，完成改密后才能使用管理控制台；成功后请使用新密码重新登录。",
+        "currentPassword": "临时密码",
+        "newPassword": "新密码",
+        "confirmPassword": "确认新密码",
+        "submit": "修改密码",
+        "submitting": "正在修改...",
+        "success": "密码已修改，请使用新密码重新登录。",
+        "error": {
+            "mismatch": "两次输入的密码不一致",
+            "length": "密码必须包含 8 到 72 个 UTF-8 字节",
+            "unchanged": "新密码不能与临时密码相同",
+            "generic": "无法修改密码"
         }
     },
     "apiKeyDashboard": {
@@ -53,6 +72,7 @@
         "setting": "设置"
     },
     "toolbar": {
+        "create": "创建",
         "popover": {
             "ariaLabel": "视图选项",
             "layout": "布局",
@@ -91,6 +111,13 @@
             "failed": "复制失败",
             "noContent": "无可复制内容"
         }
+    },
+    "appError": {
+        "pageTitle": "页面加载失败",
+        "rootTitle": "应用加载失败",
+        "description": "请重试，或刷新页面后继续操作。",
+        "digest": "错误编号",
+        "retry": "重试"
     },
     "home": {
         "activity": {
@@ -140,6 +167,23 @@
             "successRate": "成功率"
         }
     },
+    "errorObservability": {
+        "title": "错误级别分布",
+        "description": "基于有界中继日志统计已分类的失败尝试",
+        "channelTitle": "错误范围趋势",
+        "channelDescription": "最近 24 小时 Key 级与渠道级失败趋势",
+        "last24Hours": "最近 24 小时",
+        "loading": "正在加载错误统计…",
+        "loadError": "错误统计加载失败",
+        "noData": "该时段没有已分类失败",
+        "truncated": "仅展示最新 {capacity} 条中继日志，该时段更早的失败未计入。",
+        "distributionAria": "错误分布，共 {total} 次已分类失败",
+        "levels": {
+            "key": "Key 级",
+            "channel": "渠道级",
+            "client": "客户端级"
+        }
+    },
     "setting": {
         "appearance": "外观",
         "system": "系统",
@@ -170,8 +214,36 @@
         },
         "smartHealth": {
             "label": "启用智能健康系统",
-            "description": "自动学习渠道延迟和稳定性，动态调整首字超时与渠道权重。",
+            "description": "自动学习渠道延迟和稳定性，动态调整首字超时。",
             "hint": "开启后，分组首字超时填 0 将使用自动计算；填写具体秒数时，该分组按手动首字超时执行。"
+        },
+        "healthWeighted": {
+            "label": "使用健康度调整候选顺序",
+            "description": "综合成功率、样本置信度和首字延迟，参与加权选择及同优先级故障转移排序。",
+            "hint": "默认关闭，且不会让低优先级候选越过用户设置的更高故障转移优先级。"
+        },
+        "health": {
+            "title": "自适应健康",
+            "description": "选择安全的运行模式，并可按需调整原有细粒度参数。",
+            "advanced": "高级设置",
+            "shadowMode": "影子模式",
+            "shadowModeHint": "观察并记录自适应决策，但不执行自动超时。",
+            "presets": {
+                "off": { "label": "关闭", "description": "关闭自适应健康行为。" },
+                "shadow": { "label": "影子", "description": "仅观察决策，不实际执行。" },
+                "balanced": { "label": "均衡", "description": "启用自适应超时，保持稳定的手动排序。" },
+                "aggressive": { "label": "积极", "description": "同时使用健康度调整候选顺序。" }
+            },
+            "fields": {
+                "minAdaptiveTimeout": "自适应超时下限（秒）",
+                "slowModelMinTimeout": "慢模型超时下限（秒）",
+                "recoveryProbeEvery": "每 N 次评估进行恢复探测",
+                "recoveryProbeInterval": "恢复探测间隔（秒）",
+                "timeoutRateThreshold": "超时率阈值（%）",
+                "maxMultiplierStack": "最大超时倍率",
+                "stickyHealthyTimeout": "健康粘性首字阈值（秒）",
+                "slowModelKeywords": "慢模型关键词"
+            }
         },
         "circuitBreaker": {
             "title": "熔断器配置",
@@ -196,19 +268,59 @@
                 "title": "导出",
                 "includeLogs": "包含日志",
                 "includeStats": "包含统计",
-                "button": "下载 JSON",
+                "password": {
+                    "label": "加密密码（可选）",
+                    "placeholder": "留空则导出明文 JSON",
+                    "confirmLabel": "确认加密密码",
+                    "confirmPlaceholder": "再次输入相同密码",
+                    "hint": "使用 8–1024 个 UTF-8 字节。填写密码后生成加密的 .octopus-backup 文件；密码丢失后无法恢复。",
+                    "error": {
+                        "length": "备份密码必须包含 8–1024 个 UTF-8 字节",
+                        "mismatch": "两次输入的备份密码不一致"
+                    }
+                },
+                "button": "下载备份",
                 "exporting": "导出中...",
                 "success": "开始导出"
             },
             "import": {
-                "title": "导入（增量）",
+                "title": "导入 / 恢复",
+                "warning": "版本 2 按稳定 UUID 映射关系；版本 1 仍要求业务、统计和日志表为空。备份文件可能包含渠道/API 密钥及可选日志正文，必须按机密文件处理。",
+                "password": {
+                    "label": "备份密码（仅加密文件需要）",
+                    "placeholder": "明文 JSON 请留空",
+                    "hint": "密码只保存在当前表单内存中，并会在每次恢复尝试后清空。",
+                    "error": {
+                        "length": "备份密码必须包含 8–1024 个 UTF-8 字节",
+                        "mismatch": "两次输入的备份密码不一致"
+                    }
+                },
+                "policy": {
+                    "label": "UUID 冲突策略",
+                    "reject": "拒绝冲突",
+                    "skip": "跳过已有数据",
+                    "replace": "替换并同步子项",
+                    "merge": "合并并保留目标端子项"
+                },
                 "selected": "已选择文件",
-                "button": "导入 JSON",
+                "button": "导入备份",
+                "dryRunButton": "预览变更",
                 "importing": "导入中...",
-                "noFile": "请先选择 JSON 文件",
+                "noFile": "请先选择 .json 或 .octopus-backup 文件",
                 "success": "导入成功",
+                "dryRunSuccess": "预览完成",
                 "failed": "导入失败",
-                "result": "导入结果"
+                "result": "导入结果",
+                "dryRunResult": "计划变更",
+                "summary": {
+                    "table": "数据表",
+                    "create": "新增",
+                    "update": "更新",
+                    "skip": "跳过",
+                    "delete": "删除",
+                    "conflict": "冲突",
+                    "unresolved": "无法恢复"
+                }
             }
         },
         "apiKey": {
@@ -287,6 +399,8 @@
             "title": "账户设置",
             "save": "保存",
             "saving": "保存中...",
+            "logout": "退出登录",
+            "loggingOut": "正在退出...",
             "username": {
                 "label": "修改用户名",
                 "placeholder": "请输入新用户名",
@@ -302,10 +416,27 @@
                 "oldEmpty": "请输入当前密码",
                 "newEmpty": "请输入新密码",
                 "mismatch": "两次输入的密码不一致",
-                "tooShort": "密码长度至少为6位",
+                "tooShort": "密码必须包含 8 到 72 个 UTF-8 字节",
+                "unchanged": "新密码不能与当前密码相同",
                 "change": "修改密码",
                 "success": "密码修改成功",
                 "failed": "密码修改失败"
+            },
+            "webauthn": {
+                "title": "安全密钥与通行密钥",
+                "description": "注册后，密码登录还需要当前设备的用户验证或安全密钥。",
+                "disabled": "WebAuthn 尚未启用。请在服务端配置依赖方 ID 和允许的 HTTPS 来源。",
+                "namePlaceholder": "凭据名称，例如办公电脑",
+                "passwordPlaceholder": "输入当前密码以确认",
+                "register": "注册安全凭据",
+                "registering": "正在等待验证器...",
+                "registered": "安全凭据注册成功",
+                "registerFailed": "安全凭据注册失败",
+                "empty": "尚未注册安全凭据",
+                "delete": "删除安全凭据",
+                "deleted": "安全凭据已删除",
+                "deleteFailed": "安全凭据删除失败",
+                "passwordRequired": "请先输入当前密码"
             }
         },
         "info": {
@@ -328,8 +459,22 @@
         },
         "log": {
             "title": "日志设置",
+            "contentMode": {
+                "label": "新日志内容",
+                "option": {
+                    "metadata": "仅元数据（推荐）",
+                    "full": "完整正文（敏感）",
+                    "disabled": "完全关闭"
+                },
+                "description": {
+                    "metadata": "保留用量、选路尝试和脱敏错误，不保存请求与响应正文。",
+                    "full": "需明确启用：保存经过凭据字段脱敏的请求与响应正文；提示词仍可能含敏感数据，关闭后请清理旧日志。",
+                    "disabled": "停止产生新的 Relay 日志（包括实时事件和历史记录）；用量统计及服务端运维错误日志仍保持启用。"
+                },
+                "saveFailed": "更新日志内容策略失败"
+            },
             "enabled": {
-                "label": "启用历史日志"
+                "label": "持久化历史日志"
             },
             "keepPeriod": {
                 "label": "日志保存天数",
@@ -389,12 +534,15 @@
             "autoAdd": "自动添加",
             "clear": "清空",
             "selectChannel": "渠道",
-            "selectModel": "模型"
+            "selectModel": "模型",
+            "addGroup": "添加分组",
+            "searchGroups": "搜索分组"
         },
         "item": {
             "enable": "启用",
             "disable": "临时禁用",
-            "channelDisabled": "渠道已禁用"
+            "channelDisabled": "渠道已禁用",
+            "group": "（分组）"
         },
         "mode": {
             "roundRobin": "轮询",
@@ -460,6 +608,15 @@
             "tokens": "tokens",
             "retryDetails": "重试详情",
             "attempts": "次尝试",
+            "attemptNumber": "第 {number} 次",
+            "attemptStatus": {
+                "success": "成功",
+                "failed": "失败",
+                "client_canceled": "客户端断开",
+                "circuit_break": "熔断",
+                "skipped": "跳过",
+                "redirect": "重定向"
+            },
             "success": "成功",
             "failed": "失败"
         }
@@ -511,6 +668,33 @@
                 "delete": "删除",
                 "confirmDelete": "确认删除",
                 "deleting": "删除中..."
+            },
+            "capabilities": {
+                "title": "能力证据",
+                "probe": "探测",
+                "probing": "探测中...",
+                "probeFailed": "能力探测无法加入队列",
+                "queued": "已加入 {accepted}/{requested} 个受限探测任务",
+                "loading": "正在加载能力证据...",
+                "loadFailed": "能力证据加载失败",
+                "empty": "暂无能力证据",
+                "keyScope": "密钥 #{id}",
+                "probedAt": "探测于 {time}",
+                "errorClass": "错误分类：{classification}",
+                "stale": "已过期",
+                "kinds": {
+                    "text": "文本",
+                    "stream": "流式",
+                    "tool": "工具",
+                    "vision": "视觉"
+                },
+                "statuses": {
+                    "supported": "支持",
+                    "unsupported": "不支持",
+                    "unauthorized": "未授权",
+                    "not_implemented": "未实现",
+                    "transient": "暂时故障"
+                }
             }
         },
         "create": {
@@ -538,6 +722,21 @@
             "unlimitedNumber": "0 = 不限",
             "paramOverride": "参数覆盖",
             "paramOverridePlaceholder": "可选：JSON 字符串，用于覆盖请求参数",
+            "requestRewriteAdvanced": "高级请求改写规则",
+            "requestRewriteHint": "规则在简单覆盖之后按顺序执行。认证头受保护。JSON 路径使用受限 JSON Pointer（例如 /messages/0/content），每类最多 32 条。",
+            "protectedHeaderHint": "认证头由供应商适配器管理，不能通过渠道规则改写。",
+            "headerRules": "Header 规则",
+            "jsonRewriteRules": "JSON 路径规则",
+            "ruleAdd": "添加规则",
+            "ruleAction": "规则操作",
+            "ruleSet": "设置",
+            "ruleAppend": "追加",
+            "ruleRemove": "删除",
+            "ruleOverride": "覆盖",
+            "ruleDelete": "删除规则",
+            "ruleValueUnused": "删除操作无需值",
+            "jsonPathPlaceholder": "/messages/0/content",
+            "jsonValuePlaceholder": "JSON 值，例如 0.2 或 {\"enabled\":true}",
             "model": "模型",
             "enabled": "启用",
             "proxy": "使用代理",

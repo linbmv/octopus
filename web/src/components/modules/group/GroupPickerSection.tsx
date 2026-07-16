@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { Check, Layers, Plus, Search } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import type { Group } from '@/api/endpoints/group';
@@ -18,6 +19,7 @@ export function GroupPickerSection({
     currentGroupId?: number;
     onAdd: (group: Group) => void;
 }) {
+    const t = useTranslations('group');
     const [searchKeyword, setSearchKeyword] = useState('');
 
     const selectedGroupIds = useMemo(
@@ -47,7 +49,7 @@ export function GroupPickerSection({
         <div className="rounded-xl border border-border/50 bg-muted/30 flex flex-col min-h-0">
             <div className="grid grid-cols-[1fr_auto] items-center gap-2 px-3 py-2 border-b border-border/30 bg-muted/50">
                 <span className="min-w-0 justify-self-start text-sm font-medium text-foreground">
-                    添加分组
+                    {t('form.addGroup')}
                 </span>
 
                 <div className="relative justify-self-end w-30">
@@ -56,7 +58,7 @@ export function GroupPickerSection({
                         value={searchKeyword}
                         onChange={(event) => setSearchKeyword(event.target.value)}
                         className="h-6 rounded-lg border-border/60 bg-background/70 pl-7 pr-2 text-xs shadow-none focus-visible:border-border/60 focus-visible:ring-0"
-                        aria-label="search groups"
+                        aria-label={t('form.searchGroups')}
                     />
                 </div>
             </div>

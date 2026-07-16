@@ -2,26 +2,26 @@ package relay
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
-	"strings"
 	"time"
-	"unicode"
 
+	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/helper"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
-	"github.com/bestruirui/octopus/internal/relay/errorclass"
+	"github.com/bestruirui/octopus/internal/tracing"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/pipeline"
 	"github.com/looplj/axonhub/llm/pipeline/stream"
 	"github.com/looplj/axonhub/llm/transformer"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // run 统一管理一次通道尝试的完整生命周期。
@@ -35,12 +35,12 @@ func (ra *relayAttempt) run() (bool, error) {
 
 	var lastErr error
 	for {
-		written, responseBody, err := ra.runWithCurrentKey()
+		written, responseHeaders, responseBody, err := ra.runWithCurrentKey()
 		if err == nil || written {
 			return written, err
 		}
 		lastErr = err
-		if !ra.canRetryNextKey(err, responseBody) {
+		if !ra.canRetryNextKey(err, responseHeaders, responseBody) {
 			return false, err
 		}
 		if !ra.switchToNextKey() {
@@ -51,7 +51,19 @@ func (ra *relayAttempt) run() (bool, error) {
 	}
 }
 
-func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
+func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
+	ctx := log.WithChannelID(ra.c.Request.Context(), ra.channel.ID)
+	ctx, upstreamSpan := tracing.Tracer().Start(ctx, "relay.upstream",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.Int("octopus.channel.id", ra.channel.ID),
+			attribute.String("octopus.channel.name", ra.channel.Name),
+			attribute.Int("octopus.channel_key.id", ra.usedKey.ID),
+			attribute.String("gen_ai.request.model", ra.metrics.ActualModel),
+		),
+	)
+	defer upstreamSpan.End()
+	ra.c.Request = ra.c.Request.WithContext(ctx)
 
 	span := ra.iter.StartAttempt(
 		ra.channel.ID,
@@ -77,7 +89,10 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 		ra.iter.Index()+1, ra.iter.Len(),
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID, ra.iter.IsSticky(), ra.metrics.ActualModel)
 
-	upstreamStatusCode, upstreamResponseBody, fwdErr := ra.forward()
+	upstreamStatusCode, upstreamHeaders, upstreamResponseBody, fwdErr := ra.forward()
+	if fwdErr != nil && isNonStreamRequestTimeout(ra.c.Request.Context()) {
+		fwdErr = fmt.Errorf("%w: %v", errNonStreamRequestTimeout, fwdErr)
+	}
 	if fwdErr == nil && upstreamStatusCode == 0 {
 		upstreamStatusCode = http.StatusOK
 	}
@@ -85,15 +100,22 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 	ra.usedKey.LastUseTimeStamp = time.Now().Unix()
 
 	if fwdErr == nil {
+		upstreamSpan.SetAttributes(attribute.Int("http.response.status_code", upstreamStatusCode))
 		recordRuntimeURLSuccess(ra.channel.ID, ra.baseURL, span.Duration())
 		ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
-		op.ChannelKeyUpdate(ra.usedKey)
+		if updateErr := op.ChannelKeyUpdate(ra.usedKey); updateErr != nil {
+			log.WithContext(ctx).Warnw("failed to update channel key runtime state",
+				"channel_id", ra.channel.ID, "channel_key_id", ra.usedKey.ID, "error", updateErr)
+		}
 
 		span.End(dbmodel.AttemptSuccess, "")
-		op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
+		if statsErr := op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
 			WaitTime:       span.Duration().Milliseconds(),
 			RequestSuccess: 1,
-		})
+		}); statsErr != nil {
+			log.WithContext(ctx).Warnw("failed to update successful channel attempt statistics",
+				"channel_id", ra.channel.ID, "error", statsErr)
+		}
 		balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 
 		// 获取首 token 延迟
@@ -137,10 +159,12 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 			ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
 			span.Duration().Milliseconds(), firstTokenMs, shouldSticky)
 
-		return false, nil, nil
+		return false, upstreamHeaders, nil, nil
 	}
 
 	if isRequestContextCanceled(ra.c.Request.Context(), fwdErr) {
+		upstreamSpan.RecordError(fwdErr)
+		upstreamSpan.SetStatus(codes.Error, "request canceled")
 		msg := "request context canceled"
 		if ra.c.Writer.Written() {
 			msg = "client disconnected"
@@ -150,19 +174,34 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 			ra.iter.Index()+1, ra.iter.Len(),
 			ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
 			span.Duration().Milliseconds(), msg, fwdErr)
-		return ra.c.Writer.Written(), upstreamResponseBody, fwdErr
+		return ra.c.Writer.Written(), upstreamHeaders, upstreamResponseBody, fwdErr
 	}
 
 	recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
-	op.ChannelKeyUpdate(ra.usedKey)
+	if updateErr := op.ChannelKeyUpdate(ra.usedKey); updateErr != nil {
+		log.WithContext(ctx).Warnw("failed to update channel key runtime state",
+			"channel_id", ra.channel.ID, "channel_key_id", ra.usedKey.ID, "error", updateErr)
+	}
 	// 使用完整的上游响应体进行智能错误决策。
-	decision := decideRelayError(upstreamStatusCode, upstreamResponseBody, fwdErr)
-	span.End(dbmodel.AttemptFailed, fwdErr.Error())
-	if decision.Classification.Level != errorclass.ErrorLevelClient {
-		op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
+	decision := ra.decideError(upstreamStatusCode, upstreamHeaders, upstreamResponseBody, fwdErr)
+	ra.applyCompactCompatibilityDecision(ctx, decision)
+	upstreamSpan.RecordError(fwdErr)
+	upstreamSpan.SetStatus(codes.Error, fwdErr.Error())
+	upstreamSpan.SetAttributes(attribute.Int("http.response.status_code", upstreamStatusCode))
+	span.EndClassified(
+		dbmodel.AttemptFailed,
+		fwdErr.Error(),
+		dbmodel.AttemptErrorLevel(decision.Classification.Level.String()),
+		decision.Classification.Reason,
+	)
+	if decision.Action != ErrorActionReturnClient {
+		if statsErr := op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
 			WaitTime:      span.Duration().Milliseconds(),
 			RequestFailed: 1,
-		})
+		}); statsErr != nil {
+			log.WithContext(ctx).Warnw("failed to update failed channel attempt statistics",
+				"channel_id", ra.channel.ID, "error", statsErr)
+		}
 		if !ra.isAdaptiveFirstTokenTimeout(fwdErr) {
 			balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		}
@@ -192,15 +231,21 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, []byte, error) {
 		ra.iter.Index()+1, ra.iter.Len(),
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
 		span.Duration().Milliseconds(), decision.Classification.Level, fwdErr)
-	if decision.Classification.Level == errorclass.ErrorLevelClient {
-		return false, upstreamResponseBody, newTerminalRelayError(upstreamStatusCode, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr))
+	if decision.Action == ErrorActionReturnClient {
+		return false, upstreamHeaders, upstreamResponseBody, newTerminalRelayError(decision.ClientStatusCode, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr))
 	}
 
-	return ra.c.Writer.Written(), upstreamResponseBody, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
+	return ra.c.Writer.Written(), upstreamHeaders, upstreamResponseBody, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
 }
 
 func isRequestContextCanceled(ctx context.Context, err error) bool {
 	if err == nil || ctx == nil || ctx.Err() == nil {
+		return false
+	}
+	// A server-enforced non-streaming deadline is an upstream timeout, not a
+	// client cancellation. It must be logged as a failed attempt and surfaced
+	// as 504 by the request runner.
+	if isNonStreamRequestTimeout(ctx) {
 		return false
 	}
 	return errors.Is(ctx.Err(), context.Canceled) ||
@@ -209,12 +254,12 @@ func isRequestContextCanceled(ctx context.Context, err error) bool {
 		errors.Is(err, context.DeadlineExceeded)
 }
 
-func (ra *relayAttempt) canRetryNextKey(err error, upstreamResponseBody []byte) bool {
+func (ra *relayAttempt) canRetryNextKey(err error, upstreamHeaders http.Header, upstreamResponseBody []byte) bool {
 	if err == nil || ra.c.Writer.Written() || ra.keyIndex+1 >= len(ra.keyOptions) {
 		return false
 	}
 
-	return decideRelayError(ra.usedKey.StatusCode, upstreamResponseBody, err).RetryNextKey
+	return ra.decideError(ra.usedKey.StatusCode, upstreamHeaders, upstreamResponseBody, err).Action == ErrorActionRetryKey
 }
 
 func (ra *relayAttempt) switchToNextKey() bool {
@@ -257,16 +302,16 @@ func shouldRefreshSticky(span *balancer.AttemptSpan, healthyTimeoutSec int) (boo
 }
 
 // forward 转发请求到上游服务
-func (ra *relayAttempt) forward() (int, []byte, error) {
+func (ra *relayAttempt) forward() (int, http.Header, []byte, error) {
 	ctx := ra.c.Request.Context()
 	if ra.internalRequest.RawRequest == nil {
-		return 0, nil, fmt.Errorf("missing raw request")
+		return 0, nil, nil, fmt.Errorf("missing raw request")
 	}
 
 	httpClient, err := helper.ChannelHttpClient(ra.channel)
 	if err != nil {
 		log.Warnf("failed to get http client: %v", err)
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 
 	if isCompactOpenAIChannel(ra.channel.Type, ra.internalRequest) {
@@ -282,7 +327,7 @@ func (ra *relayAttempt) forwardWithAdapter(
 	httpClient *http.Client,
 	outAdapter transformer.Outbound,
 	outboundRequest *llm.Request,
-) (int, []byte, error) {
+) (int, http.Header, []byte, error) {
 	// 更新活跃请求状态为等待上游（第一阶段可观测性增强）
 	UpdateState(ra.trackingID, StateWaitingUpstream)
 
@@ -300,8 +345,18 @@ func (ra *relayAttempt) forwardWithAdapter(
 	}
 
 	relayMiddleware := &relayPipelineMiddleware{attempt: ra}
+	responseLimit := conf.Current().Relay.MaxNonStreamResponseBytes
+	var limitedHTTPClient *http.Client
+	ra.streamActivity = nil
+	if wantStream {
+		activity, touchActivity := newStreamActivitySignal()
+		ra.streamActivity = activity
+		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, false, touchActivity)
+	} else {
+		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, true, nil)
+	}
 
-	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(httpClient)).
+	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(limitedHTTPClient)).
 		Pipeline(
 			&parsedRequestInbound{Inbound: ra.inAdapter, request: outboundRequest},
 			outAdapter,
@@ -313,21 +368,25 @@ func (ra *relayAttempt) forwardWithAdapter(
 		// 等待响应头阶段触发首字超时：此时尚未写客户端，返回明确错误以便切换下一通道。
 		if errors.Is(context.Cause(fwdCtx), errFirstTokenTimeout) {
 			ra.recordFirstTokenTimeout(firstTokenTimeout)
-			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, firstTokenTimeout.Error(firstTokenTimeoutPhaseWaitingHeaders)
+			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamHeaders, relayMiddleware.upstreamResponseBody, firstTokenTimeout.Error(firstTokenTimeoutPhaseWaitingHeaders)
 		}
-		return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamResponseBody, err
+		return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamHeaders, relayMiddleware.upstreamResponseBody, err
 	}
 	if result == nil {
-		return 0, nil, fmt.Errorf("empty pipeline result")
+		return 0, nil, nil, fmt.Errorf("empty pipeline result")
 	}
 	if result.Stream {
 		if err := ra.writeStream(fwdCtx, stopFirstTokenGuard, firstTokenTimeout, result.EventStream); err != nil {
-			return http.StatusOK, nil, err
+			var streamErr *streamSoftError
+			if errors.As(err, &streamErr) {
+				return http.StatusOK, relayMiddleware.upstreamHeaders, streamErr.Body(), err
+			}
+			return http.StatusOK, relayMiddleware.upstreamHeaders, nil, err
 		}
-		return http.StatusOK, nil, nil
+		return http.StatusOK, relayMiddleware.upstreamHeaders, nil, nil
 	}
 	if result.Response == nil {
-		return 0, nil, fmt.Errorf("empty pipeline response")
+		return 0, nil, nil, fmt.Errorf("empty pipeline response")
 	}
 	body := result.Response.Body
 	statusCode := result.Response.StatusCode
@@ -348,79 +407,10 @@ func (ra *relayAttempt) forwardWithAdapter(
 
 	// 软错误检测：HTTP 200 但内容是错误，触发重试
 	if isSoftError(statusCode, body, contentType) {
-		return statusCode, body, fmt.Errorf("soft error detected: upstream returned 200 but content indicates error")
+		return statusCode, result.Response.Headers.Clone(), body, fmt.Errorf("soft error detected: upstream returned 200 but content indicates error")
 	}
 
 	ra.metrics.InternalResponse = body
 	ra.c.Data(statusCode, contentType, body)
-	return statusCode, body, nil
-}
-
-func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.Request) {
-	// raw passthrough 必须先于 ParamOverride/CustomHeader：先把出站 body 还原为客户端原始字节，
-	// 再让既有覆盖逻辑在其之上叠加，保持渠道配置语义不变。
-	rawPassthroughApplied := ra.applyRawPassthrough(outboundRequest)
-	paramOverrideApplied := false
-	// ParamOverride 只覆盖 JSON 请求体；multipart 图片编辑等请求不能按 map 合并。
-	if ra.channel.ParamOverride != nil && *ra.channel.ParamOverride != "" && strings.Contains(strings.ToLower(outboundRequest.Headers.Get("Content-Type")+" "+outboundRequest.ContentType), "application/json") {
-		var bodyMap map[string]any
-		if err := json.Unmarshal(outboundRequest.Body, &bodyMap); err != nil {
-			log.Warnf("failed to unmarshal request body: %v, skipping param_override", err)
-		} else {
-			var override map[string]any
-			if err := json.Unmarshal([]byte(*ra.channel.ParamOverride), &override); err != nil {
-				log.Warnf("failed to unmarshal param_override: %v, skipping", err)
-			} else {
-				maps.Copy(bodyMap, override)
-				modifiedBody, err := json.Marshal(bodyMap)
-				if err != nil {
-					log.Warnf("failed to marshal modified body: %v, skipping param_override", err)
-				} else {
-					outboundRequest.Body = modifiedBody
-					ra.metrics.ParamOverride = *ra.channel.ParamOverride
-					paramOverrideApplied = true
-				}
-			}
-		}
-	}
-	// raw passthrough 生效时，出站 body 与标准化 llm.Request 不同，记录最终出站摘要供审计核对实际发送语义。
-	if rawPassthroughApplied {
-		ra.metrics.RecordOutboundRequestSummary(outboundRequest.Body, true, paramOverrideApplied)
-	}
-	for _, header := range ra.channel.CustomHeader {
-		// pipeline 在 raw request middleware 前已经写入 Auth；同名敏感头保持认证配置优先，延续旧 BuildHttpRequest 的覆盖顺序。
-		if outboundRequest.Headers.Get(header.HeaderKey) != "" && httpclient.IsSensitiveHeader(header.HeaderKey) {
-			continue
-		}
-		outboundRequest.Headers.Set(header.HeaderKey, header.HeaderValue)
-	}
-	// 渠道 UA 字段优先级最高：在自定义头之后设置，作为该渠道出站的权威 User-Agent。
-	// 供"仅特定客户端"的上游放行（如仅 Claude Code 客户端的中转站）。
-	if ua := strings.TrimSpace(ra.channel.UserAgent); ua != "" {
-		outboundRequest.Headers.Set("User-Agent", ua)
-	}
-}
-
-// cleanKeyRemark 清洗渠道 key 备注用于持久化：去除控制字符、trim、截断到 64 rune。
-// 空备注返回空字符串，便于日志层用 omitempty 省略、前端按"仅显示备注"处理。
-func cleanKeyRemark(remark string) string {
-	remark = strings.TrimSpace(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, remark))
-	runes := []rune(remark)
-	if len(runes) > 64 {
-		return string(runes[:64]) + "..."
-	}
-	return remark
-}
-
-// safeKeyRemark 在 cleanKeyRemark 基础上，为终端日志把空备注展示为 "-"。
-func safeKeyRemark(remark string) string {
-	if cleaned := cleanKeyRemark(remark); cleaned != "" {
-		return cleaned
-	}
-	return "-"
+	return statusCode, result.Response.Headers.Clone(), body, nil
 }

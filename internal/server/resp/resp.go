@@ -38,12 +38,20 @@ func Error(c *gin.Context, code int, err string) {
 }
 
 func ErrorWithDetails(c *gin.Context, code int, message string, details map[string]interface{}) {
+	ErrorWithCodeAndDetails(c, code, mapErrorCode(code), message, details)
+}
+
+func ErrorWithCode(c *gin.Context, status int, errorCode, message string) {
+	ErrorWithCodeAndDetails(c, status, errorCode, message, nil)
+}
+
+func ErrorWithCodeAndDetails(c *gin.Context, status int, errorCode, message string, details map[string]interface{}) {
 	requestID, _ := c.Get("request_id")
 	response := ResponseStruct{
-		Code:    code,
+		Code:    status,
 		Message: message,
 		Error: &ErrorInfo{
-			Code:    mapErrorCode(code),
+			Code:    errorCode,
 			Message: message,
 			Details: details,
 		},
@@ -51,7 +59,7 @@ func ErrorWithDetails(c *gin.Context, code int, message string, details map[stri
 	if requestID != nil {
 		response.RequestID = requestID.(string)
 	}
-	c.AbortWithStatusJSON(code, response)
+	c.AbortWithStatusJSON(status, response)
 }
 
 func mapErrorCode(httpCode int) string {

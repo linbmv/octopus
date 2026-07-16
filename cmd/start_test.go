@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bestruirui/octopus/internal/conf"
 )
 
 // buildTestBinary 编译仓库根 main 包为临时二进制，返回其路径。
@@ -88,7 +90,11 @@ func TestStartFailsFastOnPortInUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("occupy port: %v", err)
 	}
-	defer ln.Close()
+	t.Cleanup(func() {
+		if err := ln.Close(); err != nil {
+			t.Errorf("close occupied listener: %v", err)
+		}
+	})
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	// 写一份合法配置：host/port 指向被占端口，DB 用临时 sqlite。
@@ -123,5 +129,31 @@ func TestStartFailsFastOnPortInUse(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "startup failed") {
 		t.Errorf("expected structured 'startup failed' log; got:\n%s", out)
+	}
+}
+
+func TestMetricsConfigEqualIncludesAllowlist(t *testing.T) {
+	left := conf.Metrics{Enabled: true, Host: "127.0.0.1", Port: 9090, BearerToken: strings.Repeat("test-", 4), Allowlist: []string{"127.0.0.1"}}
+	right := left
+	right.Allowlist = append([]string(nil), left.Allowlist...)
+	if !metricsConfigEqual(left, right) {
+		t.Fatal("equivalent metrics configurations were not equal")
+	}
+	right.Allowlist = []string{"10.0.0.0/8"}
+	if metricsConfigEqual(left, right) {
+		t.Fatal("different metrics allowlists were considered equal")
+	}
+}
+
+func TestWebAuthnConfigEqualIncludesOrigins(t *testing.T) {
+	left := conf.WebAuthn{Enabled: true, RPID: "example.com", RPDisplayName: "Octopus", RPOrigins: []string{"https://example.com"}}
+	right := left
+	right.RPOrigins = append([]string(nil), left.RPOrigins...)
+	if !webAuthnConfigEqual(left, right) {
+		t.Fatal("equivalent WebAuthn configurations were not equal")
+	}
+	right.RPOrigins = []string{"https://admin.example.com"}
+	if webAuthnConfigEqual(left, right) {
+		t.Fatal("different WebAuthn origins were considered equal")
 	}
 }

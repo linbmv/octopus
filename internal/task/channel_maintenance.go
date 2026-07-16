@@ -2,27 +2,49 @@ package task
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
+	appruntime "github.com/bestruirui/octopus/internal/runtime"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xstrings"
 )
 
 const channelMaintenanceQueueSize = 64
 
-var (
-	channelMaintenanceOnce     sync.Once
-	channelMaintenanceStopOnce sync.Once
-	channelMaintenanceStop     chan struct{}
-	channelMaintenanceDone     chan struct{}
-	channelMaintenanceQueue    chan model.Channel
-	channelMaintenancePending  = make(map[int]struct{})
-	channelMaintenanceMu       sync.Mutex
-	channelMaintenanceRunner   = runChannelMaintenance
-)
+var channelMaintenanceRunner = runChannelMaintenance
+
+var channelMaintenanceQueue = mustChannelMaintenanceQueue()
+
+func mustChannelMaintenanceQueue() *appruntime.JobQueue[model.Channel] {
+	queue, err := appruntime.NewJobQueue(appruntime.JobQueueConfig[model.Channel]{
+		Name:        "channel_maintenance",
+		QueueDepth:  channelMaintenanceQueueSize,
+		Concurrency: 1,
+		Key: func(channel model.Channel) string {
+			if channel.ID == 0 {
+				return ""
+			}
+			return fmt.Sprintf("%d", channel.ID)
+		},
+		Handle: func(ctx context.Context, channel model.Channel) error {
+			return channelMaintenanceRunner(ctx, channel)
+		},
+		OnError: func(err error) {
+			log.Warnf("channel maintenance job failed: %v", err)
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return queue
+}
+
+func startChannelMaintenance(ctx context.Context) error {
+	return channelMaintenanceQueue.Start(ctx)
+}
 
 func SubmitChannelMaintenance(channel model.Channel) bool {
 	if channel.ID == 0 {
@@ -30,80 +52,50 @@ func SubmitChannelMaintenance(channel model.Channel) bool {
 		return false
 	}
 
-	channelMaintenanceOnce.Do(func() {
-		channelMaintenanceQueue = make(chan model.Channel, channelMaintenanceQueueSize)
-		channelMaintenanceStop = make(chan struct{})
-		channelMaintenanceDone = make(chan struct{})
-		go channelMaintenanceWorker()
-	})
-
-	channelMaintenanceMu.Lock()
-	if _, exists := channelMaintenancePending[channel.ID]; exists {
-		channelMaintenanceMu.Unlock()
+	result := channelMaintenanceQueue.Submit(cloneChannelForMaintenance(channel))
+	switch result {
+	case appruntime.SubmitAccepted:
+		return true
+	case appruntime.SubmitCoalesced:
 		log.Debugf("channel maintenance already pending: channel=%d", channel.ID)
 		return true
-	}
-	channelMaintenancePending[channel.ID] = struct{}{}
-	channelMaintenanceMu.Unlock()
-
-	select {
-	case channelMaintenanceQueue <- cloneChannelForMaintenance(channel):
-		return true
-	default:
-		channelMaintenanceMu.Lock()
-		delete(channelMaintenancePending, channel.ID)
-		channelMaintenanceMu.Unlock()
+	case appruntime.SubmitDropped:
 		log.Warnf("channel maintenance queue full, skipping channel=%d", channel.ID)
-		return false
+	default:
+		log.Warnf("channel maintenance worker is stopped, skipping channel=%d", channel.ID)
 	}
-}
-
-func channelMaintenanceWorker() {
-	defer close(channelMaintenanceDone)
-	for {
-		select {
-		case channel := <-channelMaintenanceQueue:
-			channelMaintenanceRunner(channel)
-			channelMaintenanceMu.Lock()
-			delete(channelMaintenancePending, channel.ID)
-			channelMaintenanceMu.Unlock()
-		case <-channelMaintenanceStop:
-			return
-		}
-	}
+	return false
 }
 
 func stopChannelMaintenance(ctx context.Context) error {
-	if channelMaintenanceStop == nil || channelMaintenanceDone == nil {
-		return nil
-	}
-	select {
-	case <-channelMaintenanceDone:
-		return nil
-	default:
-	}
-
-	channelMaintenanceStopOnce.Do(func() {
-		close(channelMaintenanceStop)
-	})
-	select {
-	case <-channelMaintenanceDone:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return channelMaintenanceQueue.Stop(ctx)
 }
 
-func runChannelMaintenance(channel model.Channel) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+func ChannelMaintenanceQueueStats() appruntime.QueueStats {
+	return channelMaintenanceQueue.Stats()
+}
+
+func runChannelMaintenance(parent context.Context, channel model.Channel) error {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 
 	modelNames := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel)
+	var result error
 	if err := helper.LLMPriceAddToDB(modelNames, ctx); err != nil {
-		log.Warnf("channel maintenance price update failed (channel=%d): %v", channel.ID, err)
+		result = fmt.Errorf("channel %d price update: %w", channel.ID, err)
+	}
+	if ctx.Err() != nil {
+		return context.Cause(ctx)
 	}
 	helper.ChannelBaseUrlDelayUpdate(&channel, ctx)
+	if ctx.Err() != nil {
+		return context.Cause(ctx)
+	}
 	helper.ChannelAutoGroup(&channel, ctx)
+	if ctx.Err() != nil {
+		return context.Cause(ctx)
+	}
+	return result
 }
 
 func cloneChannelForMaintenance(channel model.Channel) model.Channel {
@@ -115,6 +107,18 @@ func cloneChannelForMaintenance(channel model.Channel) model.Channel {
 	}
 	if channel.CustomHeader != nil {
 		channel.CustomHeader = append([]model.CustomHeader(nil), channel.CustomHeader...)
+	}
+	if channel.HeaderRules != nil {
+		channel.HeaderRules = append([]model.HeaderRule(nil), channel.HeaderRules...)
+	}
+	if channel.JSONRewriteRules != nil {
+		channel.JSONRewriteRules = append([]model.JSONRewriteRule(nil), channel.JSONRewriteRules...)
+		for i := range channel.JSONRewriteRules {
+			if channel.JSONRewriteRules[i].Value != nil {
+				value := *channel.JSONRewriteRules[i].Value
+				channel.JSONRewriteRules[i].Value = &value
+			}
+		}
 	}
 	channel.Stats = nil
 	return channel

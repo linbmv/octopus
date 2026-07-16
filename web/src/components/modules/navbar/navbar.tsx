@@ -6,10 +6,12 @@ import { useNavStore, type NavItem } from "@/components/modules/navbar"
 import { ROUTES } from "@/route/config"
 import { usePreload } from "@/route/use-preload"
 import { ENTRANCE_VARIANTS } from "@/lib/animations/fluid-transitions"
+import { useTranslations } from "next-intl"
 
 export function NavBar() {
     const { activeItem, setActiveItem } = useNavStore()
     const { preload } = usePreload()
+    const t = useTranslations('navbar')
 
     return (
         <div className="relative z-50 md:min-h-screen">
@@ -31,6 +33,7 @@ export function NavBar() {
                         <motion.button
                             key={route.id}
                             type="button"
+                            aria-label={t(route.id)}
                             onClick={() => setActiveItem(route.id as NavItem)}
                             onMouseEnter={() => preload(route.id)}
                             className={cn(

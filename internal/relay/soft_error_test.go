@@ -31,6 +31,11 @@ func TestIsJSONSoftError(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "nullable error field is not an error",
+			body: `{"id":"ok","error":null}`,
+			want: false,
+		},
+		{
 			name: "invalid json",
 			body: `not json`,
 			want: false,

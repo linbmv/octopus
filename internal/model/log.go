@@ -12,19 +12,32 @@ const (
 	AttemptRedirect     AttemptStatus = "redirect"        // 虚拟渠道重定向到目标分组
 )
 
+// AttemptErrorLevel is the persisted relay error scope. The empty value is
+// reserved for successful, canceled, redirected, circuit-broken, and skipped
+// attempts because no upstream response was classified for those outcomes.
+type AttemptErrorLevel string
+
+const (
+	AttemptErrorLevelKey     AttemptErrorLevel = "key"
+	AttemptErrorLevelChannel AttemptErrorLevel = "channel"
+	AttemptErrorLevelClient  AttemptErrorLevel = "client"
+)
+
 // ChannelAttempt 记录单次渠道尝试的决策和结果
 type ChannelAttempt struct {
-	ChannelID        int           `json:"channel_id"`
-	ChannelKeyID     int           `json:"channel_key_id,omitempty"`
-	ChannelKeyRemark string        `json:"channel_key_remark,omitempty"`
-	ChannelName      string        `json:"channel_name"`
-	ModelName        string        `json:"model_name"`
-	AttemptNum       int           `json:"attempt_num"`
-	Status           AttemptStatus `json:"status"`
-	Duration         int           `json:"duration"`
-	Sticky           bool          `json:"sticky,omitempty"`
-	Msg              string        `json:"msg,omitempty"`
-	FirstTokenTime   int           `json:"first_token_time,omitempty"` // 首token用时(ms)，仅成功且流式时有值
+	ChannelID        int               `json:"channel_id"`
+	ChannelKeyID     int               `json:"channel_key_id,omitempty"`
+	ChannelKeyRemark string            `json:"channel_key_remark,omitempty"`
+	ChannelName      string            `json:"channel_name"`
+	ModelName        string            `json:"model_name"`
+	AttemptNum       int               `json:"attempt_num"`
+	Status           AttemptStatus     `json:"status"`
+	Duration         int               `json:"duration"`
+	Sticky           bool              `json:"sticky,omitempty"`
+	Msg              string            `json:"msg,omitempty"`
+	ErrorLevel       AttemptErrorLevel `json:"error_level,omitempty"`
+	ErrorReason      string            `json:"error_reason,omitempty"`
+	FirstTokenTime   int               `json:"first_token_time,omitempty"` // 首token用时(ms)，仅成功且流式时有值
 }
 
 type RelayLog struct {

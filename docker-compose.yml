@@ -1,9 +1,37 @@
 services:
   octopus:
-    image: bestrui/octopus
-    ports:
-       - '8080:8080'
-    volumes:      
-       - '/path/to/data:/app/data'
-    container_name: octopus
+    image: ${OCTOPUS_IMAGE:-ghcr.io/linbmv/octopus:latest}
     restart: unless-stopped
+    init: true
+    ports:
+      # The bind address and host port are overridable so parallel test/staging
+      # projects do not collide with a production Compose project.
+      - "${OCTOPUS_BIND_ADDRESS:-0.0.0.0}:${OCTOPUS_HOST_PORT:-8080}:8080"
+    volumes:
+      # The image owns this path as UID:GID 10001:10001. Docker initializes a
+      # new named volume with those permissions, so no startup-wide chown is
+      # needed. See the README before replacing this with a host bind mount.
+      - type: volume
+        source: octopus-data
+        target: /app/data
+        read_only: false
+    read_only: true
+    tmpfs:
+      # Plain backup export securely spools up to 64 MiB here before sending
+      # HTTP 200. Leave headroom for filesystem metadata and other runtime
+      # temporaries instead of making the documented backup limit unreachable.
+      - /tmp:rw,noexec,nosuid,nodev,size=192m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+
+    # Optional resource-limit example; uncomment and tune for the workload.
+    # cpus: 1.0
+    # mem_limit: 512m
+    # mem_reservation: 128m
+    # pids_limit: 256
+
+volumes:
+  octopus-data:

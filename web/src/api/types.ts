@@ -7,12 +7,19 @@ export interface ApiResponse<T = unknown> {
     data?: T;
 }
 
-/**
- * API 错误响应
- */
-export interface ApiError {
-    code: number;
-    message: string;
+/** Normalized error thrown by the API client. */
+export class ApiError extends Error {
+    readonly status: number;
+    readonly code: string;
+    readonly details?: Record<string, unknown>;
+
+    constructor(status: number, code: string, message: string, details?: Record<string, unknown>) {
+        super(message);
+        this.name = 'ApiError';
+        this.status = status;
+        this.code = code;
+        this.details = details;
+    }
 }
 
 /**

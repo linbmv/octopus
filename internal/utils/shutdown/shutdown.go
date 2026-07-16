@@ -28,6 +28,7 @@ func Register(fn func() error) {
 func Listen() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(quit)
 	ilog.Infof("Program started, press Ctrl+C to exit")
 	sig := <-quit
 	ilog.Warnf("Received exit signal: %v", sig)

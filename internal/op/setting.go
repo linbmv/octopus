@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/bestruirui/octopus/internal/db"
@@ -36,6 +37,7 @@ func (s *SettingsService) List(ctx context.Context) ([]model.Setting, error) {
 			Value: value,
 		})
 	}
+	sort.Slice(settings, func(i, j int) bool { return settings[i].Key < settings[j].Key })
 	return settings, nil
 }
 
@@ -51,11 +53,17 @@ func (s *SettingsService) GetString(key model.SettingKey) (string, error) {
 	return setting, nil
 }
 
-func SettingSetString(key model.SettingKey, value string) error {
-	return settingsService.SetString(context.Background(), key, value)
+// SettingSetStringContext persists a setting using the caller's lifecycle.
+func SettingSetStringContext(ctx context.Context, key model.SettingKey, value string) error {
+	return settingsService.SetString(ctx, key, value)
 }
 
 func (s *SettingsService) SetString(ctx context.Context, key model.SettingKey, value string) error {
+	setting := model.Setting{Key: key, Value: value}
+	if err := setting.Validate(); err != nil {
+		return fmt.Errorf("invalid setting: %w", err)
+	}
+
 	valueCache, ok := s.cache.Get(key)
 	if !ok {
 		return fmt.Errorf("setting not found")
@@ -130,6 +138,7 @@ func (s *SettingsService) RefreshCache(ctx context.Context) error {
 		}
 		settings = append(settings, missingSettings...)
 	}
+	s.cache.Clear()
 	for _, setting := range settings {
 		s.cache.Set(setting.Key, setting.Value)
 	}

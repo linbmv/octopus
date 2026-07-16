@@ -28,7 +28,7 @@ func (p *PatchHelper) ApplyField(fieldName string, value interface{}) {
 
 	// 使用反射获取指针指向的实际值
 	rv := reflect.ValueOf(value)
-	if rv.Kind() != reflect.Ptr {
+	if rv.Kind() != reflect.Pointer {
 		// 非指针类型直接使用
 		p.selectFields = append(p.selectFields, fieldName)
 		p.updates[fieldName] = value

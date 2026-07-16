@@ -27,8 +27,7 @@ func New[K comparable, V any](shards int) Cache[K, V] {
 	}
 
 	c := &cache[K, V]{
-		shards:    make([]*shard[K, V], shards),
-		shardMask: uint64(shards - 1),
+		shards: make([]*shard[K, V], shards),
 	}
 	for i := 0; i < shards; i++ {
 		c.shards[i] = &shard[K, V]{hashmap: map[K]V{}}
@@ -38,8 +37,7 @@ func New[K comparable, V any](shards int) Cache[K, V] {
 }
 
 type cache[K comparable, V any] struct {
-	shards    []*shard[K, V]
-	shardMask uint64
+	shards []*shard[K, V]
 }
 
 func (c *cache[K, V]) Set(k K, v V) {
@@ -93,7 +91,7 @@ func (c *cache[K, V]) Len() int {
 }
 
 func (c *cache[K, V]) getShard(hashedKey uint64) (shard *shard[K, V]) {
-	return c.shards[hashedKey&c.shardMask]
+	return c.shards[hashedKey%uint64(len(c.shards))]
 }
 
 func (c *cache[K, V]) Clear() {

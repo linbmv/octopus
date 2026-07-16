@@ -11,11 +11,30 @@
             "apikey": "API Key"
         },
         "error": {
-            "generic": "Login failed, please check your credentials"
+            "generic": "Login failed, please check your credentials",
+            "webauthnUnavailable": "This browser or device does not support WebAuthn.",
+            "webauthnCancelled": "Security-key verification was cancelled.",
+            "webauthnFailed": "Security-key verification failed. Please try again."
         },
         "button": {
             "loading": "Logging in...",
             "submit": "Login"
+        }
+    },
+    "passwordChangeRequired": {
+        "title": "Change your temporary password",
+        "description": "For security, finish this step before using the management console. You will sign in again after the password is changed.",
+        "currentPassword": "Temporary password",
+        "newPassword": "New password",
+        "confirmPassword": "Confirm new password",
+        "submit": "Change password",
+        "submitting": "Changing password...",
+        "success": "Password changed. Sign in with your new password.",
+        "error": {
+            "mismatch": "Passwords do not match",
+            "length": "Password must contain 8 to 72 UTF-8 bytes",
+            "unchanged": "New password must differ from the temporary password",
+            "generic": "Unable to change password"
         }
     },
     "apiKeyDashboard": {
@@ -53,6 +72,7 @@
         "setting": "Setting"
     },
     "toolbar": {
+        "create": "Create",
         "popover": {
             "ariaLabel": "View options",
             "layout": "Layout",
@@ -91,6 +111,13 @@
             "failed": "Copy failed",
             "noContent": "Nothing to copy"
         }
+    },
+    "appError": {
+        "pageTitle": "Page failed to load",
+        "rootTitle": "Application failed to load",
+        "description": "Try again, or refresh the page to continue.",
+        "digest": "Error ID",
+        "retry": "Try again"
     },
     "home": {
         "activity": {
@@ -140,6 +167,23 @@
             "successRate": "Success Rate"
         }
     },
+    "errorObservability": {
+        "title": "Error level distribution",
+        "description": "Classified failed relay attempts from bounded relay logs",
+        "channelTitle": "Error scope trend",
+        "channelDescription": "Key-level versus channel-level failures in the last 24 hours",
+        "last24Hours": "Last 24 hours",
+        "loading": "Loading error statistics…",
+        "loadError": "Failed to load error statistics",
+        "noData": "No classified failures in this period",
+        "truncated": "Showing the newest {capacity} relay logs; older failures in this period are excluded.",
+        "distributionAria": "Error distribution, {total} classified failures",
+        "levels": {
+            "key": "Key",
+            "channel": "Channel",
+            "client": "Client"
+        }
+    },
     "setting": {
         "appearance": "Appearance",
         "system": "System",
@@ -170,8 +214,36 @@
         },
         "smartHealth": {
             "label": "Enable Smart Health System",
-            "description": "Automatically learns channel latency and stability, then adjusts first-token timeout and channel weight.",
+            "description": "Automatically learns channel latency and stability to adjust first-token timeout.",
             "hint": "When enabled, group first-token timeout 0 uses automatic calculation; a positive value manually overrides that group."
+        },
+        "healthWeighted": {
+            "label": "Use Health for Candidate Ordering",
+            "description": "Use success rate, sample confidence, and first-token latency for weighted selection and same-priority failover ordering.",
+            "hint": "Off by default. It never moves a failover candidate ahead of a higher user-defined priority."
+        },
+        "health": {
+            "title": "Adaptive Health",
+            "description": "Choose a safe operating mode, then optionally tune the existing low-level controls.",
+            "advanced": "Advanced",
+            "shadowMode": "Shadow mode",
+            "shadowModeHint": "Observe and record adaptive decisions without enforcing automatic timeouts.",
+            "presets": {
+                "off": { "label": "Off", "description": "Disable adaptive health behavior." },
+                "shadow": { "label": "Shadow", "description": "Observe decisions without enforcement." },
+                "balanced": { "label": "Balanced", "description": "Adaptive timeout with stable manual ordering." },
+                "aggressive": { "label": "Aggressive", "description": "Also use health in candidate ordering." }
+            },
+            "fields": {
+                "minAdaptiveTimeout": "Minimum adaptive timeout (seconds)",
+                "slowModelMinTimeout": "Slow-model minimum timeout (seconds)",
+                "recoveryProbeEvery": "Recovery probe every N evaluations",
+                "recoveryProbeInterval": "Recovery probe interval (seconds)",
+                "timeoutRateThreshold": "Timeout-rate threshold (%)",
+                "maxMultiplierStack": "Maximum timeout multiplier",
+                "stickyHealthyTimeout": "Healthy sticky first-token threshold (seconds)",
+                "slowModelKeywords": "Slow-model keywords"
+            }
         },
         "circuitBreaker": {
             "title": "Circuit Breaker",
@@ -196,19 +268,59 @@
                 "title": "Export",
                 "includeLogs": "Include Logs",
                 "includeStats": "Include Stats",
-                "button": "Download JSON",
+                "password": {
+                    "label": "Encryption password (optional)",
+                    "placeholder": "Leave blank for plaintext JSON",
+                    "confirmLabel": "Confirm encryption password",
+                    "confirmPlaceholder": "Enter the same password again",
+                    "hint": "Use 8–1024 UTF-8 bytes. A password creates an encrypted .octopus-backup file and cannot be recovered if lost.",
+                    "error": {
+                        "length": "Backup password must contain 8–1024 UTF-8 bytes",
+                        "mismatch": "Backup passwords do not match"
+                    }
+                },
+                "button": "Download backup",
                 "exporting": "Exporting...",
                 "success": "Export started"
             },
             "import": {
-                "title": "Import (Incremental)",
+                "title": "Import / Restore",
+                "warning": "Version 2 imports map relationships by stable UUID; version 1 still requires empty business, statistics, and log tables. Backup files can contain channel/API keys and optional log content and must be handled as secrets.",
+                "password": {
+                    "label": "Backup password (encrypted files only)",
+                    "placeholder": "Leave blank for plaintext JSON",
+                    "hint": "The password stays only in this form and is cleared after every restore attempt.",
+                    "error": {
+                        "length": "Backup password must contain 8–1024 UTF-8 bytes",
+                        "mismatch": "Backup passwords do not match"
+                    }
+                },
+                "policy": {
+                    "label": "UUID conflict policy",
+                    "reject": "Reject conflicts",
+                    "skip": "Skip existing rows",
+                    "replace": "Replace and synchronize children",
+                    "merge": "Merge and preserve target-only children"
+                },
                 "selected": "File selected",
-                "button": "Import JSON",
+                "button": "Import backup",
+                "dryRunButton": "Preview changes",
                 "importing": "Importing...",
-                "noFile": "Please select a JSON file first",
+                "noFile": "Please select a .json or .octopus-backup file first",
                 "success": "Import successful",
+                "dryRunSuccess": "Preview complete",
                 "failed": "Import failed",
-                "result": "Import result"
+                "result": "Import result",
+                "dryRunResult": "Planned changes",
+                "summary": {
+                    "table": "Table",
+                    "create": "Create",
+                    "update": "Update",
+                    "skip": "Skip",
+                    "delete": "Delete",
+                    "conflict": "Conflict",
+                    "unresolved": "Unresolved"
+                }
             }
         },
         "apiKey": {
@@ -287,6 +399,8 @@
             "title": "Account Settings",
             "save": "Save",
             "saving": "Saving...",
+            "logout": "Logout",
+            "loggingOut": "Logging out...",
             "username": {
                 "label": "Change Username",
                 "placeholder": "Enter new username",
@@ -302,10 +416,27 @@
                 "oldEmpty": "Please enter current password",
                 "newEmpty": "Please enter new password",
                 "mismatch": "Passwords do not match",
-                "tooShort": "Password must be at least 6 characters",
+                "tooShort": "Password must contain 8 to 72 UTF-8 bytes",
+                "unchanged": "New password must differ from current password",
                 "change": "Change Password",
                 "success": "Password changed successfully",
                 "failed": "Failed to change password"
+            },
+            "webauthn": {
+                "title": "Security keys and passkeys",
+                "description": "After registration, password login also requires this device's user verification or a security key.",
+                "disabled": "WebAuthn is disabled. Configure the relying-party ID and allowed HTTPS origins in the server configuration to enable it.",
+                "namePlaceholder": "Credential name, for example Work laptop",
+                "passwordPlaceholder": "Enter current password to confirm",
+                "register": "Register credential",
+                "registering": "Waiting for authenticator...",
+                "registered": "Security credential registered",
+                "registerFailed": "Failed to register security credential",
+                "empty": "No security credentials registered",
+                "delete": "Delete security credential",
+                "deleted": "Security credential deleted",
+                "deleteFailed": "Failed to delete security credential",
+                "passwordRequired": "Enter your current password first"
             }
         },
         "info": {
@@ -328,8 +459,22 @@
         },
         "log": {
             "title": "Log Settings",
+            "contentMode": {
+                "label": "New Log Content",
+                "option": {
+                    "metadata": "Metadata only (recommended)",
+                    "full": "Full bodies (sensitive)",
+                    "disabled": "Disabled"
+                },
+                "description": {
+                    "metadata": "Saves usage, routing attempts, and redacted errors; request and response bodies are omitted.",
+                    "full": "Explicit opt-in: saves redacted request and response bodies. Prompts may still contain sensitive data; clear old logs when turning this off.",
+                    "disabled": "Stops new relay logs, including live events and history. Usage statistics and server-side operational error logs remain enabled."
+                },
+                "saveFailed": "Failed to update the log content policy"
+            },
             "enabled": {
-                "label": "Enable History Logs"
+                "label": "Persist History Logs"
             },
             "keepPeriod": {
                 "label": "Log Retention (days)",
@@ -389,12 +534,15 @@
             "autoAdd": "Auto Add",
             "clear": "Clear",
             "selectChannel": "Channel",
-            "selectModel": "Model"
+            "selectModel": "Model",
+            "addGroup": "Add Group",
+            "searchGroups": "Search groups"
         },
         "item": {
             "enable": "Enable",
             "disable": "Temporarily disable",
-            "channelDisabled": "Channel disabled"
+            "channelDisabled": "Channel disabled",
+            "group": "(Group)"
         },
         "mode": {
             "roundRobin": "Round Robin",
@@ -460,6 +608,15 @@
             "tokens": "tokens",
             "retryDetails": "Retry Details",
             "attempts": "attempts",
+            "attemptNumber": "Attempt {number}",
+            "attemptStatus": {
+                "success": "Success",
+                "failed": "Failed",
+                "client_canceled": "Client disconnected",
+                "circuit_break": "Circuit open",
+                "skipped": "Skipped",
+                "redirect": "Redirected"
+            },
             "success": "Success",
             "failed": "Failed"
         }
@@ -511,6 +668,33 @@
                 "delete": "Delete",
                 "confirmDelete": "Confirm Delete",
                 "deleting": "Deleting..."
+            },
+            "capabilities": {
+                "title": "Capability evidence",
+                "probe": "Probe",
+                "probing": "Probing...",
+                "probeFailed": "Capability probe could not be queued",
+                "queued": "Queued {accepted} of {requested} bounded probes",
+                "loading": "Loading capability evidence...",
+                "loadFailed": "Failed to load capability evidence",
+                "empty": "No capability evidence",
+                "keyScope": "Key #{id}",
+                "probedAt": "Probed {time}",
+                "errorClass": "Error: {classification}",
+                "stale": "Stale",
+                "kinds": {
+                    "text": "Text",
+                    "stream": "Stream",
+                    "tool": "Tools",
+                    "vision": "Vision"
+                },
+                "statuses": {
+                    "supported": "Supported",
+                    "unsupported": "Unsupported",
+                    "unauthorized": "Unauthorized",
+                    "not_implemented": "Not implemented",
+                    "transient": "Transient"
+                }
             }
         },
         "create": {
@@ -538,6 +722,21 @@
             "unlimitedNumber": "0 = unlimited",
             "paramOverride": "Param Override",
             "paramOverridePlaceholder": "Optional: JSON string to override request params",
+            "requestRewriteAdvanced": "Advanced Request Rewrite Rules",
+            "requestRewriteHint": "Rules run in order after the simple overrides. Authentication headers are protected. JSON paths use a restricted JSON Pointer syntax (for example /messages/0/content), with at most 32 rules per section.",
+            "protectedHeaderHint": "Authentication headers are managed by the provider adapter and cannot be rewritten.",
+            "headerRules": "Header Rules",
+            "jsonRewriteRules": "JSON Path Rules",
+            "ruleAdd": "Add Rule",
+            "ruleAction": "Rule action",
+            "ruleSet": "Set",
+            "ruleAppend": "Append",
+            "ruleRemove": "Remove",
+            "ruleOverride": "Override",
+            "ruleDelete": "Delete rule",
+            "ruleValueUnused": "No value for remove",
+            "jsonPathPlaceholder": "/messages/0/content",
+            "jsonValuePlaceholder": "JSON value, e.g. 0.2 or {\"enabled\":true}",
             "model": "Model",
             "enabled": "Enabled",
             "proxy": "Use Proxy",

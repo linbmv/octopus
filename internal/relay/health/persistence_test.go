@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -188,6 +189,30 @@ func TestHealthPersistence_StartStop(t *testing.T) {
 
 	if len(entries) == 0 {
 		t.Error("Expected at least one snapshot file")
+	}
+}
+
+func TestHealthPersistence_ContextLifecycleCanRestart(t *testing.T) {
+	manager := NewHealthManager(DefaultHealthConfig())
+	persistence, err := NewHealthPersistence(PersistenceConfig{
+		Enabled: true, DataDir: t.TempDir(), Interval: time.Hour, MaxSnapshots: 2,
+	}, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		parent, cancelParent := context.WithCancel(context.Background())
+		if err := persistence.StartContext(parent); err != nil {
+			cancelParent()
+			t.Fatal(err)
+		}
+		cancelParent()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if err := persistence.StopContext(ctx); err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		cancel()
 	}
 }
 

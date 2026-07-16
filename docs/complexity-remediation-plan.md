@@ -344,6 +344,8 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
 
 ### Phase 4：Policy 收敛
 
+状态：✅ 已完成。
+
 目标：把 health、compact、errorclass 从散落判断收敛为策略对象。
 
 任务：
@@ -368,6 +370,15 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
 - relay 主流程不直接识别大量状态码和错误字符串。
 - health 设置读取集中在一个地方。
 - compact 官方远程入口行为由表驱动测试覆盖。
+
+实施证据：
+
+- `HealthPolicy` 集中构建智能健康、加权调度与恢复探测策略；relay/balancer 不再分散读取对应设置键。
+- Compact 只保留官方 `/v1/responses/compact` strategy chain，不恢复手工 `/responses` 或 `/chat/completions` 降级。
+- `ErrorDecision` 统一输出 `return_client`、`retry_key`、`retry_channel`，同时携带客户端状态码和 compact 兼容动作；旧 `RetryNextKey` 字段仅作为兼容镜像保留。
+- HTTP、JSON、纯文本 soft error 与 SSE error event 统一复用 `errorclass.ClassifyResponse`，relay 侧只保留薄包装，不再维护重复关键词和 envelope 规则。
+- 官方 compact 仅在安全的 404/405/501 或明确 endpoint marker 下标记 group item 为 `incompatible` 并执行 `retry_channel`；`model_not_found`、鉴权、限流和普通 5xx 不会误写兼容状态。
+- 表驱动 focused tests 覆盖客户端终止、同渠道 key 轮换、渠道切换、soft/SSE 单一分类来源、compact 不兼容持久化及 `model_not_found` 反例。
 
 建议提交：
 
@@ -407,6 +418,8 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
 
 ### Phase 6：前端组件收敛
 
+状态：✅ 已完成（2026-07-16）。
+
 目标：降低 UI 修改成本。
 
 任务：
@@ -433,6 +446,14 @@ Octopus 当前测试基线仍然健康，但项目复杂度已经开始向少数
 - 单个组件文件尽量低于 350 行。
 - 表单转换函数有单元测试或至少纯函数测试。
 - UI 行为不变。
+
+实施证据：
+
+- API Key 表单已拆为状态 hook、基础字段、限制字段和模型访问等独立职责；分组编辑器已拆出状态 hook、模型/分组选择器和成员排序组件。
+- `log/Item.tsx` 与 `channel/CardContent.tsx` 均已降至 143 行，Setting 最大组件低于 300 行；目标模块没有超过 350 行的组件。
+- Relay 日志前端 store 有界，SSE 使用上限 30 秒的指数退避重连；Health 设置提供模式预设和高级设置折叠。
+- 用户可见的 JSX 中文已迁入三语 locale；新增语义测试防止英文目录混入未翻译汉字、关键错误/重试文案无审查漂移及 JSX 重新引入直写中文。
+- `pnpm test`（15 文件、40 项）、`pnpm type-check`、`pnpm lint`、`pnpm build` 与 `go test ./tools/webtypes` 全部通过。
 
 建议提交：
 

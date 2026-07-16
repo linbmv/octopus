@@ -50,9 +50,11 @@ type HealthPersistence struct {
 	config  PersistenceConfig
 	manager *HealthManager
 	mu      sync.Mutex
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+
+	lifecycleMu sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
+	started     bool
 }
 
 // NewHealthPersistence 创建持久化管理器
@@ -66,26 +68,52 @@ func NewHealthPersistence(config PersistenceConfig, manager *HealthManager) (*He
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	return &HealthPersistence{
 		config:  config,
 		manager: manager,
-		ctx:     ctx,
-		cancel:  cancel,
 	}, nil
 }
 
 // Start 启动持久化
 func (p *HealthPersistence) Start() {
-	if p == nil {
-		return
-	}
+	_ = p.StartContext(context.Background())
+}
 
-	p.wg.Add(1)
-	go p.persistLoop()
+func (p *HealthPersistence) StartContext(parent context.Context) error {
+	if p == nil {
+		return nil
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	p.lifecycleMu.Lock()
+	if p.started {
+		p.lifecycleMu.Unlock()
+		return nil
+	}
+	if p.done != nil {
+		select {
+		case <-p.done:
+			p.cancel = nil
+			p.done = nil
+		default:
+			p.lifecycleMu.Unlock()
+			return fmt.Errorf("health persistence is still stopping")
+		}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	p.cancel = cancel
+	p.done = make(chan struct{})
+	p.started = true
+	done := p.done
+	p.lifecycleMu.Unlock()
+	go func() {
+		p.persistLoop(ctx)
+		close(done)
+	}()
 
 	log.Infof("Health persistence started: interval=%v, dir=%s", p.config.Interval, p.config.DataDir)
+	return nil
 }
 
 // Stop 停止持久化
@@ -93,31 +121,74 @@ func (p *HealthPersistence) Stop() {
 	if p == nil {
 		return
 	}
-
-	p.cancel()
-	p.wg.Wait()
-
-	// 最后一次保存
-	if err := p.Save(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.StopContext(ctx); err != nil {
 		log.Errorf("Failed to save health states on shutdown: %v", err)
 	}
 
+	// StopContext performs the final save before returning.
 	log.Infof("Health persistence stopped")
 }
 
-// persistLoop 持久化循环
-func (p *HealthPersistence) persistLoop() {
-	defer p.wg.Done()
+func (p *HealthPersistence) StopContext(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	p.lifecycleMu.Lock()
+	if !p.started {
+		done := p.done
+		p.lifecycleMu.Unlock()
+		if done == nil {
+			return nil
+		}
+		select {
+		case <-done:
+			p.lifecycleMu.Lock()
+			if p.done == done {
+				p.cancel = nil
+				p.done = nil
+			}
+			p.lifecycleMu.Unlock()
+			return p.SaveContext(ctx)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	p.started = false
+	cancel := p.cancel
+	done := p.done
+	p.lifecycleMu.Unlock()
 
+	cancel()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	p.lifecycleMu.Lock()
+	if p.done == done {
+		p.cancel = nil
+		p.done = nil
+	}
+	p.lifecycleMu.Unlock()
+	return p.SaveContext(ctx)
+}
+
+// persistLoop 持久化循环
+func (p *HealthPersistence) persistLoop(ctx context.Context) {
 	ticker := time.NewTicker(p.config.Interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := p.Save(); err != nil {
+			if err := p.SaveContext(ctx); err != nil && ctx.Err() == nil {
 				log.Errorf("Failed to persist health states: %v", err)
 			}
 		}
@@ -126,8 +197,18 @@ func (p *HealthPersistence) persistLoop() {
 
 // Save 保存健康状态
 func (p *HealthPersistence) Save() error {
+	return p.SaveContext(context.Background())
+}
+
+func (p *HealthPersistence) SaveContext(ctx context.Context) error {
 	if p == nil {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	p.mu.Lock()
@@ -146,6 +227,9 @@ func (p *HealthPersistence) Save() error {
 	}
 
 	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 

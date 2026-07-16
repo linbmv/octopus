@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,18 +11,21 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
+type taskFunc func(context.Context) error
+
 type taskEntry struct {
 	name       string
 	interval   time.Duration
-	fn         func()
+	fn         taskFunc
 	runOnStart bool
-	ticker     *time.Ticker
 	stopCh     chan struct{}
 	stopOnce   sync.Once
-	updateCh   chan time.Duration
+	updateCh   chan struct{}
 	running    atomic.Bool
+	failures   atomic.Uint64
 	mu         sync.Mutex
 	stopping   bool
+	runCancel  context.CancelFunc
 	wg         sync.WaitGroup
 }
 
@@ -30,17 +34,23 @@ var (
 	tasksMu sync.RWMutex
 )
 
-// Register 注册一个定时任务
-// runOnStart: 是否在启动时立即执行一次
+// Register preserves the legacy callback shape for callers without cancellable
+// work. Production background tasks should use RegisterContext.
 func Register(name string, interval time.Duration, runOnStart bool, fn func()) {
-	if interval <= 0 {
-		log.Debugf("task %s not registered: interval is 0", name)
-		return
-	}
+	RegisterContext(name, interval, runOnStart, func(context.Context) error {
+		fn()
+		return nil
+	})
+}
 
+func RegisterContext(name string, interval time.Duration, runOnStart bool, fn taskFunc) {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 
+	if fn == nil {
+		log.Warnf("task %s has nil callback, skipping", name)
+		return
+	}
 	if _, exists := tasks[name]; exists {
 		log.Warnf("task %s already registered, skipping", name)
 		return
@@ -52,106 +62,218 @@ func Register(name string, interval time.Duration, runOnStart bool, fn func()) {
 		fn:         fn,
 		runOnStart: runOnStart,
 		stopCh:     make(chan struct{}),
-		updateCh:   make(chan time.Duration),
+		updateCh:   make(chan struct{}, 1),
+	}
+	if interval <= 0 {
+		log.Debugf("task %s registered in disabled state", name)
+		return
 	}
 	log.Debugf("task %s registered with interval %v, runOnStart: %v", name, interval, runOnStart)
 }
 
-// Update 更新任务的执行间隔
-// 当 interval 为 0 时，删除任务
-func Update(name string, interval time.Duration) {
-	tasksMu.Lock()
+func Update(name string, interval time.Duration) error {
+	tasksMu.RLock()
 	entry, exists := tasks[name]
+	tasksMu.RUnlock()
 	if !exists {
-		tasksMu.Unlock()
-		log.Warnf("task %s not found", name)
-		return
+		return errors.New("task not found: " + name)
 	}
-
+	if !entry.reconfigure(interval) {
+		return errors.New("task is stopping: " + name)
+	}
 	if interval <= 0 {
-		delete(tasks, name)
-		tasksMu.Unlock()
-		entry.stop()
-		log.Infof("task %s removed: interval is 0", name)
-		return
-	}
-	tasksMu.Unlock()
-
-	select {
-	case entry.updateCh <- interval:
+		log.Infof("task %s disabled", name)
+	} else {
 		log.Infof("task %s interval updated to %v", name, interval)
-	default:
-		log.Warnf("task %s update channel full, skipping", name)
 	}
+	return nil
 }
 
-// RUN 启动所有注册的任务
-func RUN() {
-	var wg sync.WaitGroup
+// RUN is retained for tests and legacy callers. The managed application path
+// uses RuntimeWorker.Start with a cancellable root context.
+func RUN() { Run(context.Background()) }
+
+func Run(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var schedulers sync.WaitGroup
 	tasksMu.RLock()
+	entries := make([]*taskEntry, 0, len(tasks))
 	for _, entry := range tasks {
-		wg.Add(1)
-		go func(entry *taskEntry) {
-			defer wg.Done()
-			runTask(entry)
-		}(entry)
+		entries = append(entries, entry)
 	}
 	tasksMu.RUnlock()
-	wg.Wait()
-}
-
-func Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	tasksMu.Lock()
-	entries := make([]*taskEntry, 0, len(tasks))
-	for name, entry := range tasks {
-		entries = append(entries, entry)
-		delete(tasks, name)
-	}
-	tasksMu.Unlock()
-
 	for _, entry := range entries {
-		entry.stop()
+		schedulers.Add(1)
+		go func(entry *taskEntry) {
+			defer schedulers.Done()
+			runTask(ctx, entry)
+		}(entry)
 	}
-
-	var closeErr error
-	if err := waitTaskEntries(ctx, entries); err != nil {
-		closeErr = err
-	}
-	if err := stopChannelMaintenance(ctx); err != nil && !errors.Is(err, context.Canceled) && closeErr == nil {
-		return err
-	}
-	return closeErr
+	schedulers.Wait()
 }
 
-func runTask(entry *taskEntry) {
-	// 根据配置决定是否在启动时立即执行
-	if entry.runOnStart {
-		entry.runOnce()
+// RuntimeWorker joins the periodic scheduler and channel maintenance queue
+// under one restartable Start/Stop lifecycle.
+type RuntimeWorker struct {
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	done    chan struct{}
+	started bool
+}
+
+var defaultRuntimeWorker = &RuntimeWorker{}
+
+func DefaultRuntimeWorker() *RuntimeWorker { return defaultRuntimeWorker }
+
+func (w *RuntimeWorker) Start(parent context.Context) error {
+	if parent == nil {
+		parent = context.Background()
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.started {
+		return nil
+	}
+	if w.done != nil {
+		select {
+		case <-w.done:
+			w.cancel = nil
+			w.done = nil
+		default:
+			return errors.New("scheduled task worker is still stopping")
+		}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if err := startChannelMaintenance(ctx); err != nil {
+		cancel()
+		return fmt.Errorf("start channel maintenance: %w", err)
+	}
+	w.cancel = cancel
+	w.done = make(chan struct{})
+	w.started = true
+	done := w.done
+	go func() {
+		Run(ctx)
+		close(done)
+	}()
+	return nil
+}
+
+func (w *RuntimeWorker) Stop(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	w.mu.Lock()
+	if !w.started {
+		done := w.done
+		w.mu.Unlock()
+		if done == nil {
+			return nil
+		}
+		select {
+		case <-done:
+			w.mu.Lock()
+			if w.done == done {
+				w.cancel = nil
+				w.done = nil
+			}
+			w.mu.Unlock()
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	w.started = false
+	cancel := w.cancel
+	done := w.done
+	w.mu.Unlock()
+
+	cancel()
+	var result error
+	if err := stopChannelMaintenance(ctx); err != nil {
+		result = errors.Join(result, fmt.Errorf("stop channel maintenance: %w", err))
+	}
+	finished := false
+	select {
+	case <-done:
+		finished = true
+	case <-ctx.Done():
+		result = errors.Join(result, ctx.Err())
 	}
 
-	entry.ticker = time.NewTicker(entry.interval)
-	defer entry.ticker.Stop()
+	w.mu.Lock()
+	if finished && w.done == done {
+		w.cancel = nil
+		w.done = nil
+	}
+	w.mu.Unlock()
+	return result
+}
+
+func runTask(parent context.Context, entry *taskEntry) {
+	ctx, cancel := context.WithCancel(parent)
+	entry.mu.Lock()
+	if entry.stopping {
+		entry.mu.Unlock()
+		cancel()
+		return
+	}
+	entry.runCancel = cancel
+	entry.mu.Unlock()
+	defer func() {
+		cancel()
+		entry.wg.Wait()
+		entry.mu.Lock()
+		entry.runCancel = nil
+		entry.mu.Unlock()
+	}()
+
+	interval := entry.currentInterval()
+	if entry.runOnStart && interval > 0 {
+		entry.runOnceContext(ctx)
+	}
+
+	var ticker *time.Ticker
+	var tickCh <-chan time.Time
+	resetTicker := func(next time.Duration) {
+		if ticker != nil {
+			ticker.Stop()
+			ticker = nil
+			tickCh = nil
+		}
+		if next > 0 {
+			ticker = time.NewTicker(next)
+			tickCh = ticker.C
+		}
+	}
+	resetTicker(interval)
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
 
 	for {
 		select {
-		case <-entry.ticker.C:
-			entry.runOnce()
-		case newInterval := <-entry.updateCh:
-			entry.ticker.Stop()
-			entry.interval = newInterval
-			entry.ticker = time.NewTicker(newInterval)
+		case <-tickCh:
+			entry.runOnceContext(ctx)
+		case <-entry.updateCh:
+			resetTicker(entry.currentInterval())
 		case <-entry.stopCh:
+			return
+		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (entry *taskEntry) runOnce() {
+func (entry *taskEntry) runOnce() { entry.runOnceContext(context.Background()) }
+
+func (entry *taskEntry) runOnceContext(ctx context.Context) {
 	entry.mu.Lock()
-	if entry.stopping {
+	if entry.stopping || ctx.Err() != nil {
 		entry.mu.Unlock()
 		return
 	}
@@ -166,17 +288,43 @@ func (entry *taskEntry) runOnce() {
 	go func() {
 		defer entry.wg.Done()
 		defer entry.running.Store(false)
-		entry.fn()
+		if err := entry.fn(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			entry.failures.Add(1)
+			log.Errorf("task %s failed: %v", entry.name, err)
+		}
 	}()
 }
 
 func (entry *taskEntry) stop() {
 	entry.mu.Lock()
 	entry.stopping = true
+	cancel := entry.runCancel
 	entry.mu.Unlock()
-	entry.stopOnce.Do(func() {
-		close(entry.stopCh)
-	})
+	if cancel != nil {
+		cancel()
+	}
+	entry.stopOnce.Do(func() { close(entry.stopCh) })
+}
+
+func (entry *taskEntry) currentInterval() time.Duration {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	return entry.interval
+}
+
+func (entry *taskEntry) reconfigure(interval time.Duration) bool {
+	entry.mu.Lock()
+	if entry.stopping {
+		entry.mu.Unlock()
+		return false
+	}
+	entry.interval = interval
+	entry.mu.Unlock()
+	select {
+	case entry.updateCh <- struct{}{}:
+	default:
+	}
+	return true
 }
 
 func waitTaskEntries(ctx context.Context, entries []*taskEntry) error {
@@ -190,7 +338,6 @@ func waitTaskEntries(ctx context.Context, entries []*taskEntry) error {
 		}
 		close(done)
 	}()
-
 	select {
 	case <-done:
 		return nil

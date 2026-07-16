@@ -3,7 +3,7 @@ package op
 import (
 	"context"
 	"fmt"
-	"strings"
+	"sort"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
@@ -20,28 +20,56 @@ func LLMList(ctx context.Context) ([]model.LLMInfo, error) {
 			LLMPrice: cost,
 		})
 	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
 	return models, nil
 }
 
-func LLMUpdate(model model.LLMInfo, ctx context.Context) error {
-	_, ok := llmModelCache.Get(model.Name)
+func LLMUpdate(info model.LLMInfo, ctx context.Context) error {
+	if err := model.ValidateLLMInfo(&info); err != nil {
+		return fmt.Errorf("%w: invalid model: %v", ErrInvalidInput, err)
+	}
+	_, ok := llmModelCache.Get(info.Name)
 	if !ok {
-		return fmt.Errorf("model not found")
+		return fmt.Errorf("%w: model not found", ErrNotFound)
 	}
-	if err := db.GetDB().WithContext(ctx).Save(model).Error; err != nil {
-		return err
+	result := db.GetDB().WithContext(ctx).Model(&model.LLMInfo{}).Where("name = ?", info.Name).Updates(map[string]any{
+		"input":       info.Input,
+		"output":      info.Output,
+		"cache_read":  info.CacheRead,
+		"cache_write": info.CacheWrite,
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-	llmModelCache.Set(model.Name, model.LLMPrice)
+	if result.RowsAffected == 0 {
+		var count int64
+		if err := db.GetDB().WithContext(ctx).Model(&model.LLMInfo{}).Where("name = ?", info.Name).Count(&count).Error; err != nil {
+			return fmt.Errorf("failed to verify model update: %w", err)
+		}
+		if count != 1 {
+			return fmt.Errorf("%w: model not found", ErrNotFound)
+		}
+	}
+	llmModelCache.Set(info.Name, info.LLMPrice)
 	return nil
 }
 
 func LLMDelete(modelName string, ctx context.Context) error {
+	probe := model.LLMInfo{Name: modelName}
+	if err := model.ValidateLLMInfo(&probe); err != nil {
+		return fmt.Errorf("%w: invalid model name: %v", ErrInvalidInput, err)
+	}
+	modelName = probe.Name
 	_, ok := llmModelCache.Get(modelName)
 	if !ok {
-		return fmt.Errorf("model not found")
+		return fmt.Errorf("%w: model not found", ErrNotFound)
 	}
-	if err := db.GetDB().WithContext(ctx).Delete(&model.LLMInfo{Name: modelName}).Error; err != nil {
-		return err
+	result := db.GetDB().WithContext(ctx).Delete(&model.LLMInfo{Name: modelName})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: model not found", ErrNotFound)
 	}
 	llmModelCache.Del(modelName)
 	return nil
@@ -50,22 +78,31 @@ func LLMBatchDelete(modelNames []string, ctx context.Context) error {
 	if len(modelNames) == 0 {
 		return nil
 	}
+	for i := range modelNames {
+		probe := model.LLMInfo{Name: modelNames[i]}
+		if err := model.ValidateLLMInfo(&probe); err != nil {
+			return fmt.Errorf("%w: invalid model name: %v", ErrInvalidInput, err)
+		}
+		modelNames[i] = probe.Name
+	}
 	if err := db.GetDB().WithContext(ctx).Where("name IN ?", modelNames).Delete(&model.LLMInfo{}).Error; err != nil {
 		return err
 	}
 	llmModelCache.Del(modelNames...)
 	return nil
 }
-func LLMCreate(model model.LLMInfo, ctx context.Context) error {
-	model.Name = strings.ToLower(model.Name)
-	_, ok := llmModelCache.Get(model.Name)
-	if ok {
-		return fmt.Errorf("model already exists")
+func LLMCreate(info model.LLMInfo, ctx context.Context) error {
+	if err := model.ValidateLLMInfo(&info); err != nil {
+		return fmt.Errorf("%w: invalid model: %v", ErrInvalidInput, err)
 	}
-	if err := db.GetDB().WithContext(ctx).Create(&model).Error; err != nil {
+	_, ok := llmModelCache.Get(info.Name)
+	if ok {
+		return fmt.Errorf("%w: model already exists", ErrConflict)
+	}
+	if err := db.GetDB().WithContext(ctx).Create(&info).Error; err != nil {
 		return err
 	}
-	llmModelCache.Set(model.Name, model.LLMPrice)
+	llmModelCache.Set(info.Name, info.LLMPrice)
 	return nil
 }
 func LLMBatchCreate(llmInfos []model.LLMInfo, ctx context.Context) error {
@@ -74,8 +111,10 @@ func LLMBatchCreate(llmInfos []model.LLMInfo, ctx context.Context) error {
 	}
 	seen := make(map[string]struct{}, len(llmInfos))
 	newLLMInfos := make([]model.LLMInfo, 0, len(llmInfos))
-	for _, llmInfo := range llmInfos {
-		llmInfo.Name = strings.ToLower(llmInfo.Name)
+	for i, llmInfo := range llmInfos {
+		if err := model.ValidateLLMInfo(&llmInfo); err != nil {
+			return fmt.Errorf("%w: invalid model at index %d: %v", ErrInvalidInput, i, err)
+		}
 		if _, ok := seen[llmInfo.Name]; ok {
 			continue
 		}
@@ -99,7 +138,7 @@ func LLMBatchCreate(llmInfos []model.LLMInfo, ctx context.Context) error {
 func LLMGet(name string) (model.LLMPrice, error) {
 	price, ok := llmModelCache.Get(name)
 	if !ok {
-		return model.LLMPrice{}, fmt.Errorf("model not found")
+		return model.LLMPrice{}, fmt.Errorf("%w: model not found", ErrNotFound)
 	}
 	return price, nil
 }
@@ -109,6 +148,7 @@ func llmRefreshCache(ctx context.Context) error {
 	if err := db.GetDB().WithContext(ctx).Find(&models).Error; err != nil {
 		return err
 	}
+	llmModelCache.Clear()
 	for _, model := range models {
 		llmModelCache.Set(model.Name, model.LLMPrice)
 	}

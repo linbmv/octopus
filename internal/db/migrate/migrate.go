@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
@@ -37,19 +38,11 @@ func RegisterAfterAutoMigration(m Migration) {
 }
 
 func BeforeAutoMigrate(db *gorm.DB) error {
-	if err := runMigrationsWithRecord(db, beforeAutoMigrations); err != nil {
-		return err
-	}
-	beforeAutoMigrations = nil
-	return nil
+	return runMigrationsWithRecord(db, beforeAutoMigrations)
 }
 
 func AfterAutoMigrate(db *gorm.DB) error {
-	if err := runMigrationsWithRecord(db, afterAutoMigrations); err != nil {
-		return err
-	}
-	afterAutoMigrations = nil
-	return nil
+	return runMigrationsWithRecord(db, afterAutoMigrations)
 }
 
 func runMigrationsWithRecord(db *gorm.DB, migrations []Migration) error {
@@ -101,9 +94,15 @@ func runMigrationsWithRecord(db *gorm.DB, migrations []Migration) error {
 
 		// 执行迁移
 		if err := m.Up(db); err != nil {
-			upsertMigrationRecord(db, m.Version, MigrationRecordStatusFailed)
+			migrationErr := fmt.Errorf("failed to run migration %d: %w", m.Version, err)
+			if recordErr := upsertMigrationRecord(db, m.Version, MigrationRecordStatusFailed); recordErr != nil {
+				return errors.Join(
+					migrationErr,
+					fmt.Errorf("failed to set migration %d failed: %w", m.Version, recordErr),
+				)
+			}
 			statusByVersion[m.Version] = MigrationRecordStatusFailed
-			return fmt.Errorf("failed to run migration %d: %w", m.Version, err)
+			return migrationErr
 		}
 
 		// 记录成功

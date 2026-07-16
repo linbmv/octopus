@@ -11,7 +11,6 @@ import (
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xstrings"
-	"github.com/dlclark/regexp2"
 )
 
 func ChannelHttpClient(channel *model.Channel) (*http.Client, error) {
@@ -52,7 +51,9 @@ func ChannelBaseUrlDelayUpdate(channel *model.Channel, ctx context.Context) {
 		})
 	}
 	if len(newBaseUrls) > 0 {
-		op.ChannelBaseUrlUpdate(channel.ID, newBaseUrls)
+		if err := op.ChannelBaseUrlUpdate(channel.ID, newBaseUrls); err != nil {
+			log.Warnf("failed to update base URL delay cache (channel=%d): %v", channel.ID, err)
+		}
 	}
 }
 
@@ -64,7 +65,7 @@ func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
 	if err := op.GroupItemPruneByChannelModels(channel.ID, channelModelNames, ctx); err != nil {
 		log.Warnf("prune stale group items failed (channel=%d): %v", channel.ID, err)
 	}
-	if channel.AutoGroup == model.AutoGroupTypeNone {
+	if channel.AutoGroup == model.AutoGroupTypeNone || len(channelModelNames) == 0 {
 		return
 	}
 	groups, err := op.GroupList(ctx)
@@ -73,70 +74,83 @@ func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
 		return
 	}
 
-	if len(channelModelNames) == 0 {
-		return
-	}
-
 	for _, group := range groups {
-		matchedModelNames := make([]string, 0, len(channelModelNames))
-
-		switch channel.AutoGroup {
-		case model.AutoGroupTypeExact:
-			for _, modelName := range channelModelNames {
-				if strings.EqualFold(modelName, group.Name) {
-					matchedModelNames = append(matchedModelNames, modelName)
-				}
-			}
-
-		case model.AutoGroupTypeFuzzy:
-			groupNameLower := strings.ToLower(strings.TrimSpace(group.Name))
-			if groupNameLower == "" {
-				continue
-			}
-			for _, modelName := range channelModelNames {
-				if strings.Contains(strings.ToLower(modelName), groupNameLower) {
-					matchedModelNames = append(matchedModelNames, modelName)
-				}
-			}
-
-		case model.AutoGroupTypeRegex:
-			if group.MatchRegex == "" {
-				for _, modelName := range channelModelNames {
-					if strings.EqualFold(modelName, group.Name) {
-						matchedModelNames = append(matchedModelNames, modelName)
-					}
-				}
-				break
-			}
-
-			re, err := regexp2.Compile(group.MatchRegex, regexp2.ECMAScript)
-			if err != nil {
-				log.Warnf("compile regex failed (channel=%d group=%d regex=%q): %v", channel.ID, group.ID, group.MatchRegex, err)
-				continue
-			}
-			for _, modelName := range channelModelNames {
-				matched, err := re.MatchString(modelName)
-				if err != nil {
-					log.Warnf("match regex failed (channel=%d group=%d regex=%q model=%q): %v", channel.ID, group.ID, group.MatchRegex, modelName, err)
-					continue
-				}
-				if matched {
-					matchedModelNames = append(matchedModelNames, modelName)
-				}
-			}
-		}
-
+		matchedModelNames := matchModelsToGroup(channel, group, channelModelNames)
 		if len(matchedModelNames) > 0 {
-			items := make([]model.GroupIDAndLLMName, 0, len(matchedModelNames))
-			for _, modelName := range matchedModelNames {
-				items = append(items, model.GroupIDAndLLMName{
-					ChannelID: channel.ID,
-					ModelName: modelName,
-				})
-			}
-			if err := op.GroupItemBatchAdd(group.ID, items, ctx); err != nil {
-				log.Warnf("group item batch add failed (channel=%d group=%d): %v", channel.ID, group.ID, err)
-			}
+			addMatchedModelsToGroup(channel.ID, group.ID, matchedModelNames, ctx)
 		}
+	}
+}
+
+func matchModelsToGroup(channel *model.Channel, group model.Group, channelModelNames []string) []string {
+	switch channel.AutoGroup {
+	case model.AutoGroupTypeExact:
+		return matchExact(group.Name, channelModelNames)
+	case model.AutoGroupTypeFuzzy:
+		return matchFuzzy(group.Name, channelModelNames)
+	case model.AutoGroupTypeRegex:
+		return matchRegex(channel.ID, group, channelModelNames)
+	default:
+		return nil
+	}
+}
+
+func matchExact(groupName string, modelNames []string) []string {
+	matched := make([]string, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		if strings.EqualFold(modelName, groupName) {
+			matched = append(matched, modelName)
+		}
+	}
+	return matched
+}
+
+func matchFuzzy(groupName string, modelNames []string) []string {
+	groupNameLower := strings.ToLower(strings.TrimSpace(groupName))
+	if groupNameLower == "" {
+		return nil
+	}
+	matched := make([]string, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		if strings.Contains(strings.ToLower(modelName), groupNameLower) {
+			matched = append(matched, modelName)
+		}
+	}
+	return matched
+}
+
+func matchRegex(channelID int, group model.Group, modelNames []string) []string {
+	if group.MatchRegex == "" {
+		return matchExact(group.Name, modelNames)
+	}
+	re, err := CompileModelRegex(group.MatchRegex)
+	if err != nil {
+		log.Warnf("compile regex failed (channel=%d group=%d): %v", channelID, group.ID, err)
+		return nil
+	}
+	matched := make([]string, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		isMatch, err := MatchModelRegex(re, modelName)
+		if err != nil {
+			log.Warnf("match regex failed (channel=%d group=%d): %v", channelID, group.ID, err)
+			continue
+		}
+		if isMatch {
+			matched = append(matched, modelName)
+		}
+	}
+	return matched
+}
+
+func addMatchedModelsToGroup(channelID, groupID int, modelNames []string, ctx context.Context) {
+	items := make([]model.GroupIDAndLLMName, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		items = append(items, model.GroupIDAndLLMName{
+			ChannelID: channelID,
+			ModelName: modelName,
+		})
+	}
+	if err := op.GroupItemBatchAdd(groupID, items, ctx); err != nil {
+		log.Warnf("group item batch add failed (channel=%d group=%d): %v", channelID, groupID, err)
 	}
 }

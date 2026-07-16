@@ -18,6 +18,7 @@ type relayRun struct {
 	iterStack            []*relayIteratorFrame
 	iterHistory          []*balancer.Iterator
 	group                dbmodel.Group
+	selectedBaseURLs     map[int]string
 	resolveGroupItemFunc func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error)
 }
 
@@ -31,14 +32,16 @@ type relayIteratorFrame struct {
 type relayAttempt struct {
 	*relayRun
 
-	outAdapter transformer.Outbound
-	channel    *dbmodel.Channel
-	groupItem  dbmodel.GroupItem
-	usedKey    dbmodel.ChannelKey
-	keyOptions []dbmodel.ChannelKey
-	keyIndex   int
-	baseURL    string
-	keyRemark  string                // 清洗后的本次 key 备注，用于 attempt 日志记录
-	trackingID string                // 活跃请求跟踪 ID
-	span       *balancer.AttemptSpan // attempt 追踪 span，用于记录首 token 时间
+	outAdapter             transformer.Outbound
+	channel                *dbmodel.Channel
+	groupItem              dbmodel.GroupItem
+	usedKey                dbmodel.ChannelKey
+	keyOptions             []dbmodel.ChannelKey
+	keyIndex               int
+	baseURL                string
+	keyRemark              string                    // 清洗后的本次 key 备注，用于 attempt 日志记录
+	trackingID             string                    // 活跃请求跟踪 ID
+	span                   *balancer.AttemptSpan     // attempt 追踪 span，用于记录首 token 时间
+	streamActivity         <-chan struct{}           // successful streaming response raw-byte activity (including decoder-consumed heartbeats)
+	compactStrategyUpdater compactStrategyUpdateFunc // optional per-attempt persistence hook used by focused policy tests
 }

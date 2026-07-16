@@ -41,6 +41,20 @@ go build ./...
 
 如果只完成其中一部分，必须明确说“部分修复”，不能说“已修复完成”。
 
+## Relay 错误分类规则
+
+- 所有上游 HTTP、HTTP 200 soft error 与 SSE error 必须经
+  `internal/relay/errorclass.ClassifyWithHeaders` 形成统一 `ErrorLevel`。
+- `key` 表示可在同渠道轮换 Key；`channel` 表示切换渠道；`client`
+  表示请求本身不可通过重试修复，应直接返回客户端。
+- 生产调用必须传递上游响应 headers；不得退回仅按状态码硬编码，
+  否则 `Retry-After`、`X-RateLimit-Scope` 等范围信息会丢失。
+- failed `ChannelAttempt` 必须保存 `error_level` 与有界的
+  `error_reason`，并同步覆盖统计分布、渠道趋势和日志详情。
+- 修改分类规则时至少覆盖 HTTP、soft 2xx、SSE、Key 轮换、渠道切换
+  和 client terminal 行为；1308/1310 与 Gemini
+  `RESOURCE_EXHAUSTED` 属于既有兼容契约。
+
 ## 提交范围规则
 
 提交前必须先查看状态：

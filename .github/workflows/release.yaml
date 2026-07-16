@@ -1,126 +1,848 @@
-name: release
+name: Release
 
 on:
   push:
-    branches:
-      - dev
+    tags:
+      - 'v*'
 
-permissions:
-  contents: write
-  packages: write
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
+  ACTIONLINT_VERSION: v1.7.12
+  DEADCODE_VERSION: v0.48.0
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GITLEAKS_VERSION: v8.30.1
+  GOLANGCI_LINT_VERSION: v2.12.2
+  GOVULNCHECK_VERSION: v1.6.0
+  SYFT_VERSION: v1.46.0
+  STATICCHECK_VERSION: '2026.1'
+  TRIVY_VERSION: v0.70.0
 
 jobs:
-  release:
-    name: release
+  verify:
+    name: Verify and build tagged commit
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - name: Checkout tagged commit and complete history
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
-          ref: dev
+          persist-credentials: false
+
+      - name: Verify tag target
+        run: test "$(git rev-list -n 1 "${GITHUB_REF_NAME}")" = "$(git rev-parse HEAD)"
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: 'stable'
-    
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
+          go-version: '1.26.5'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
         with:
-          version: '9'
+          version: '9.15.9'
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
-          cache: 'pnpm'
+          cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: Build
+      - name: Install pinned source scanners
+        env:
+          GOBIN: ${{ runner.temp }}/security-tools
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}
+          go install github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}
+          go install github.com/gitleaks/gitleaks/v8@${GITLEAKS_VERSION}
+          go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
+          go install golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION}
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+          echo "${GOBIN}" >>"${GITHUB_PATH}"
+
+      - name: Prepare security report directory
+        run: mkdir -p build/security
+
+      - name: Scan current tree and complete Git history
+        id: secret_scan
+        continue-on-error: true
+        run: scripts/security/scan-secrets.sh build/security
+
+      - name: Scan source dependencies and deployment configuration
+        id: source_scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          format: sarif
+          output: build/security/trivy-source.sarif
+          limit-severities-for-sarif: true
+          skip-dirs: build,static/out,web/.next,web/node_modules
+          timeout: 15m
+
+      - name: Upload redacted security reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-security-reports
+          path: build/security/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce source security gate
+        if: ${{ always() }}
+        env:
+          SECRET_SCAN_RESULT: ${{ steps.secret_scan.outcome }}
+          SOURCE_SCAN_RESULT: ${{ steps.source_scan.outcome }}
+        run: |
+          set -euo pipefail
+          test "${SECRET_SCAN_RESULT}" = success
+          test "${SOURCE_SCAN_RESULT}" = success
+
+      - name: Verify Go source
+        run: |
+          go mod verify
+          golangci-lint run --timeout=5m ./...
+          staticcheck ./...
+          deadcode -test ./...
+          actionlint
+          go vet ./...
+          go test -race ./...
+          go build ./...
+          govulncheck ./...
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Verify frontend source
+        working-directory: web
+        run: |
+          pnpm run lint
+          pnpm run type-check
+          pnpm run test
+
+      - name: Require clean tagged source after verification
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "${status}"
+
+      - name: Build release artifacts
         run: bash scripts/build.sh release
 
-      - name: Get image version
-        id: tag
+      - name: Frontend Browser E2E
+        working-directory: web
+        env:
+          GOCACHE: ${{ runner.temp }}/octopus-e2e-go-build
+          NEXT_TELEMETRY_DISABLED: '1'
+          OCTOPUS_E2E_SKIP_BUILD: '1'
+          OCTOPUS_E2E_USE_PACKAGED_STATIC: '1'
+        run: pnpm run test:e2e
+
+      - name: Require build and E2E to preserve tagged source
         run: |
-          if LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null); then
-            echo "TAG_NAME=$LATEST_TAG" >> $GITHUB_OUTPUT
-            echo "HAS_TAG=true" >> $GITHUB_OUTPUT
-          else
-            SHORT_SHA=$(git rev-parse --short HEAD)
-            echo "TAG_NAME=dev-$SHORT_SHA" >> $GITHUB_OUTPUT
-            echo "HAS_TAG=false" >> $GITHUB_OUTPUT
-          fi
+          set -euo pipefail
+          status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "${status}"
 
-      - name: Upload Release
-        if: steps.tag.outputs.HAS_TAG == 'true'
-        uses: softprops/action-gh-release@v2
+      - name: Upload Playwright failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          files: build/archives/*
-          prerelease: false
-          tag_name: ${{ steps.tag.outputs.TAG_NAME }}
+          name: release-playwright-results
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
-      - name: Docker meta (Debian)
-        id: meta-debian
-        uses: docker/metadata-action@v5
+      - name: Install pinned Syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          images: |
-            ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.tag.outputs.TAG_NAME }}
+          syft-version: ${{ env.SYFT_VERSION }}
 
-      - name: Docker meta (Alpine)
-        id: meta-alpine
-        uses: docker/metadata-action@v5
+      - name: Generate and validate source SBOMs
+        env:
+          SBOM_VERSION: ${{ github.ref_name }}
+          SYFT_BIN: ${{ steps.syft.outputs.cmd }}
+        run: scripts/security/generate-sbom.sh build/sbom
+
+      - name: Upload verified release file inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          images: |
-            ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest-alpine
-            type=raw,value=${{ steps.tag.outputs.TAG_NAME }}-alpine
+          name: release-file-inputs
+          path: |
+            build/archives/
+            build/sbom/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
+      - name: Upload verified amd64 container binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: container-build-amd64
+          path: build/docker/linux/amd64/octopus
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
+      - name: Upload verified arm64 container binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: container-build-arm64
+          path: build/docker/linux/arm64/octopus
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
+  database-matrix:
+    name: Verify MySQL 8.0 and PostgreSQL 17
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.0.46
+        env:
+          MYSQL_ROOT_PASSWORD: octopus-ci-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -poctopus-ci-root"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_PASSWORD: octopus-ci-postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.5'
+
+      - name: Create disposable source and restore databases
+        run: |
+          set -euo pipefail
+          mysql_id="$(docker ps --filter ancestor=mysql:8.0.46 --format '{{.ID}}')"
+          postgres_id="$(docker ps --filter ancestor=postgres:17.6 --format '{{.ID}}')"
+          test -n "${mysql_id}"
+          test -n "${postgres_id}"
+          docker exec "${mysql_id}" mysql -uroot -poctopus-ci-root -e 'CREATE DATABASE octopus_source; CREATE DATABASE octopus_target;'
+          docker exec "${postgres_id}" psql -v ON_ERROR_STOP=1 -U postgres -c 'CREATE DATABASE octopus_source;' -c 'CREATE DATABASE octopus_target;'
+
+      - name: Test MySQL matrix
+        env:
+          OCTOPUS_TEST_DB_TYPE: mysql
+          OCTOPUS_TEST_DB_SOURCE_DSN: 'root:octopus-ci-root@tcp(127.0.0.1:3306)/octopus_source?charset=utf8mb4&parseTime=True&loc=UTC'
+          OCTOPUS_TEST_DB_TARGET_DSN: 'root:octopus-ci-root@tcp(127.0.0.1:3306)/octopus_target?charset=utf8mb4&parseTime=True&loc=UTC'
+        run: |
+          set -euo pipefail
+          mkdir -p build/database-evidence
+          go test -json -count=1 ./internal/op -run '^TestDatabaseMatrix$' |
+            tee build/database-evidence/mysql.jsonl
+
+      - name: Test PostgreSQL matrix
+        env:
+          OCTOPUS_TEST_DB_TYPE: postgres
+          OCTOPUS_TEST_DB_SOURCE_DSN: 'host=127.0.0.1 user=postgres password=octopus-ci-postgres dbname=octopus_source port=5432 sslmode=disable TimeZone=UTC'
+          OCTOPUS_TEST_DB_TARGET_DSN: 'host=127.0.0.1 user=postgres password=octopus-ci-postgres dbname=octopus_target port=5432 sslmode=disable TimeZone=UTC'
+        run: |
+          set -euo pipefail
+          go test -json -count=1 ./internal/op -run '^TestDatabaseMatrix$' |
+            tee build/database-evidence/postgres.jsonl
+
+      - name: Upload database matrix evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-database-matrix-results
+          path: build/database-evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  container-gate:
+    name: Build once and scan ${{ matrix.variant }} ${{ matrix.platform }}
+    needs:
+      - verify
+      - database-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: alpine
+            platform: linux/amd64
+            arch: amd64
+            dockerfile: scripts/dockerfiles/Dockerfile.alpine
+          - variant: alpine
+            platform: linux/arm64
+            arch: arm64
+            dockerfile: scripts/dockerfiles/Dockerfile.alpine
+          - variant: debian
+            platform: linux/amd64
+            arch: amd64
+            dockerfile: scripts/dockerfiles/Dockerfile.debian
+          - variant: debian
+            platform: linux/arm64
+            arch: arm64
+            dockerfile: scripts/dockerfiles/Dockerfile.debian
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download verified container build inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: container-build-${{ matrix.arch }}
+          path: build/docker/${{ matrix.platform }}
+
+      - name: Set immutable staging reference
+        id: staging
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="${image}:staging-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}-${{ matrix.arch }}"
+          echo "image=${image}" >>"${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        if: ${{ matrix.arch == 'arm64' }}
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Login to staging registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push (Alpine)
-        uses: docker/build-push-action@v5
+      - name: Build and push platform image once
+        id: build_staging
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: .
-          file: ./scripts/dockerfiles/Dockerfile.alpine
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
           push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta-alpine.outputs.tags }}
-          labels: ${{ steps.meta-alpine.outputs.labels }}
-          build-args: |
-            TARGETPLATFORM
+          tags: ${{ steps.staging.outputs.tag }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.title=octopus
+            org.opencontainers.image.version=${{ github.ref_name }}
+          provenance: false
+          sbom: false
 
-      - name: Build and push (Debian)
-        uses: docker/build-push-action@v5
+      - name: Record immutable staging digest
+        env:
+          DIGEST: ${{ steps.build_staging.outputs.digest }}
+          IMAGE_NAME: ${{ steps.staging.outputs.image }}
+          STAGING_TAG: ${{ steps.staging.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p build/container-evidence
+          jq -n \
+            --arg digest "${DIGEST}" \
+            --arg image_name "${IMAGE_NAME}" \
+            --arg staging_tag "${STAGING_TAG}" \
+            --arg variant "${{ matrix.variant }}" \
+            --arg platform "${{ matrix.platform }}" \
+            --arg commit_sha "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '{
+              schema_version: 1,
+              digest: $digest,
+              image_name: $image_name,
+              staging_tag: $staging_tag,
+              variant: $variant,
+              platform: $platform,
+              commit_sha: $commit_sha,
+              run_id: $run_id,
+              run_attempt: $run_attempt
+            }' >"build/container-evidence/octopus-${{ matrix.variant }}-${{ matrix.arch }}.digest.json"
+
+      - name: Install pinned Syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          context: .
-          file: ./scripts/dockerfiles/Dockerfile.debian
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta-debian.outputs.tags }}
-          labels: ${{ steps.meta-debian.outputs.labels }}
-          build-args: |
-            TARGETPLATFORM
+          syft-version: ${{ env.SYFT_VERSION }}
+
+      - name: Install pinned Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache: true
+          token: ${{ github.token }}
+
+      - name: Generate SBOM and enforce image security gate
+        env:
+          SBOM_VERSION: ${{ github.ref_name }}
+          SYFT_BIN: ${{ steps.syft.outputs.cmd }}
+          SYFT_IMAGE_SOURCE: registry
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+          TRIVY_IMAGE_SOURCE: remote
+          XDG_CACHE_HOME: ${{ runner.temp }}/syft-cache
+        run: scripts/security/scan-container.sh \
+          "${{ steps.staging.outputs.image }}@${{ steps.build_staging.outputs.digest }}" \
+          "${{ matrix.variant }}-${{ matrix.arch }}" \
+          build/container-evidence \
+          "${{ matrix.platform }}"
+
+      - name: Validate exact image evidence set
+        run: |
+          set -euo pipefail
+          test "$(find build/container-evidence -maxdepth 1 -type f | wc -l)" -eq 3
+          test -f "build/container-evidence/octopus-${{ matrix.variant }}-${{ matrix.arch }}.digest.json"
+          test -f "build/container-evidence/octopus-${{ matrix.variant }}-${{ matrix.arch }}.cdx.json"
+          test -f "build/container-evidence/trivy-${{ matrix.variant }}-${{ matrix.arch }}.json"
+
+      - name: Upload sanitized image evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: container-evidence-${{ matrix.variant }}-${{ matrix.arch }}
+          path: build/container-evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Sign, attest, verify, and publish
+    needs:
+      - verify
+      - container-gate
+      - database-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+      packages: write
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download verified release file inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-file-inputs
+          path: build
+
+      - name: Download all image evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: container-evidence-*
+          path: build/container-evidence
+          merge-multiple: true
+
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >>"${GITHUB_OUTPUT}"
+
+      - name: Validate release and exact image inputs
+        id: inputs
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          (cd build/archives && sha256sum --check --strict SHA256SUMS)
+          (cd build/sbom && sha256sum --check --strict SBOM-SHA256SUMS)
+          test "$(find build/archives -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 8
+          test "$(find build/sbom -maxdepth 1 -type f -name '*.cdx.json' | wc -l)" -eq 2
+          test "$(find build/container-evidence -maxdepth 1 -type f | wc -l)" -eq 12
+
+          validate_platform() {
+            local variant=$1
+            local arch=$2
+            local platform=$3
+            local prefix="build/container-evidence/octopus-${variant}-${arch}"
+            local digest_file="${prefix}.digest.json"
+            local sbom_file="${prefix}.cdx.json"
+            local report_file="build/container-evidence/trivy-${variant}-${arch}.json"
+            local expected_tag="${IMAGE_NAME}:staging-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${variant}-${arch}"
+            local digest
+            local image_reference
+
+            jq -e \
+              --arg image_name "${IMAGE_NAME}" \
+              --arg staging_tag "${expected_tag}" \
+              --arg variant "${variant}" \
+              --arg platform "${platform}" \
+              --arg commit_sha "${GITHUB_SHA}" \
+              --arg run_id "${GITHUB_RUN_ID}" \
+              --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+              '.schema_version == 1 and
+               .image_name == $image_name and
+               .staging_tag == $staging_tag and
+               .variant == $variant and
+               .platform == $platform and
+               .commit_sha == $commit_sha and
+               .run_id == $run_id and
+               .run_attempt == $run_attempt' \
+              "${digest_file}" >/dev/null
+            digest="$(jq -er '.digest' "${digest_file}")"
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            image_reference="${IMAGE_NAME}@${digest}"
+
+            jq -e \
+              --arg component_name "octopus-${variant}-${arch}" \
+              --arg image_reference "${image_reference}" \
+              --arg image_platform "${platform}" \
+              '.bomFormat == "CycloneDX" and
+               (.specVersion | type == "string") and
+               .metadata.component.name == $component_name and
+               any(.metadata.component.properties[]?;
+                   .name == "octopus:image-reference" and
+                   .value == $image_reference) and
+               any(.metadata.component.properties[]?;
+                   .name == "octopus:image-platform" and
+                   .value == $image_platform) and
+               ((.components // []) | length > 0)' \
+              "${sbom_file}" >/dev/null
+            jq -e \
+              --arg image_reference "${image_reference}" \
+              '.ArtifactName == $image_reference and
+               ([.Results[]? | .Vulnerabilities[]?] | length) == 0 and
+               ([.Results[]? | .Secrets[]?] | length) == 0' \
+              "${report_file}" >/dev/null
+
+            mv "${sbom_file}" build/sbom/
+            echo "${variant}_${arch}=${digest}" >>"${GITHUB_OUTPUT}"
+          }
+
+          validate_platform alpine amd64 linux/amd64
+          validate_platform alpine arm64 linux/arm64
+          validate_platform debian amd64 linux/amd64
+          validate_platform debian arm64 linux/arm64
+
+          test "$(find build/sbom -maxdepth 1 -type f -name '*.cdx.json' | wc -l)" -eq 6
+          test "$(printf '%s\n' \
+            "$(jq -er '.digest' build/container-evidence/octopus-alpine-amd64.digest.json)" \
+            "$(jq -er '.digest' build/container-evidence/octopus-alpine-arm64.digest.json)" \
+            "$(jq -er '.digest' build/container-evidence/octopus-debian-amd64.digest.json)" \
+            "$(jq -er '.digest' build/container-evidence/octopus-debian-arm64.digest.json)" | sort -u | wc -l)" -eq 4
+
+      - name: Docker metadata (Debian)
+        id: meta_debian
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=latest
+
+      - name: Docker metadata (Alpine)
+        id: meta_alpine
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=${{ github.ref_name }}-alpine
+            type=raw,value=latest-alpine
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble exact scanned platform digests
+        id: assemble
+        env:
+          ALPINE_AMD64: ${{ steps.inputs.outputs.alpine_amd64 }}
+          ALPINE_ARM64: ${{ steps.inputs.outputs.alpine_arm64 }}
+          DEBIAN_AMD64: ${{ steps.inputs.outputs.debian_amd64 }}
+          DEBIAN_ARM64: ${{ steps.inputs.outputs.debian_arm64 }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+
+          assemble_index() {
+            local variant=$1
+            local amd64_digest=$2
+            local arm64_digest=$3
+            local staging_tag="${IMAGE_NAME}:staging-index-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${variant}"
+            local index_digest
+
+            [[ "${amd64_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${arm64_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools create \
+              --tag "${staging_tag}" \
+              "${IMAGE_NAME}@${amd64_digest}" \
+              "${IMAGE_NAME}@${arm64_digest}"
+            index_digest="$(docker buildx imagetools inspect "${staging_tag}" | \
+              awk '$1 == "Digest:" { print $2; exit }')"
+            [[ "${index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools inspect --raw "${IMAGE_NAME}@${index_digest}" | \
+              jq -e \
+                --arg amd64 "${amd64_digest}" \
+                --arg arm64 "${arm64_digest}" \
+                '.schemaVersion == 2 and
+                 (.manifests | length) == 2 and
+                 ([.manifests[] |
+                   select(.digest == $amd64 and
+                          .platform.os == "linux" and
+                          .platform.architecture == "amd64")] | length) == 1 and
+                 ([.manifests[] |
+                   select(.digest == $arm64 and
+                          .platform.os == "linux" and
+                          .platform.architecture == "arm64")] | length) == 1' \
+                >/dev/null
+            echo "${variant}_digest=${index_digest}" >>"${GITHUB_OUTPUT}"
+            echo "${variant}_staging_tag=${staging_tag}" >>"${GITHUB_OUTPUT}"
+          }
+
+          assemble_index alpine "${ALPINE_AMD64}" "${ALPINE_ARM64}"
+          assemble_index debian "${DEBIAN_AMD64}" "${DEBIAN_ARM64}"
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Keyless-sign and verify release files
+        run: scripts/security/sign-release.sh build/archives build/sbom
+
+      - name: Generate GitHub build provenance for archives
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-checksums: build/archives/SHA256SUMS
+
+      - name: Generate GitHub build provenance for SBOMs
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-checksums: build/sbom/SBOM-SHA256SUMS
+
+      - name: Attach Go SBOM attestation to archives
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-checksums: build/archives/SHA256SUMS
+          sbom-path: build/sbom/octopus-go.cdx.json
+
+      - name: Attach frontend SBOM attestation to archives
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-checksums: build/archives/SHA256SUMS
+          sbom-path: build/sbom/octopus-web.cdx.json
+
+      - name: Verify GitHub archive and SBOM attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          identity="${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}"
+          subjects=()
+          verify_subject() {
+            local subject=$1
+            gh attestation verify "${subject}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --cert-identity "${identity}" \
+              --cert-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              --source-ref "${GITHUB_REF}" \
+              --deny-self-hosted-runners
+          }
+          mapfile -d '' subjects < <(
+            find build/archives -maxdepth 1 -type f -name '*.zip' -print0
+            find build/sbom -maxdepth 1 -type f -name '*.cdx.json' -print0
+          )
+          test "${#subjects[@]}" -eq 14
+          for subject in "${subjects[@]}"; do
+            verify_subject "${subject}"
+          done
+
+      - name: Keyless-sign, attest, and verify images
+        env:
+          ALPINE_DIGEST: ${{ steps.assemble.outputs.alpine_digest }}
+          DEBIAN_DIGEST: ${{ steps.assemble.outputs.debian_digest }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          identity="${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}"
+          issuer='https://token.actions.githubusercontent.com'
+
+          sign_image() {
+            local reference=$1
+            shift
+            cosign sign --yes "${reference}" >/dev/null
+            for sbom in "$@"; do
+              cosign attest --yes --type cyclonedx --predicate "${sbom}" "${reference}" >/dev/null
+            done
+            cosign verify \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "${issuer}" \
+              "${reference}" >/dev/null
+            cosign verify-attestation \
+              --type cyclonedx \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "${issuer}" \
+              "${reference}" >/dev/null
+          }
+
+          sign_image "${IMAGE_NAME}@${ALPINE_DIGEST}" \
+            build/sbom/octopus-alpine-amd64.cdx.json \
+            build/sbom/octopus-alpine-arm64.cdx.json
+          sign_image "${IMAGE_NAME}@${DEBIAN_DIGEST}" \
+            build/sbom/octopus-debian-amd64.cdx.json \
+            build/sbom/octopus-debian-arm64.cdx.json
+
+      - name: Generate and publish GitHub provenance for Alpine image
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.assemble.outputs.alpine_digest }}
+          push-to-registry: true
+
+      - name: Generate and publish GitHub provenance for Debian image
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.assemble.outputs.debian_digest }}
+          push-to-registry: true
+
+      - name: Verify GitHub image provenance
+        env:
+          ALPINE_DIGEST: ${{ steps.assemble.outputs.alpine_digest }}
+          DEBIAN_DIGEST: ${{ steps.assemble.outputs.debian_digest }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          identity="${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}"
+          gh attestation verify "oci://${IMAGE_NAME}@${ALPINE_DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --cert-identity "${identity}" \
+            --cert-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            --source-ref "${GITHUB_REF}" \
+            --deny-self-hosted-runners
+          gh attestation verify "oci://${IMAGE_NAME}@${DEBIAN_DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --cert-identity "${identity}" \
+            --cert-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            --source-ref "${GITHUB_REF}" \
+            --deny-self-hosted-runners
+
+      - name: Validate final GitHub Release asset set
+        run: |
+          set -euo pipefail
+          assets=()
+          mapfile -d '' assets < <(
+            find build/archives -maxdepth 1 -type f -print0
+            find build/sbom -maxdepth 1 -type f -print0
+          )
+          test "$(find build/archives -maxdepth 1 -type f | wc -l)" -eq 18
+          test "$(find build/sbom -maxdepth 1 -type f | wc -l)" -eq 14
+          test "${#assets[@]}" -eq 32
+          test "$(printf '%s\n' "${assets[@]##*/}" | sort -u | wc -l)" -eq 32
+          (cd build/archives && sha256sum --check --strict SHA256SUMS >/dev/null)
+          (cd build/sbom && sha256sum --check --strict SBOM-SHA256SUMS >/dev/null)
+
+      - name: Promote verified image indexes to official tags
+        env:
+          ALPINE_DIGEST: ${{ steps.assemble.outputs.alpine_digest }}
+          ALPINE_TAGS: ${{ steps.meta_alpine.outputs.tags }}
+          DEBIAN_DIGEST: ${{ steps.assemble.outputs.debian_digest }}
+          DEBIAN_TAGS: ${{ steps.meta_debian.outputs.tags }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+
+          promote_index() {
+            local digest=$1
+            local tag_lines=$2
+            local tag
+            local tag_value
+            local promoted_digest
+            local -a tags=()
+            local -a tag_args=()
+
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            mapfile -t tags < <(printf '%s\n' "${tag_lines}" | sed '/^[[:space:]]*$/d')
+            test "${#tags[@]}" -eq 2
+            test "$(printf '%s\n' "${tags[@]}" | sort -u | wc -l)" -eq 2
+            for tag in "${tags[@]}"; do
+              case "${tag}" in
+              "${IMAGE_NAME}":*) ;;
+              *) return 1 ;;
+              esac
+              tag_value="${tag#"${IMAGE_NAME}:"}"
+              [[ "${tag_value}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
+              tag_args+=(--tag "${tag}")
+            done
+
+            docker buildx imagetools create \
+              --prefer-index=false \
+              "${tag_args[@]}" \
+              "${IMAGE_NAME}@${digest}"
+            for tag in "${tags[@]}"; do
+              promoted_digest="$(docker buildx imagetools inspect "${tag}" | \
+                awk '$1 == "Digest:" { print $2; exit }')"
+              test "${promoted_digest}" = "${digest}"
+            done
+          }
+
+          promote_index "${ALPINE_DIGEST}" "${ALPINE_TAGS}"
+          promote_index "${DEBIAN_DIGEST}" "${DEBIAN_TAGS}"
+
+      - name: Upload signed GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            build/archives/*
+            build/sbom/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: false
+          tag_name: ${{ github.ref_name }}

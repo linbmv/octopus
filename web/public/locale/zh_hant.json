@@ -11,11 +11,30 @@
             "apikey": "金鑰登入"
         },
         "error": {
-            "generic": "登入失敗，請檢查登入憑證"
+            "generic": "登入失敗，請檢查登入憑證",
+            "webauthnUnavailable": "目前瀏覽器或裝置不支援 WebAuthn。",
+            "webauthnCancelled": "安全金鑰驗證已取消。",
+            "webauthnFailed": "安全金鑰驗證失敗，請重試。"
         },
         "button": {
             "loading": "登入中...",
             "submit": "登入"
+        }
+    },
+    "passwordChangeRequired": {
+        "title": "修改臨時密碼",
+        "description": "為確保安全，完成改密後才能使用管理控制台；成功後請使用新密碼重新登入。",
+        "currentPassword": "臨時密碼",
+        "newPassword": "新密碼",
+        "confirmPassword": "確認新密碼",
+        "submit": "修改密碼",
+        "submitting": "正在修改...",
+        "success": "密碼已修改，請使用新密碼重新登入。",
+        "error": {
+            "mismatch": "兩次輸入的密碼不一致",
+            "length": "密碼必須包含 8 到 72 個 UTF-8 位元組",
+            "unchanged": "新密碼不能與臨時密碼相同",
+            "generic": "無法修改密碼"
         }
     },
     "apiKeyDashboard": {
@@ -53,6 +72,7 @@
         "setting": "設定"
     },
     "toolbar": {
+        "create": "新增",
         "popover": {
             "ariaLabel": "檢視選項",
             "layout": "佈局",
@@ -91,6 +111,13 @@
             "failed": "複製失敗",
             "noContent": "無可複製內容"
         }
+    },
+    "appError": {
+        "pageTitle": "頁面載入失敗",
+        "rootTitle": "應用程式載入失敗",
+        "description": "請重試，或重新整理頁面後繼續操作。",
+        "digest": "錯誤編號",
+        "retry": "重試"
     },
     "home": {
         "activity": {
@@ -140,6 +167,23 @@
             "successRate": "成功率"
         }
     },
+    "errorObservability": {
+        "title": "錯誤級別分佈",
+        "description": "基於有界中繼日誌統計已分類的失敗嘗試",
+        "channelTitle": "錯誤範圍趨勢",
+        "channelDescription": "最近 24 小時 Key 級與渠道級失敗趨勢",
+        "last24Hours": "最近 24 小時",
+        "loading": "正在載入錯誤統計…",
+        "loadError": "錯誤統計載入失敗",
+        "noData": "該時段沒有已分類失敗",
+        "truncated": "僅展示最新 {capacity} 條中繼日誌，該時段更早的失敗未計入。",
+        "distributionAria": "錯誤分佈，共 {total} 次已分類失敗",
+        "levels": {
+            "key": "Key 級",
+            "channel": "渠道級",
+            "client": "客戶端級"
+        }
+    },
     "setting": {
         "appearance": "外觀",
         "system": "系統",
@@ -170,8 +214,36 @@
         },
         "smartHealth": {
             "label": "啟用智慧健康系統",
-            "description": "自動學習供應源延遲和穩定性，動態調整首字逾時與供應源權重。",
+            "description": "自動學習供應源延遲和穩定性，動態調整首字逾時。",
             "hint": "開啟後，分組首字逾時填 0 將使用自動計算；填寫具體秒數時，該分組按手動首字逾時執行。"
+        },
+        "healthWeighted": {
+            "label": "使用健康度調整候選順序",
+            "description": "綜合成功率、樣本置信度和首字延遲，參與加權選擇及同優先級故障轉移排序。",
+            "hint": "預設關閉，且不會讓低優先級候選越過使用者設定的更高故障轉移優先級。"
+        },
+        "health": {
+            "title": "自適應健康",
+            "description": "選擇安全的運行模式，並可按需調整原有細粒度參數。",
+            "advanced": "進階設定",
+            "shadowMode": "影子模式",
+            "shadowModeHint": "觀察並記錄自適應決策，但不執行自動逾時。",
+            "presets": {
+                "off": { "label": "關閉", "description": "關閉自適應健康行為。" },
+                "shadow": { "label": "影子", "description": "僅觀察決策，不實際執行。" },
+                "balanced": { "label": "均衡", "description": "啟用自適應逾時，保持穩定的手動排序。" },
+                "aggressive": { "label": "積極", "description": "同時使用健康度調整候選順序。" }
+            },
+            "fields": {
+                "minAdaptiveTimeout": "自適應逾時下限（秒）",
+                "slowModelMinTimeout": "慢模型逾時下限（秒）",
+                "recoveryProbeEvery": "每 N 次評估進行恢復探測",
+                "recoveryProbeInterval": "恢復探測間隔（秒）",
+                "timeoutRateThreshold": "逾時率閾值（%）",
+                "maxMultiplierStack": "最大逾時倍率",
+                "stickyHealthyTimeout": "健康粘性首字閾值（秒）",
+                "slowModelKeywords": "慢模型關鍵詞"
+            }
         },
         "circuitBreaker": {
             "title": "熔斷器配置",
@@ -196,19 +268,59 @@
                 "title": "匯出",
                 "includeLogs": "包含日誌",
                 "includeStats": "包含統計",
-                "button": "下載 JSON",
+                "password": {
+                    "label": "加密密碼（可選）",
+                    "placeholder": "留空則匯出明文 JSON",
+                    "confirmLabel": "確認加密密碼",
+                    "confirmPlaceholder": "再次輸入相同密碼",
+                    "hint": "使用 8–1024 個 UTF-8 位元組。填寫密碼後會產生加密的 .octopus-backup 檔案；密碼遺失後無法復原。",
+                    "error": {
+                        "length": "備份密碼必須包含 8–1024 個 UTF-8 位元組",
+                        "mismatch": "兩次輸入的備份密碼不一致"
+                    }
+                },
+                "button": "下載備份",
                 "exporting": "匯出中...",
                 "success": "開始匯出"
             },
             "import": {
-                "title": "匯入（增量）",
+                "title": "匯入 / 復原",
+                "warning": "版本 2 按穩定 UUID 對應關係；版本 1 仍要求業務、統計及日誌資料表為空。備份檔案可能包含渠道/API 金鑰及可選日誌正文，必須按機密檔案處理。",
+                "password": {
+                    "label": "備份密碼（僅加密檔案需要）",
+                    "placeholder": "明文 JSON 請留空",
+                    "hint": "密碼只保存在目前表單記憶體中，並會在每次復原嘗試後清除。",
+                    "error": {
+                        "length": "備份密碼必須包含 8–1024 個 UTF-8 位元組",
+                        "mismatch": "兩次輸入的備份密碼不一致"
+                    }
+                },
+                "policy": {
+                    "label": "UUID 衝突策略",
+                    "reject": "拒絕衝突",
+                    "skip": "略過現有資料",
+                    "replace": "取代並同步子項",
+                    "merge": "合併並保留目標端子項"
+                },
                 "selected": "已選擇檔案",
-                "button": "匯入 JSON",
+                "button": "匯入備份",
+                "dryRunButton": "預覽變更",
                 "importing": "匯入中...",
-                "noFile": "請先選擇 JSON 檔案",
+                "noFile": "請先選擇 .json 或 .octopus-backup 檔案",
                 "success": "匯入成功",
+                "dryRunSuccess": "預覽完成",
                 "failed": "匯入失敗",
-                "result": "匯入結果"
+                "result": "匯入結果",
+                "dryRunResult": "計劃變更",
+                "summary": {
+                    "table": "資料表",
+                    "create": "新增",
+                    "update": "更新",
+                    "skip": "略過",
+                    "delete": "刪除",
+                    "conflict": "衝突",
+                    "unresolved": "無法復原"
+                }
             }
         },
         "apiKey": {
@@ -287,6 +399,8 @@
             "title": "帳戶設定",
             "save": "儲存",
             "saving": "儲存中...",
+            "logout": "登出",
+            "loggingOut": "正在登出...",
             "username": {
                 "label": "修改使用者名稱",
                 "placeholder": "請輸入新使用者名稱",
@@ -302,10 +416,27 @@
                 "oldEmpty": "請輸入當前密碼",
                 "newEmpty": "請輸入新密碼",
                 "mismatch": "兩次輸入的密碼不一致",
-                "tooShort": "密碼長度至少為6位",
+                "tooShort": "密碼必須包含 8 到 72 個 UTF-8 位元組",
+                "unchanged": "新密碼不能與當前密碼相同",
                 "change": "修改密碼",
                 "success": "密碼修改成功",
                 "failed": "密碼修改失敗"
+            },
+            "webauthn": {
+                "title": "安全金鑰與通行金鑰",
+                "description": "註冊後，密碼登入還需要目前裝置的使用者驗證或安全金鑰。",
+                "disabled": "WebAuthn 尚未啟用。請在伺服器設定依賴方 ID 與允許的 HTTPS 來源。",
+                "namePlaceholder": "憑證名稱，例如辦公電腦",
+                "passwordPlaceholder": "輸入目前密碼以確認",
+                "register": "註冊安全憑證",
+                "registering": "正在等待驗證器...",
+                "registered": "安全憑證註冊成功",
+                "registerFailed": "安全憑證註冊失敗",
+                "empty": "尚未註冊安全憑證",
+                "delete": "刪除安全憑證",
+                "deleted": "安全憑證已刪除",
+                "deleteFailed": "安全憑證刪除失敗",
+                "passwordRequired": "請先輸入目前密碼"
             }
         },
         "info": {
@@ -328,8 +459,22 @@
         },
         "log": {
             "title": "日誌設定",
+            "contentMode": {
+                "label": "新日誌內容",
+                "option": {
+                    "metadata": "僅中繼資料（推薦）",
+                    "full": "完整正文（敏感）",
+                    "disabled": "完全關閉"
+                },
+                "description": {
+                    "metadata": "保留用量、選路嘗試和脫敏錯誤，不儲存請求與回應正文。",
+                    "full": "需明確啟用：儲存經過憑據欄位脫敏的請求與回應正文；提示詞仍可能含敏感資料，關閉後請清理舊日誌。",
+                    "disabled": "停止產生新的 Relay 日誌（包括即時事件和歷史記錄）；用量統計及服務端運維錯誤日誌仍保持啟用。"
+                },
+                "saveFailed": "更新日誌內容策略失敗"
+            },
             "enabled": {
-                "label": "啟用歷史日誌"
+                "label": "持久化歷史日誌"
             },
             "keepPeriod": {
                 "label": "日誌保存天數",
@@ -389,12 +534,15 @@
             "autoAdd": "自動新增",
             "clear": "清空",
             "selectChannel": "供應源",
-            "selectModel": "模型"
+            "selectModel": "模型",
+            "addGroup": "新增分組",
+            "searchGroups": "搜尋分組"
         },
         "item": {
             "enable": "啟用",
             "disable": "臨時停用",
-            "channelDisabled": "供應源已停用"
+            "channelDisabled": "供應源已停用",
+            "group": "（分組）"
         },
         "mode": {
             "roundRobin": "輪詢",
@@ -460,6 +608,15 @@
             "tokens": "tokens",
             "retryDetails": "重試詳情",
             "attempts": "次嘗試",
+            "attemptNumber": "第 {number} 次",
+            "attemptStatus": {
+                "success": "成功",
+                "failed": "失敗",
+                "client_canceled": "客戶端中斷連線",
+                "circuit_break": "熔斷",
+                "skipped": "略過",
+                "redirect": "重新導向"
+            },
             "success": "成功",
             "failed": "失敗"
         }
@@ -511,6 +668,33 @@
                 "delete": "刪除",
                 "confirmDelete": "確認刪除",
                 "deleting": "刪除中..."
+            },
+            "capabilities": {
+                "title": "能力證據",
+                "probe": "探測",
+                "probing": "探測中...",
+                "probeFailed": "能力探測無法加入佇列",
+                "queued": "已加入 {accepted}/{requested} 個受限探測任務",
+                "loading": "正在載入能力證據...",
+                "loadFailed": "能力證據載入失敗",
+                "empty": "暫無能力證據",
+                "keyScope": "金鑰 #{id}",
+                "probedAt": "探測於 {time}",
+                "errorClass": "錯誤分類：{classification}",
+                "stale": "已過期",
+                "kinds": {
+                    "text": "文字",
+                    "stream": "串流",
+                    "tool": "工具",
+                    "vision": "視覺"
+                },
+                "statuses": {
+                    "supported": "支援",
+                    "unsupported": "不支援",
+                    "unauthorized": "未授權",
+                    "not_implemented": "未實作",
+                    "transient": "暫時故障"
+                }
             }
         },
         "create": {
@@ -538,6 +722,21 @@
             "unlimitedNumber": "0 = 不限",
             "paramOverride": "參數覆蓋",
             "paramOverridePlaceholder": "可選：JSON 字串，用於覆蓋請求參數",
+            "requestRewriteAdvanced": "進階請求改寫規則",
+            "requestRewriteHint": "規則會在簡單覆蓋之後依序執行。認證標頭受保護。JSON 路徑使用受限 JSON Pointer（例如 /messages/0/content），每類最多 32 條。",
+            "protectedHeaderHint": "認證標頭由供應商適配器管理，不能透過供應源規則改寫。",
+            "headerRules": "Header 規則",
+            "jsonRewriteRules": "JSON 路徑規則",
+            "ruleAdd": "新增規則",
+            "ruleAction": "規則操作",
+            "ruleSet": "設定",
+            "ruleAppend": "追加",
+            "ruleRemove": "移除",
+            "ruleOverride": "覆蓋",
+            "ruleDelete": "刪除規則",
+            "ruleValueUnused": "移除操作不需要值",
+            "jsonPathPlaceholder": "/messages/0/content",
+            "jsonValuePlaceholder": "JSON 值，例如 0.2 或 {\"enabled\":true}",
             "model": "模型",
             "enabled": "啟用",
             "proxy": "使用代理",

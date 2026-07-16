@@ -5,6 +5,7 @@ import { Total } from './total';
 import { StatsChart } from './chart';
 import { Rank } from './rank';
 import { PageWrapper } from '@/components/common/PageWrapper';
+import { ErrorLevelDistribution } from '@/components/modules/error-observability';
 
 export function Home() {
     return (
@@ -12,6 +13,7 @@ export function Home() {
             <Total />
             <Activity />
             <StatsChart />
+            <ErrorLevelDistribution />
             <Rank />
         </PageWrapper>
     );

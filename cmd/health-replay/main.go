@@ -16,28 +16,28 @@ import (
 )
 
 type ReplayConfig struct {
-	LogFile       string
-	OutputDir     string
-	StartTime     string
-	EndTime       string
-	Algorithm     string
-	MinRequests   int64
-	HealthConfig  health.HealthConfig
+	LogFile      string
+	OutputDir    string
+	StartTime    string
+	EndTime      string
+	Algorithm    string
+	MinRequests  int64
+	HealthConfig health.HealthConfig
 }
 
 type ReplayResult struct {
-	TotalEvents       int64                 `json:"total_events"`
-	CoveredEvents     int64                 `json:"covered_events"`
-	OracleSuccess     int64                 `json:"oracle_success"`
-	OracleFailure     int64                 `json:"oracle_failure"`
-	AlgorithmSuccess  int64                 `json:"algorithm_success"`
-	AlgorithmTimeout  int64                 `json:"algorithm_timeout"`
-	FalsePositive     int64                 `json:"false_positive"`
-	FalseNegative     int64                 `json:"false_negative"`
-	FalsePositiveRate float64               `json:"false_positive_rate"`
-	TimeoutRate       float64               `json:"timeout_rate"`
-	RetryReduction    float64               `json:"retry_reduction"`
-	P95Delta          float64               `json:"p95_delta"`
+	TotalEvents       int64                        `json:"total_events"`
+	CoveredEvents     int64                        `json:"covered_events"`
+	OracleSuccess     int64                        `json:"oracle_success"`
+	OracleFailure     int64                        `json:"oracle_failure"`
+	AlgorithmSuccess  int64                        `json:"algorithm_success"`
+	AlgorithmTimeout  int64                        `json:"algorithm_timeout"`
+	FalsePositive     int64                        `json:"false_positive"`
+	FalseNegative     int64                        `json:"false_negative"`
+	FalsePositiveRate float64                      `json:"false_positive_rate"`
+	TimeoutRate       float64                      `json:"timeout_rate"`
+	RetryReduction    float64                      `json:"retry_reduction"`
+	P95Delta          float64                      `json:"p95_delta"`
 	ChannelResults    map[int]*ChannelReplayResult `json:"channel_results"`
 }
 
@@ -171,7 +171,7 @@ func finalizeResult(result *ReplayResult, minRequests int64) {
 	}
 }
 
-func parseLogFile(logFile, startTime, endTime string) ([]*LogEvent, error) {
+func parseLogFile(logFile, startTime, endTime string) (_ []*LogEvent, err error) {
 	start, end, err := parseTimeRange(startTime, endTime)
 	if err != nil {
 		return nil, err
@@ -180,7 +180,11 @@ func parseLogFile(logFile, startTime, endTime string) ([]*LogEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close log file %q: %w", logFile, closeErr))
+		}
+	}()
 
 	events := make([]*LogEvent, 0)
 	scanner := bufio.NewScanner(file)

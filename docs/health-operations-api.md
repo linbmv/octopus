@@ -1,40 +1,44 @@
-# Health Operations API
+# Health and Observability Runtime Surface
 
-Health data is an operations and diagnostics surface, not a primary user feature.
-The web navbar intentionally does not expose a Health page.
+This document records the runtime surface that is implemented and registered by the current server.
 
-## Purpose
+## Public routes
 
-Use these endpoints when operating or debugging routing behavior:
+| Method and path | Behavior |
+|---|---|
+| `GET /health` | Checks the database and returns HTTP 503 when the service is degraded. |
+| `GET /ready` | Readiness check backed by the database. |
+| `GET /readiness` | Compatibility alias for `/ready`. |
+| `GET /liveness` | Process liveness check without a database probe. |
+| Application listener `GET /metrics` | Always 404; metrics are never exposed on the application listener. |
+| Dedicated metrics listener `GET /metrics` | Prometheus endpoint when enabled; optional IP/CIDR allowlist and Bearer authentication, which is mandatory for non-loopback binding. |
 
-- Inspect channel/key/model health scores.
-- Diagnose timeout, rate-limit, network, model, and key-level error patterns.
-- Verify adaptive first-token timeout behavior.
-- Export health metrics to Prometheus.
+There are no registered `/api/v1/health/*` routes. In particular, health-state listing, reset, enable, disable, and a separate health metrics handler are not supported HTTP operations.
 
-## Endpoints
+## Internal channel health
 
-All routes are authenticated under `/api/v1/health`.
+The relay maintains channel/key/model health state for adaptive first-token timeouts and health-aware routing. It persists snapshots under `data/health` using the current built-in policy. The main configuration schema does not accept a `health` section or a separate `health.yaml` file.
 
-- `GET /api/v1/health/status`
-  - Returns all in-memory health states.
-- `GET /api/v1/health/status/channel?channel_id=<id>`
-  - Returns health states for one channel.
-- `GET /api/v1/health/status/specific?channel_id=<id>&key_id=<id>&model=<model>`
-  - Returns one channel/key/model health state.
-- `POST /api/v1/health/reset`
-  - Clears in-memory health states.
-- `POST /api/v1/health/enable`
-  - Enables the health manager.
-- `POST /api/v1/health/disable`
-  - Disables the health manager.
-- `GET /api/v1/health/metrics`
-  - Serves Prometheus metrics for health state snapshots.
+Operators can use the health-related settings already exposed by the management settings API. Raw in-memory state is intentionally not exposed until a complete, authenticated operations API is implemented.
 
-## UI Policy
+## Security boundary
 
-Do not expose raw health state as a main navigation item unless the page is
-rebuilt as an actionable diagnostics workflow. A user-facing diagnostics page
-should show channel names, key remarks, model names, clear problem labels, and
-next actions such as checking quota, disabling a key, adjusting timeout policy,
-or jumping to the relevant channel/group configuration.
+Health/readiness/liveness routes share the main service listener and expose only coarse state; database error details remain server-side. Metrics use a separate listener configured by `observability.metrics.host`, `port`, `bearer_token`, and optional `allowlist`. Allowlist entries are exact IP addresses or CIDRs and are checked against the direct TCP peer before Bearer authentication; forwarded headers are deliberately ignored. The default is disabled and loopback-only (`127.0.0.1:9090`). A non-loopback metrics host without a token is rejected during configuration validation; network policy or a firewall should still be used as a second boundary.
+
+Example:
+
+```json
+{
+  "observability": {
+    "metrics": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 9090,
+      "bearer_token": "REPLACE_ME_REPLACE_ME",
+      "allowlist": ["10.0.0.0/8", "2001:db8:1234::/48"]
+    }
+  }
+}
+```
+
+Any future operations API must be added as an authenticated Gin route, use stable response contracts, protect state-changing operations, and include route/auth/config tests before its documentation is published.

@@ -67,7 +67,7 @@ func init() {
 func getModelList(c *gin.Context) {
 	models, err := availableModelsForAPIKey(c)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		respondInternalError(c, "list API models failed", err)
 		return
 	}
 
@@ -126,7 +126,7 @@ func getGeminiModel(c *gin.Context) {
 
 	models, err := availableModelsForAPIKey(c)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		respondInternalError(c, "get Gemini API model failed", err)
 		return
 	}
 	matchedModel := ""
@@ -181,7 +181,7 @@ func newGeminiModel(name string) model.GeminiModel {
 func listLLM(c *gin.Context) {
 	models, err := op.LLMList(c.Request.Context())
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		respondInternalError(c, "list models failed", err)
 		return
 	}
 	resp.Success(c, models)
@@ -190,48 +190,62 @@ func listLLM(c *gin.Context) {
 func listLLMByChannel(c *gin.Context) {
 	channels, err := op.ChannelLLMList(c.Request.Context())
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		respondInternalError(c, "list channel models failed", err)
 		return
 	}
 	resp.Success(c, channels)
 }
 
 func createLLM(c *gin.Context) {
-	var model model.LLMInfo
-	if err := c.ShouldBindJSON(&model); err != nil {
+	var info model.LLMInfo
+	if err := bindStrictJSON(c, &info); err != nil {
 		resp.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := op.LLMCreate(model, c.Request.Context()); err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+	if err := model.ValidateLLMInfo(&info); err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	resp.Success(c, model)
+	if err := op.LLMCreate(info, c.Request.Context()); err != nil {
+		respondOperationError(c, err)
+		return
+	}
+	resp.Success(c, info)
 }
 
 func updateLLM(c *gin.Context) {
-	var model model.LLMInfo
-	if err := c.ShouldBindJSON(&model); err != nil {
+	var info model.LLMInfo
+	if err := bindStrictJSON(c, &info); err != nil {
 		resp.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := op.LLMUpdate(model, c.Request.Context()); err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+	if err := model.ValidateLLMInfo(&info); err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	resp.Success(c, model)
+	if err := op.LLMUpdate(info, c.Request.Context()); err != nil {
+		respondOperationError(c, err)
+		return
+	}
+	resp.Success(c, info)
 }
 
 func deleteLLM(c *gin.Context) {
 	var req struct {
 		Name string `json:"name" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindStrictJSON(c, &req); err != nil {
 		resp.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	probe := model.LLMInfo{Name: req.Name}
+	if err := model.ValidateLLMInfo(&probe); err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Name = probe.Name
 	if err := op.LLMDelete(req.Name, c.Request.Context()); err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		respondOperationError(c, err)
 		return
 	}
 	resp.Success(c, nil)
@@ -240,7 +254,7 @@ func deleteLLM(c *gin.Context) {
 func updateLLMPrice(c *gin.Context) {
 	err := price.UpdateLLMPrice(c.Request.Context())
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		respondInternalError(c, "update model prices failed", err)
 		return
 	}
 	resp.Success(c, nil)

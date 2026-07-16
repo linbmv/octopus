@@ -2,7 +2,9 @@
 
 import './globals.css';
 import { useEffect } from 'react';
+import { localeMessages } from '@/lib/locale-messages';
 import { logger } from '@/lib/logger';
+import { useSettingStore } from '@/stores/setting';
 
 export default function GlobalError({
   error,
@@ -11,6 +13,9 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const locale = useSettingStore((state) => state.locale);
+  const copy = localeMessages[locale].appError;
+
   useEffect(() => {
     logger.error('Unhandled root application error', error);
   }, [error]);
@@ -25,14 +30,14 @@ export default function GlobalError({
                 <span className="text-lg font-semibold">!</span>
               </div>
               <div className="min-w-0">
-                <h1 className="text-base font-semibold text-card-foreground">应用加载失败</h1>
-                <p className="mt-1 text-sm text-muted-foreground">请重试，或刷新页面后继续操作。</p>
+                <h1 className="text-base font-semibold text-card-foreground">{copy.rootTitle}</h1>
+                <p className="mt-1 text-sm text-muted-foreground">{copy.description}</p>
               </div>
             </div>
 
             {error.digest ? (
               <p className="mt-4 break-all rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-                错误编号：{error.digest}
+                {copy.digest}: {error.digest}
               </p>
             ) : null}
 
@@ -42,7 +47,7 @@ export default function GlobalError({
                 onClick={reset}
                 className="inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
-                重试
+                {copy.retry}
               </button>
             </div>
           </section>

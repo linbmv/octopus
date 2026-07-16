@@ -3,19 +3,21 @@ package price
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/client"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/utils/bodylimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
-const llmPriceUrl = "https://models.dev/api.json"
+var llmPriceURL = "https://models.dev/api.json"
 
 var Provider = []string{
 	"openai",     // GPT 系列
@@ -30,9 +32,9 @@ var Provider = []string{
 	"v0",         // v0 系列
 }
 
-var lastUpdateTime time.Time
+var lastUpdateUnixNano atomic.Int64
 
-func UpdateLLMPrice(ctx context.Context) error {
+func UpdateLLMPrice(ctx context.Context) (retErr error) {
 	log.Debugf("update LLM price task started")
 	startTime := time.Now()
 	defer func() {
@@ -42,7 +44,7 @@ func UpdateLLMPrice(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, llmPriceUrl, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, llmPriceURL, nil)
 	if err != nil {
 		return err
 	}
@@ -51,7 +53,11 @@ func UpdateLLMPrice(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close LLM price response body: %w", closeErr))
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to fetch LLM info: %s", resp.Status)
 	}
@@ -61,7 +67,7 @@ func UpdateLLMPrice(ctx context.Context) error {
 			Cost model.LLMPrice `json:"cost"`
 		} `json:"models"`
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := bodylimit.ReadResponseBody(resp, bodylimit.DefaultMetadataResponseBytes)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -76,12 +82,16 @@ func UpdateLLMPrice(ctx context.Context) error {
 		}
 	}
 	llmPriceLock.Unlock()
-	lastUpdateTime = time.Now()
+	lastUpdateUnixNano.Store(time.Now().UnixNano())
 	return nil
 }
 
 func GetLastUpdateTime() time.Time {
-	return lastUpdateTime
+	value := lastUpdateUnixNano.Load()
+	if value == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, value)
 }
 
 func GetLLMPrice(modelName string) *model.LLMPrice {

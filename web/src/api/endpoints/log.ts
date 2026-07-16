@@ -3,9 +3,16 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import { apiClient, API_BASE_URL } from '../client';
 import { logger } from '@/lib/logger';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { RelayLog } from '../contracts';
+import type { RelayLog as ContractRelayLog } from '../contracts';
 
-export type { AttemptStatus, ChannelAttempt, RelayLog } from '../contracts';
+export type { AttemptStatus, ChannelAttempt } from '../contracts';
+export type RelayLog = Omit<ContractRelayLog, 'id'> & { id: string };
+
+export interface RelayLogCursorPage {
+    items: RelayLog[];
+    next_cursor?: string;
+    has_more: boolean;
+}
 
 /**
  * 日志列表查询参数
@@ -43,7 +50,67 @@ export function useClearLogs() {
 }
 
 const logsInfiniteQueryKey = (pageSize: number) => ['logs', 'infinite', pageSize] as const;
-const realtimeLogBufferLimit = 100;
+export const relayLogStoreLimit = 500;
+
+export function relayLogInfiniteDataSize<TPageParam>(data: InfiniteData<RelayLogCursorPage, TPageParam> | undefined): number {
+    if (!data) return 0;
+    const ids = new Set<string>();
+    for (const page of data.pages) {
+        for (const log of page.items) ids.add(log.id);
+    }
+    return ids.size;
+}
+
+/**
+ * Bounds the actual React Query InfiniteData store, preserving page/cursor
+ * order and removing cache/DB overlap. Once the newest `limit` unique logs are
+ * retained, the final page is terminal so historical loading cannot silently
+ * replace recent observability data.
+ */
+export function trimRelayLogInfiniteData<TPageParam>(
+    data: InfiniteData<RelayLogCursorPage, TPageParam> | undefined,
+    limit = relayLogStoreLimit,
+): InfiniteData<RelayLogCursorPage, TPageParam> | undefined {
+    if (!data) return data;
+    if (data.pages.length === 0) return data;
+    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : relayLogStoreLimit;
+    const seen = new Set<string>();
+    const pages: RelayLogCursorPage[] = [];
+    const pageParams: TPageParam[] = [];
+    let reachedLimit = false;
+
+    for (let pageIndex = 0; pageIndex < data.pages.length && !reachedLimit; pageIndex += 1) {
+        const page = data.pages[pageIndex];
+        const items: RelayLog[] = [];
+        for (const log of page.items) {
+            if (seen.has(log.id)) continue;
+            seen.add(log.id);
+            items.push(log);
+            if (seen.size >= boundedLimit) {
+                reachedLimit = true;
+                break;
+            }
+        }
+        if (items.length > 0 || pages.length === 0) {
+            pages.push({ ...page, items });
+            pageParams.push(data.pageParams[pageIndex]);
+        }
+    }
+
+    if (reachedLimit) {
+        const lastIndex = pages.length - 1;
+        pages[lastIndex] = { ...pages[lastIndex], has_more: false, next_cursor: undefined };
+    }
+    return { pages, pageParams };
+}
+
+export function canLoadMoreRelayLogs<TPageParam>(
+    data: InfiniteData<RelayLogCursorPage, TPageParam> | undefined,
+    hasNextPage: boolean,
+    limit = relayLogStoreLimit,
+): boolean {
+    return hasNextPage && relayLogInfiniteDataSize(data) < limit;
+}
 
 /**
  * 日志管理 Hook
@@ -69,17 +136,18 @@ export function useLogs(options: { pageSize?: number } = {}) {
 
     const logsQuery = useInfiniteQuery({
         queryKey: logsInfiniteQueryKey(pageSize),
-        initialPageParam: 1,
+        initialPageParam: '0',
         queryFn: async ({ pageParam }) => {
             const params = new URLSearchParams();
-            params.set('page', String(pageParam));
+            params.set('cursor', pageParam);
             params.set('page_size', String(pageSize));
-            const result = await apiClient.get<RelayLog[] | null>(`/api/v1/log/list?${params.toString()}`);
-            return result ?? [];
+            return apiClient.get<RelayLogCursorPage>(`/api/v1/log/list?${params.toString()}`);
         },
         getNextPageParam: (lastPage, allPages) => {
-            if (!lastPage || lastPage.length < pageSize) return undefined;
-            return allPages.length + 1;
+            const loaded = relayLogInfiniteDataSize({ pages: allPages, pageParams: allPages.map(() => '0') });
+            if (loaded >= relayLogStoreLimit) return undefined;
+            if (!lastPage.has_more || !lastPage.next_cursor) return undefined;
+            return lastPage.next_cursor;
         },
         staleTime: Infinity,
         refetchOnMount: 'always',
@@ -87,11 +155,11 @@ export function useLogs(options: { pageSize?: number } = {}) {
 
     const logs = useMemo(() => {
         const pages = logsQuery.data?.pages ?? [];
-        const seen = new Set<number>();
+        const seen = new Set<string>();
         const merged: RelayLog[] = [];
 
         for (const page of pages) {
-            for (const log of page) {
+            for (const log of page.items) {
                 if (seen.has(log.id)) continue;
                 seen.add(log.id);
                 merged.push(log);
@@ -99,22 +167,34 @@ export function useLogs(options: { pageSize?: number } = {}) {
         }
 
         merged.sort((a, b) => {
-            if (a.time === b.time) return b.id - a.id;
+            if (a.time === b.time) return compareDecimalIDs(b.id, a.id);
             return b.time - a.time;
         });
         return merged;
     }, [logsQuery.data]);
 
+    const lastEventIDRef = useRef('0');
+    useEffect(() => {
+        const newestID = logs[0]?.id;
+        if (newestID && compareDecimalIDs(newestID, lastEventIDRef.current) > 0) {
+            lastEventIDRef.current = newestID;
+        }
+    }, [logs]);
+
     const loadMore = useCallback(async () => {
-        if (!logsQuery.hasNextPage) return;
+        if (!canLoadMoreRelayLogs(logsQuery.data, !!logsQuery.hasNextPage)) return;
         if (logsQuery.isFetchingNextPage) return;
 
         try {
             await logsQuery.fetchNextPage();
+            queryClient.setQueryData(
+                logsInfiniteQueryKey(pageSize),
+                (old: InfiniteData<RelayLogCursorPage, string> | undefined) => trimRelayLogInfiniteData(old),
+            );
         } catch (e) {
             logger.error('加载更多日志失败:', e);
         }
-    }, [logsQuery]);
+    }, [logsQuery, pageSize, queryClient]);
 
     useEffect(() => {
         let cancelled = false;
@@ -137,37 +217,54 @@ export function useLogs(options: { pageSize?: number } = {}) {
                 if (cancelled) return;
 
                 eventSourceRef.current?.close();
-                const eventSource = new EventSource(`${API_BASE_URL}/api/v1/log/stream?token=${token}`);
+                const streamParams = new URLSearchParams({ token });
+                if (lastEventIDRef.current !== '0') {
+                    streamParams.set('after', lastEventIDRef.current);
+                }
+                const eventSource = new EventSource(`${API_BASE_URL}/api/v1/log/stream?${streamParams.toString()}`);
                 eventSourceRef.current = eventSource;
 
                 eventSource.onopen = () => {
                     reconnectAttempt = 0;
                     setIsConnected(true);
                     setError(null);
+                    void queryClient.invalidateQueries({ queryKey: logsInfiniteQueryKey(pageSize) });
                 };
 
                 eventSource.onmessage = (event) => {
                     try {
                         const log: RelayLog = JSON.parse(event.data);
+                        const eventID = event.lastEventId || log.id;
+                        if (eventID) lastEventIDRef.current = eventID;
                         queryClient.setQueryData(
                             logsInfiniteQueryKey(pageSize),
-                            (old: InfiniteData<RelayLog[], number> | undefined) => {
+                            (old: InfiniteData<RelayLogCursorPage, string> | undefined) => {
                                 if (!old) {
-                                    return { pages: [[log]], pageParams: [1] };
+                                    return trimRelayLogInfiniteData({
+                                        pages: [{ items: [log], has_more: false }],
+                                        pageParams: ['0'],
+                                    });
                                 }
 
-                                const exists = old.pages.some((p) => p?.some((x) => x.id === log.id));
+                                const exists = old.pages.some((p) => p.items.some((x) => x.id === log.id));
                                 if (exists) return old;
 
-                                const firstPage = old.pages[0] ?? [];
-                                const nextFirstPage = [log, ...firstPage].slice(0, Math.max(pageSize, realtimeLogBufferLimit));
-                                return { ...old, pages: [nextFirstPage, ...old.pages.slice(1)] };
+                                const firstPage = old.pages[0] ?? { items: [], has_more: false };
+                                const nextFirstPage = {
+                                    ...firstPage,
+                                    items: [log, ...firstPage.items],
+                                };
+                                return trimRelayLogInfiniteData({ ...old, pages: [nextFirstPage, ...old.pages.slice(1)] });
                             }
                         );
                     } catch (e) {
                         logger.error('解析日志数据失败:', e);
                     }
                 };
+
+                eventSource.addEventListener('gap', () => {
+                    void queryClient.invalidateQueries({ queryKey: logsInfiniteQueryKey(pageSize) });
+                });
 
                 eventSource.onerror = () => {
                     if (cancelled) return;
@@ -208,10 +305,20 @@ export function useLogs(options: { pageSize?: number } = {}) {
         logs,
         isConnected,
         error,
-        hasMore: !!logsQuery.hasNextPage,
+        hasMore: canLoadMoreRelayLogs(logsQuery.data, !!logsQuery.hasNextPage),
         isLoading: logsQuery.isLoading,
         isLoadingMore: logsQuery.isFetchingNextPage,
         loadMore,
         clear,
     };
+}
+
+export function compareDecimalIDs(left: string, right: string): number {
+    const normalizedLeft = left.replace(/^0+(?=\d)/, '');
+    const normalizedRight = right.replace(/^0+(?=\d)/, '');
+    if (normalizedLeft.length !== normalizedRight.length) {
+        return normalizedLeft.length - normalizedRight.length;
+    }
+    if (normalizedLeft === normalizedRight) return 0;
+    return normalizedLeft > normalizedRight ? 1 : -1;
 }

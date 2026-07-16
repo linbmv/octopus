@@ -8,6 +8,7 @@ import {
 import { useCreateChannel, ChannelType, AutoGroupType } from '@/api/endpoints/channel';
 import { useTranslations } from 'next-intl';
 import { ChannelForm, type ChannelFormData } from './Form';
+import { normalizeHeaderRules, normalizeJSONRewriteRules } from './request-rewrite';
 
 export function CreateDialogContent() {
     const { setIsOpen } = useMorphingDialog();
@@ -17,6 +18,8 @@ export function CreateDialogContent() {
         type: ChannelType.OpenAIChat,
         base_urls: [{ url: '', delay: 0 }],
         custom_header: [],
+		header_rules: [],
+		json_rewrite_rules: [],
         channel_proxy: '',
         param_override: '',
         keys: [{ enabled: true, channel_key: '', remark: '' }],
@@ -62,6 +65,8 @@ export function CreateDialogContent() {
                 auto_sync: formData.auto_sync,
                 auto_group: formData.auto_group,
                 custom_header: normalizedHeaders,
+				header_rules: normalizeHeaderRules(formData.header_rules),
+				json_rewrite_rules: normalizeJSONRewriteRules(formData.json_rewrite_rules),
                 channel_proxy: channelProxy,
                 param_override: paramOverride,
                 match_regex: formData.match_regex.trim(),
@@ -77,6 +82,8 @@ export function CreateDialogContent() {
                         type: ChannelType.OpenAIChat,
                         base_urls: [{ url: '', delay: 0 }],
                         custom_header: [],
+						header_rules: [],
+						json_rewrite_rules: [],
                         channel_proxy: '',
                         param_override: '',
                         keys: [{ enabled: true, channel_key: '', remark: '' }],

@@ -32,20 +32,34 @@
 Run directly:
 
 ```bash
-docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 bestrui/octopus
+docker volume create octopus-data
+docker run -d --name octopus --restart unless-stopped \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m,mode=1777 \
+  --security-opt no-new-privileges:true --cap-drop ALL \
+  --cpus 1.0 --memory 512m --pids-limit 256 \
+  -v octopus-data:/app/data -p 8080:8080 \
+  ghcr.io/linbmv/octopus:latest
 ```
+
+The image runs as UID/GID `10001:10001` and keeps only `/app/data` writable. A
+named volume is recommended. For a bind mount, prepare it once with
+`install -d -m 0700 ./data && sudo chown -R 10001:10001 ./data`, then replace
+the volume argument with `-v "$(pwd)/data:/app/data"`. Tune or remove the sample
+CPU, memory, and process limits to match the workload. Data created by an older
+root-running image also needs this one-time ownership migration before upgrade;
+the container deliberately does not recursively `chown` it on every start.
 
 Or use docker compose:
 
 ```bash
-wget https://raw.githubusercontent.com/bestruirui/octopus/refs/heads/dev/docker-compose.yml
+wget https://raw.githubusercontent.com/linbmv/octopus/refs/heads/dev/docker-compose.yml
 docker compose up -d
 ```
 
 
 ### 📦 Download from Release
 
-Download the binary for your platform from [Releases](https://github.com/bestruirui/octopus/releases), then run:
+Download the binary for your platform from [Releases](https://github.com/linbmv/octopus/releases), then run:
 
 ```bash
 ./octopus start
@@ -54,16 +68,16 @@ Download the binary for your platform from [Releases](https://github.com/bestrui
 ### 🛠️ Build from Source
 
 **Requirements:**
-- Go 1.24.4
-- Node.js 18+
-- pnpm
+- Go 1.26.5+
+- Node.js 22.12+ (Node.js 24.x is used in CI)
+- pnpm 9.15.9
 
 ```bash
 # Clone the repository
-git clone https://github.com/bestruirui/octopus.git
+git clone https://github.com/linbmv/octopus.git
 cd octopus
 # Build frontend
-cd web && pnpm install && pnpm run build && cd ..
+cd web && pnpm install --frozen-lockfile && pnpm run build && cd ..
 # Move frontend assets to static directory
 mv web/out static/
 # Start the backend service
@@ -75,21 +89,99 @@ go run main.go start
 **Development Mode**
 
 ```bash
-cd web && pnpm install && NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8080" pnpm run dev
+cd web && pnpm install --frozen-lockfile && NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8080" pnpm run dev
 ## Open a new terminal, start the backend service
 go run main.go start
 ## Access the frontend at
 http://localhost:3000
 ```
 
-### 🔐 Default Credentials
+### 🔐 Initial Administrator
 
-After first launch, visit http://localhost:8080 and log in to the management panel with:
+On the first launch of an empty database, Octopus creates one administrator:
 
 - **Username**: `admin`
-- **Password**: `admin`
+- **Password (recommended for automated deployments)**: set `OCTOPUS_INITIAL_ADMIN_PASSWORD` to a valid 8–72 byte UTF-8 value before the first launch. The value is never logged and no credential file is created.
+- **Password (automatic fallback)**: if that variable is absent, Octopus generates a 24-character random password and writes it to `data/initial-admin-password`. Override the location with `OCTOPUS_INITIAL_ADMIN_PASSWORD_FILE` when the data directory is mounted elsewhere.
 
-> ⚠️ **Security Notice**: Please change the default password immediately after first login.
+The generated credential file is a regular `0600` file; startup rejects symlinks, non-regular files, broader permissions, and invalid password contents. Logs contain only its path, never the password. A secure file left by an interrupted bootstrap is reused on restart, and the tracked file is removed only after the required password change succeeds. For containers, read it from the mounted data directory or run `docker exec octopus cat /app/data/initial-admin-password` (adjust the in-container path for your image).
+
+There is no `admin` default password. Until the password is changed, the account is restricted to the status and password-change endpoints. The existing 403 response helper already aborts the Gin chain; the branch now also calls `c.Abort()` explicitly for defensive consistency and readability, and a regression test locks in the handler-not-called behavior. After a successful change, remove `OCTOPUS_INITIAL_ADMIN_PASSWORD` from deployment configuration so a future empty-database bootstrap cannot reuse it.
+
+### ⚠️ Deployment and Backup Security Boundaries
+
+Octopus currently targets a **single application instance**. The scheduler,
+sticky routing, circuit-breaker and health state, runtime caches, and request
+rate/concurrency limits are process-local. Multiple replicas sharing one
+database can run scheduled jobs more than once and make inconsistent routing or
+limit decisions. Run one replica unless you have added external coordination,
+shared runtime state, and scheduler leader election.
+
+Database exports include channel credentials and managed Octopus API keys; if
+relay logs are included, they can also contain retained request/response
+content. Exports remain plaintext JSON by default, while an optional password
+header produces a versioned scrypt + AES-256-GCM envelope. See the
+[backup encryption guide](docs/backup-encryption.md) for the header, format,
+memory limit, and import procedure. Treat every plaintext or encrypted export
+as a secret, and rotate credentials after any exposure. Current payload version
+2 supports dry-run and UUID-based incremental `reject`/`skip`/`replace`/`merge`;
+legacy payload version 1 remains an empty-target restore format.
+
+On Go 1.26.5, the current candidate has passed the full repository race suite,
+`go vet`, Go build/module verification, golangci-lint 2.12.2 with 0 issues,
+Staticcheck 2026.1, deadcode 0.48.0, govulncheck 1.6.0, actionlint 1.7.12,
+script syntax checks, frontend frozen install/lint/type-check, 15 Vitest files
+with 40 tests, locale parity, and a Next.js 16.2.10 production build. The
+Playwright core flow passes 1/1 and covers bootstrap, forced password change,
+Cookie/CSRF, channel, group, API key, model list, relay, logs, and logout.
+
+Real SQLite, MySQL, and PostgreSQL migration/CRUD/export/restore matrices have
+passed. A complete release build produced eight Linux/Windows/macOS archives
+whose `SHA256SUMS` verify strictly. Alpine and Distroless Debian images passed
+arm64 and amd64 non-root/read-only/named-volume/bind-mount/legacy-volume/
+Compose/SIGTERM matrices. Current source and all four images have zero
+HIGH/CRITICAL Trivy findings; the working tree has zero Gitleaks findings.
+
+These are local candidate results, not a replacement for a clean tagged build.
+Known credentials must still be revoked, the six findings in complete Git
+history require authorized disposition, and the real tag workflow must produce
+and independently verify its Cosign/OIDC signatures, SBOM attestations, and
+provenance before production publication. See the
+[full audit report](docs/project-audit-2026-07-15.md) for exact evidence and
+remaining boundaries.
+
+**Backend dependency security:** the reachable findings in Go 1.26.4,
+quic-go 0.57.1, `x/net` 0.52.0, and pgx/v5 5.6.0 were remediated by moving to
+Go 1.26.5, quic-go 0.59.1, `x/net` 0.55.0, and pgx/v5 5.9.2; `x/crypto` is
+0.52.0 and edwards25519 is 1.1.1. The final govulncheck reports zero reachable
+symbol vulnerabilities and zero imported-package vulnerabilities. It still
+lists GO-2026-5932 at module level for the `openpgp` package in the required
+`x/crypto` module, but Octopus does not import that package or call the
+vulnerable code. It is therefore a documented non-applicable module notice,
+not a reachable finding.
+
+The final `deadcode -test ./...` scan also produces no output. The remaining
+unreferenced internal compatibility/dead-API findings were reviewed and removed; none had a
+route, interface, reflection, or build-tag consumer. Related op/helper,
+handler, health, relay, and server race suites remain green.
+
+**Frontend dependency security:** the pnpm 9 lockfile overrides vulnerable
+transitive versions to `lodash/lodash-es 4.18.1`, `js-cookie 3.0.8`,
+`cosmiconfig>yaml 1.10.3`, `mermaid 11.16.0`,
+`mermaid>dompurify 3.4.11`, `mermaid>uuid 11.1.1`,
+`@lobehub/ui>uuid 13.0.1`, and `next>postcss 8.5.10`; `next-intl` is pinned to
+`4.9.2`. Because the legacy audit endpoint used by pnpm 9/10 returns HTTP 410
+in 2026, the same final package and lock files were copied to `/tmp` and read
+with pnpm 11.13.0 solely for auditing. `audit --prod` exited 0 with “No known
+vulnerabilities found,” confirming that the previously reported 3 high,
+23 moderate, and 3 low findings were remediated. The project still builds with
+pnpm 9.15.9.
+
+Next.js 16.2.10 is the current pinned Next release but itself pins an older
+PostCSS, so the `next>postcss` override must be reviewed whenever Next is
+upgraded. If the project formally migrates to pnpm 11, move the overrides to
+`pnpm-workspace.yaml` before regenerating the lockfile. Recharts v2 deprecation
+and React 19 peer warnings remain compatibility debt, not known audit findings.
 
 ### 📝 Configuration File
 
@@ -101,14 +193,39 @@ The configuration file is located at `data/config.json` by default and is automa
 {
   "server": {
     "host": "0.0.0.0",
-    "port": 8080
+    "port": 8080,
+    "trusted_proxies": [],
+    "session_cookie_secure": "auto"
   },
   "database": {
     "type": "sqlite",
     "path": "data/data.db"
   },
   "log": {
-    "level": "info"
+    "level": "info",
+    "format": "json"
+  },
+  "relay": {
+    "non_stream_timeout_seconds": 600,
+    "stream_first_event_timeout_seconds": 600,
+    "stream_idle_timeout_seconds": 600,
+    "max_json_request_bytes": 33554432,
+    "max_image_request_bytes": 67108864,
+    "max_non_stream_response_bytes": 67108864
+  },
+  "observability": {
+    "metrics": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 9090,
+      "bearer_token": ""
+    },
+    "tracing": {
+      "enabled": false,
+      "endpoint": "localhost:4318",
+      "insecure": true,
+      "sample_ratio": 0.01
+    }
   }
 }
 ```
@@ -119,9 +236,33 @@ The configuration file is located at `data/config.json` by default and is automa
 |--------|-------------|---------|
 | `server.host` | Listen address | `0.0.0.0` |
 | `server.port` | Server port | `8080` |
+| `server.trusted_proxies` | Explicit trusted reverse-proxy IP/CIDR list used for client-IP headers | `[]` |
+| `server.session_cookie_secure` | Administrator session cookie policy: `auto` detects direct TLS or trusted-proxy HTTPS; `always` forces `Secure` | `auto` |
 | `database.type` | Database type | `sqlite` |
 | `database.path` | Database connection string | `data/data.db` |
 | `log.level` | Log level | `info` |
+| `log.format` | Log encoder (`json` or `console`) | `json` |
+| `relay.non_stream_timeout_seconds` | Complete non-streaming upstream request budget across all retries (`0` disables; max 86400 seconds) | `600` |
+| `relay.stream_first_event_timeout_seconds` | Global fallback from upstream request start through the first non-empty stream event (`0` disables; max 86400 seconds). A group manual timeout wins; an adaptive timeout with samples wins next. | `600` |
+| `relay.stream_idle_timeout_seconds` | Stream idle guard armed only after the first non-empty event and reset by every upstream event or raw heartbeat (`0` disables; max 86400 seconds) | `600` |
+| `relay.max_json_request_bytes` | Maximum decoded JSON request body; valid range 1 byte–1 GiB | `33554432` (32 MiB) |
+| `relay.max_image_request_bytes` | Maximum complete image edit/variation multipart body; valid range 1 byte–1 GiB | `67108864` (64 MiB) |
+| `relay.max_non_stream_response_bytes` | Maximum decoded upstream non-streaming response and streaming HTTP error body; successful streams have no total byte cap | `67108864` (64 MiB) |
+| `observability.metrics.enabled` | Serve Prometheus metrics on the dedicated metrics listener | `false` |
+| `observability.metrics.host` | Dedicated metrics bind address | `127.0.0.1` |
+| `observability.metrics.port` | Dedicated metrics port | `9090` |
+| `observability.metrics.bearer_token` | Optional Bearer token (required for non-loopback binding; at least 16 bytes) | empty |
+| `observability.tracing.enabled` | Export OpenTelemetry traces over OTLP/HTTP | `false` |
+| `observability.tracing.endpoint` | OTLP/HTTP collector endpoint | `localhost:4318` |
+| `observability.tracing.sample_ratio` | Trace sampling ratio from 0 to 1 | `0.01` |
+
+The configuration file is watched for changes after startup. Valid updates are parsed and validated before the active snapshot is atomically replaced. `log.level`, relay timeouts/body limits, and tracing settings take effect for new requests/attempts without restarting. Changes to the application listener, trusted proxies, session-cookie policy, dedicated metrics listener (including enablement and token), database connection, or log format require a process restart. `/metrics` is never exposed on the application port; scrape `observability.metrics.host:port/metrics` instead.
+
+Relay request bodies with `Content-Encoding` other than empty/`identity` are rejected with 415 before decompression, preventing compressed-body expansion attacks. Oversized JSON or image multipart requests return a structured 413. The non-stream response cap applies after Go transport decompression. Model discovery additionally allows at most 16 MiB per page, 64 MiB cumulatively across keys/pages, and 50,000 unique models; the price catalog has a 16 MiB response cap. Stream first-event and idle guards are phase limits, not a total stream lifetime: active heartbeat-producing streams may run indefinitely, and a recognized terminal event remains successful.
+
+The bundled management UI explicitly logs in with `auth_mode: "cookie"`. It receives an opaque `HttpOnly`, `SameSite=Strict`, host-only session cookie and a separate session-bound CSRF cookie; it never receives, stores, or persists an administrator JWT. Every unsafe cookie-authenticated request must echo the CSRF cookie in `X-Octopus-CSRF`. Browser management is intentionally same-origin, while configured CORS origins remain available to Bearer/API-key clients without cross-origin cookies. In `auto` mode, `X-Forwarded-Proto: https` is accepted only when the request's immediate peer matches `server.trusted_proxies`; use `always` if the deployment cannot reliably provide that header.
+
+For compatibility, non-browser clients that omit `auth_mode` from `POST /api/v1/user/login` continue to receive a Bearer JWT; they may also request `auth_mode: "bearer"` explicitly. Login responses are marked `Cache-Control: no-store`. Browser sessions are kept in the single-instance process, capped at 4096 entries, removed lazily after expiry, and invalidated on restart. `POST /api/v1/user/logout` revokes only the current browser session; changing the administrator password or username increments `token_version` and invalidates all browser sessions and Bearer JWTs.
 
 **Database Configuration:**
 
@@ -168,12 +309,16 @@ All configuration options can be overridden via environment variables using the 
 | `OCTOPUS_DATABASE_TYPE` | `database.type` |
 | `OCTOPUS_DATABASE_PATH` | `database.path` |
 | `OCTOPUS_LOG_LEVEL` | `log.level` |
-| `OCTOPUS_GITHUB_PAT` | For rate limiting when getting the latest version (optional) |
-| `OCTOPUS_RELAY_MAX_SSE_EVENT_SIZE` | Maximum SSE event size (optional) |
-| `OCTOPUS_IMAGES_BODY_MEMORY_THRESHOLD_MB` | Images request body in-memory threshold. If exceeded, it will be spooled to a temporary file (optional, default 16) |
-| `OCTOPUS_IMAGES_BODY_MAX_MB` | Images request body maximum size. Requests above this limit are rejected (optional, default 256) |
-| `OCTOPUS_IMAGES_BODY_TMP_DIR` | Images request body temporary directory (optional, default `./cache`) |
-| `OCTOPUS_IMAGES_BODY_TMP_CLEANUP_HOURS` | Startup cleanup threshold for temporary files (optional, default 24) |
+| `OCTOPUS_RELAY_NON_STREAM_TIMEOUT_SECONDS` | `relay.non_stream_timeout_seconds` |
+| `OCTOPUS_RELAY_STREAM_FIRST_EVENT_TIMEOUT_SECONDS` | `relay.stream_first_event_timeout_seconds` |
+| `OCTOPUS_RELAY_STREAM_IDLE_TIMEOUT_SECONDS` | `relay.stream_idle_timeout_seconds` |
+| `OCTOPUS_RELAY_MAX_JSON_REQUEST_BYTES` | `relay.max_json_request_bytes` |
+| `OCTOPUS_RELAY_MAX_IMAGE_REQUEST_BYTES` | `relay.max_image_request_bytes` |
+| `OCTOPUS_RELAY_MAX_NON_STREAM_RESPONSE_BYTES` | `relay.max_non_stream_response_bytes` |
+| `OCTOPUS_OBSERVABILITY_METRICS_ENABLED` | `observability.metrics.enabled` |
+| `OCTOPUS_OBSERVABILITY_METRICS_HOST` | `observability.metrics.host` |
+| `OCTOPUS_OBSERVABILITY_METRICS_PORT` | `observability.metrics.port` |
+| `OCTOPUS_OBSERVABILITY_METRICS_BEARER_TOKEN` | `observability.metrics.bearer_token` |
 
 ## 📸 Screenshots
 
@@ -297,6 +442,15 @@ Manage model pricing information in the system.
 
 Global system configuration.
 
+**Relay log content policy:**
+
+- `metadata` (default): store diagnostics and metadata without request/response bodies.
+- `full`: store redacted, size-limited request/response bodies. Redaction reduces risk but cannot guarantee that arbitrary prompt text contains no secrets.
+- `disabled`: do not create new Relay logs.
+
+Use `metadata` unless body-level troubleshooting is explicitly required. Changing
+the policy does not remove content already persisted or copied into an export.
+
 **Statistics Save Interval (minutes):**
 
 Since the program handles numerous statistics, writing to the database on every request would impact read/write performance. The program uses this strategy:
@@ -318,7 +472,7 @@ import os
 
 client = OpenAI(   
     base_url="http://127.0.0.1:8080/v1",   
-    api_key="sk-octopus-P48ROljwJmWBYVARjwQM8Nkiezlg7WOrXXOWDYY8TI5p9Mzg", 
+    api_key=os.environ["OCTOPUS_API_KEY"],
 )
 completion = client.chat.completions.create(
     model="octopus-openai",  # Use the correct group name
@@ -337,7 +491,7 @@ Edit `~/.claude/settings.json`
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
-    "ANTHROPIC_AUTH_TOKEN": "sk-octopus-P48ROljwJmWBYVARjwQM8Nkiezlg7WOrXXOWDYY8TI5p9Mzg",
+    "ANTHROPIC_AUTH_TOKEN": "<YOUR_OCTOPUS_API_KEY>",
     "API_TIMEOUT_MS": "3000000",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "ANTHROPIC_MODEL": "octopus-sonnet-4-5",
@@ -367,7 +521,7 @@ Edit `~/.codex/auth.json`
 
 ```json
 {
-  "OPENAI_API_KEY": "sk-octopus-P48ROljwJmWBYVARjwQM8Nkiezlg7WOrXXOWDYY8TI5p9Mzg"
+  "OPENAI_API_KEY": "<YOUR_OCTOPUS_API_KEY>"
 }
 ```
 

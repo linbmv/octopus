@@ -1,0 +1,132 @@
+'use client';
+
+import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, Trash2, TrendingUp, XCircle } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import { type Channel } from '@/api/endpoints/channel';
+import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
+import { ChannelErrorOverview } from '@/components/modules/error-observability';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { cn, formatMoney } from '@/lib/utils';
+import { CapabilityEvidencePanel } from './CapabilityEvidence';
+
+export function ChannelOverview({
+    channel,
+    stats,
+    confirmingDelete,
+    deletePending,
+    onEdit,
+    onDelete,
+}: {
+    channel: Channel;
+    stats: StatsMetricsFormatted;
+    confirmingDelete: boolean;
+    deletePending: boolean;
+    onEdit: () => void;
+    onDelete: () => void;
+}) {
+    const t = useTranslations('channel.detail');
+    return (
+        <>
+            <div className="max-h-[60vh] space-y-4 overflow-y-auto sm:space-y-5">
+                <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <SummaryMetric icon={Activity} label={t('metrics.totalRequests')} value={stats.request_count.formatted.value} unit={stats.request_count.formatted.unit} color="text-chart-1" />
+                    <SummaryMetric icon={FileText} label={t('metrics.totalToken')} value={stats.total_token.formatted.value} unit={stats.total_token.formatted.unit} color="text-chart-3" />
+                    <SummaryMetric icon={DollarSign} label={t('metrics.totalCost')} value={stats.total_cost.formatted.value} unit={stats.total_cost.formatted.unit} color="text-chart-5" />
+                </dl>
+
+                <ChannelErrorOverview channelId={channel.id} />
+                <CapabilityEvidencePanel channel={channel} />
+                <MetricSection title={t('sections.requests')} icon={TrendingUp}>
+                    <DetailMetric icon={CheckCircle2} label={t('metrics.successRequests')} value={stats.request_success.formatted.value} unit={stats.request_success.formatted.unit} color="text-accent" />
+                    <DetailMetric icon={XCircle} label={t('metrics.failedRequests')} value={stats.request_failed.formatted.value} unit={stats.request_failed.formatted.unit} color="text-destructive" />
+                </MetricSection>
+                <MetricSection title={t('sections.tokens')} icon={FileText}>
+                    <DetailMetric label={t('metrics.inputToken')} value={stats.input_token.formatted.value} unit={stats.input_token.formatted.unit} />
+                    <DetailMetric label={t('metrics.outputToken')} value={stats.output_token.formatted.value} unit={stats.output_token.formatted.unit} />
+                </MetricSection>
+                <MetricSection title={t('sections.costs')} icon={DollarSign}>
+                    <DetailMetric label={t('metrics.inputCost')} value={stats.input_cost.formatted.value} unit={stats.input_cost.formatted.unit} />
+                    <DetailMetric label={t('metrics.outputCost')} value={stats.output_cost.formatted.value} unit={stats.output_cost.formatted.unit} />
+                </MetricSection>
+                <MetricSection title={t('sections.limits')} icon={Activity}>
+                    <DetailMetric label={t('metrics.rpmLimit')} value={(channel.rpm_limit ?? 0) > 0 ? channel.rpm_limit : t('metrics.unlimited')} />
+                    <DetailMetric label={t('metrics.maxConcurrency')} value={(channel.max_concurrency ?? 0) > 0 ? channel.max_concurrency : t('metrics.unlimited')} />
+                </MetricSection>
+
+                <RuntimeLists channel={channel} />
+                <dl className="rounded-2xl border bg-card p-3 transition-colors hover:bg-accent/5 sm:p-4">
+                    <dt className="mb-2 flex items-center gap-2 text-xs text-muted-foreground"><Clock className="size-4 text-primary" />{t('metrics.avgWaitTime')}</dt>
+                    <dd className="text-2xl font-bold text-primary">{stats.wait_time.formatted.value}<span className="ml-1 text-sm font-normal text-muted-foreground">{stats.wait_time.formatted.unit}</span></dd>
+                </dl>
+            </div>
+            <div className="grid gap-3 pt-2 sm:grid-cols-2">
+                <Button onClick={onEdit} variant={confirmingDelete ? 'secondary' : 'default'} className="h-12 w-full rounded-2xl">
+                    {confirmingDelete ? t('actions.cancel') : t('actions.edit')}
+                </Button>
+                <Button onClick={onDelete} disabled={deletePending} variant="destructive" className="h-12 w-full rounded-2xl">
+                    <Trash2 className={`size-4 transition-transform ${confirmingDelete ? 'scale-110' : ''}`} />
+                    {deletePending ? t('actions.deleting') : confirmingDelete ? t('actions.confirmDelete') : t('actions.delete')}
+                </Button>
+            </div>
+        </>
+    );
+}
+
+function RuntimeLists({ channel }: { channel: Channel }) {
+    const t = useTranslations('channel.detail');
+    return (
+        <>
+            <section className="space-y-3">
+                <SectionTitle icon={Globe}>{t('sections.baseUrls')}</SectionTitle>
+                <div className="overflow-hidden rounded-2xl border bg-card">
+                    {channel.base_urls?.map((url, index) => (
+                        <div key={`${url.url}-${index}`} className="flex items-center justify-between border-b p-3 transition-colors last:border-0 hover:bg-accent/5 sm:p-4">
+                            <span className="min-w-0 truncate font-mono text-sm select-all">{url.url}</span>
+                            <Badge variant="secondary" className={cn('h-5 px-1.5 text-xs', url.delay < 300 ? 'bg-green-500/15 text-green-700 dark:text-green-400' : url.delay < 1000 ? 'bg-orange-500/15 text-orange-700 dark:text-orange-400' : 'bg-red-500/15 text-red-700 dark:text-red-400')}>{url.delay}ms</Badge>
+                        </div>
+                    ))}
+                    {!channel.base_urls?.length && <div className="p-4 text-center text-sm text-muted-foreground">{t('noBaseUrls')}</div>}
+                </div>
+            </section>
+            <section className="space-y-3">
+                <SectionTitle icon={Key}>{t('sections.keys')}</SectionTitle>
+                <div className="overflow-hidden rounded-2xl border bg-card">
+                    {channel.keys?.map((key) => (
+                        <div key={key.id} className="flex items-center gap-3 border-b p-3 transition-colors last:border-0 hover:bg-accent/5 sm:p-4">
+                            <div className={cn('size-2 shrink-0 rounded-full', key.enabled ? 'bg-emerald-500' : 'bg-destructive')} />
+                            <span className="min-w-0 flex-1 truncate font-mono text-sm">{maskChannelKey(key.channel_key)}</span>
+                            {key.remark && <span className="max-w-24 truncate text-xs text-muted-foreground" title={key.remark}>{key.remark}</span>}
+                            <div className="flex shrink-0 items-center gap-2">
+                                {key.last_use_time_stamp > 0 && <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline-block">{new Date(key.last_use_time_stamp * 1000).toLocaleString()}</span>}
+                                {key.status_code !== 0 && <Badge variant="secondary" className={cn('h-5 px-1.5 text-[10px]', key.status_code === 200 ? 'bg-green-500/15 text-green-700 dark:text-green-400' : key.status_code === 401 || key.status_code === 403 || key.status_code === 429 || key.status_code >= 500 ? 'bg-red-500/15 text-red-700 dark:text-red-400' : 'bg-orange-500/15 text-orange-700 dark:text-orange-400')}>{key.status_code}</Badge>}
+                                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{formatMoney(key.total_cost).formatted.value}{formatMoney(key.total_cost).formatted.unit}</Badge>
+                            </div>
+                        </div>
+                    ))}
+                    {!channel.keys?.length && <div className="p-4 text-center text-sm text-muted-foreground">{t('noKeys')}</div>}
+                </div>
+            </section>
+        </>
+    );
+}
+
+function maskChannelKey(key: string): string {
+    return key.length > 10 ? `${key.slice(0, 4)}...${key.slice(-4)}` : key;
+}
+
+function MetricSection({ title, icon, children }: { title: string; icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {
+    return <section className="space-y-3"><SectionTitle icon={icon}>{title}</SectionTitle><dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">{children}</dl></section>;
+}
+
+function SectionTitle({ icon: Icon, children }: { icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {
+    return <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground"><Icon className="size-3.5" />{children}</h4>;
+}
+
+function SummaryMetric({ icon: Icon, label, value, unit, color }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string | number; unit?: string; color: string }) {
+    return <div className="rounded-2xl border bg-card p-3 sm:p-4"><dt className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground"><Icon className={`size-4 ${color}`} />{label}</dt><dd className={`text-xl font-bold sm:text-2xl ${color}`}>{value}<span className="ml-1 text-xs font-normal text-muted-foreground">{unit}</span></dd></div>;
+}
+
+function DetailMetric({ icon: Icon, label, value, unit, color = 'text-card-foreground' }: { icon?: React.ComponentType<{ className?: string }>; label: string; value: string | number; unit?: string; color?: string }) {
+    return <div className="rounded-2xl border bg-card p-3 transition-colors hover:bg-accent/5 sm:p-4"><dt className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">{Icon && <Icon className={`size-4 ${color}`} />}{label}</dt><dd className={`text-2xl font-bold ${color}`}>{value}<span className="ml-1 text-sm font-normal text-muted-foreground">{unit}</span></dd></div>;
+}

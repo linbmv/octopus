@@ -8,6 +8,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useLogin } from "@/api/endpoints/user"
 import { useAPIKeyLogin } from "@/api/endpoints/apikey"
+import { ApiError } from "@/api/types"
 import Logo from "@/components/modules/logo"
 import { KeyRound, User } from "lucide-react"
 import {
@@ -42,7 +43,7 @@ export function LoginForm({ onLoginSuccess }: { onLoginSuccess?: () => void }) {
         await loginMutation.mutateAsync({
           username,
           password,
-          expire: 86400,
+          expires_in_minutes: 1440,
         })
       } else {
         await apiKeyLoginMutation.mutateAsync(apiKey)
@@ -50,7 +51,14 @@ export function LoginForm({ onLoginSuccess }: { onLoginSuccess?: () => void }) {
 
       onLoginSuccess?.()
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : t('error.generic')
+      const code = err instanceof ApiError ? err.code : err instanceof Error ? err.message : ''
+      const errorMessage = code === 'WEBAUTHN_UNAVAILABLE'
+        ? t('error.webauthnUnavailable')
+        : code === 'WEBAUTHN_CANCELLED'
+          ? t('error.webauthnCancelled')
+          : code.startsWith('WEBAUTHN_')
+            ? t('error.webauthnFailed')
+            : err instanceof Error ? err.message : t('error.generic')
       setError(errorMessage)
     }
   }

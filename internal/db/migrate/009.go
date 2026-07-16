@@ -36,7 +36,7 @@ func cleanupCompactProbeArtifacts(db *gorm.DB) error {
 }
 
 func hasCompactProbeErrorColumn(db *gorm.DB) bool {
-	switch db.Dialector.Name() {
+	switch db.Name() {
 	case "sqlite":
 		var name string
 		db.Raw("SELECT name FROM pragma_table_info(?) WHERE name = ? LIMIT 1", "group_items", "compact_probe_error").Scan(&name)
@@ -61,7 +61,7 @@ func quoteIdentifier(dialector gorm.Dialector, name string) string {
 }
 
 func dropCompactProbeErrorColumn(db *gorm.DB) error {
-	switch db.Dialector.Name() {
+	switch db.Name() {
 	case "sqlite":
 		return db.Exec("ALTER TABLE group_items DROP COLUMN compact_probe_error").Error
 	case "mysql":

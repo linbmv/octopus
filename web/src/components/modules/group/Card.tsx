@@ -42,14 +42,12 @@ export function GroupCard({ group }: { group: Group }) {
 
     const displayMembers = useMemo(() => buildDisplayMembers(group, modelChannels, allGroups), [group, modelChannels, allGroups]);
 
-    /* eslint-disable react-hooks/set-state-in-effect */
     useEffect(() => {
         if (!isDragging.current) {
             // 拖拽列表需要把远端分组成员同步到本地排序状态；拖拽中跳过同步以免打断手势。
             setMembers([...displayMembers]);
         }
     }, [displayMembers]);
-    /* eslint-enable react-hooks/set-state-in-effect */
 
     useEffect(() => {
         membersRef.current = members;
