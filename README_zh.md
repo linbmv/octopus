@@ -140,7 +140,7 @@ Compose 和 SIGTERM 矩阵。当前源码和四镜像的 Trivy HIGH/CRITICAL 均
 Gitleaks 命中为 0。
 
 这些是本地候选版本证据，不能替代干净 tag 发布。已知外部凭据仍需吊销，完整 Git
-历史中的 6 个命中需要授权后正式处置；真实 tag workflow 还必须生成并独立验证
+历史中的 6 个命中已于 2026-07-17 完成正式处置（确认为上游 fork 前文档示例 key，精确 fingerprint 风险接受记录见 .gitleaksignore，全历史 fail-closed 扫描通过）；真实 tag workflow 还必须生成并独立验证
 Cosign/OIDC 签名、SBOM attestation 和 provenance，之后才能生产发布。精确证据和
 剩余边界见[完整审计报告](docs/project-audit-2026-07-15.md)。
 

@@ -5,7 +5,24 @@ internal/op/user_init_test.go:generic-api-key:79
 internal/server/server_test.go:generic-api-key:216
 
 # Historical false positives: a redacted logger fixture and a shell variable
-# reference in documentation. No historical credential-like README findings
-# are suppressed here.
+# reference in documentation.
 52f8cc1c206a15152dfe22c3091c0b36a473f912:internal/server/middleware/logger_test.go:generic-api-key:12
 85c1d74bfed7d21b41661401e0f36ae37d56b807:docs/HEALTH_QUICKSTART.md:curl-auth-header:108
+
+# Risk acceptance (2026-07-17): six historical README hits are one identical
+# string — an octopus-issued gateway key ("sk-octopus-..." format, this
+# project's own API-key scheme, not a cloud/vendor credential) pointing at
+# http://127.0.0.1:8080. It was pasted into usage examples by the upstream
+# author (bestruirui, pre-fork commit 479454f, 2026-01-04) from their local
+# dev instance. It grants nothing outside that long-gone localhost instance
+# and is not a credential this fork could rotate. The current tree replaced
+# every occurrence with environment-variable placeholders (working-tree scan
+# is enforced to zero). History rewrite was deliberately rejected: it would
+# diverge every SHA from upstream for no security gain. Fingerprints are
+# commit+file+rule+line exact; any new occurrence elsewhere still fails.
+479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README.md:generic-api-key:314
+479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README.md:generic-api-key:333
+479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README.md:generic-api-key:363
+479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README_zh.md:generic-api-key:316
+479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README_zh.md:generic-api-key:335
+479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README_zh.md:generic-api-key:364

@@ -149,8 +149,10 @@ Compose/SIGTERM matrices. Current source and all four images have zero
 HIGH/CRITICAL Trivy findings; the working tree has zero Gitleaks findings.
 
 These are local candidate results, not a replacement for a clean tagged build.
-Known credentials must still be revoked, the six findings in complete Git
-history require authorized disposition, and the real tag workflow must produce
+Known credentials must still be revoked; the six historical Git findings were
+formally dispositioned on 2026-07-17 (upstream pre-fork doc-example key,
+precise fingerprint risk acceptance in .gitleaksignore, full-history
+fail-closed scan passing). The real tag workflow must still produce
 and independently verify its Cosign/OIDC signatures, SBOM attestations, and
 provenance before production publication. See the
 [full audit report](docs/project-audit-2026-07-15.md) for exact evidence and

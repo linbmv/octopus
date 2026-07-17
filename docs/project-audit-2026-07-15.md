@@ -13,7 +13,7 @@
 项目当前可定义为：**高质量的单实例发布候选版本**。本地代码与制品门禁已经通过，但在三个外部事项完成前不得表述为“生产发布完全验收”：
 
 1. 吊销并轮换用户曾公开提供的第三方中转凭据及旧 probe/test token。
-2. 处置完整 Git 历史中的 6 个 secret 命中；历史改写需要仓库协作授权，不能擅自执行。
+2. ~~处置完整 Git 历史中的 6 个 secret 命中~~（2026-07-17 已闭环：确认为上游 fork 前文档示例中的本地网关 key，非云凭据；精确 fingerprint 风险接受记录见 .gitleaksignore，全历史 fail-closed 扫描通过；历史改写经评估被否决——破坏 fork 血缘且无安全收益）。
 3. 在真实 `v*` tag GitHub Actions 中取得 Cosign keyless、GitHub OIDC provenance、SBOM attestation 和镜像 digest 的成功证据。
 
 除上述外部事项外，原审计计划没有仍可在本工作区继续执行的 P0/P1 修复项。多实例协调和外部日志 spool 属于明确的后续产品路线，不是当前单实例版本的隐性“未修完 bug”；备份 v2 增量合并与账号能力探测均已于 2026-07-16 完成。
@@ -464,7 +464,7 @@ P0/P1 共 19 项：17 项完整闭环，2 项仅剩外部动作。
 - [x] Alpine/Distroless、arm64/amd64 容器矩阵通过。
 - [x] 源码和四镜像 Trivy/Syft 通过；当前工作树 Gitleaks 0。
 - [ ] 已公开/旧凭据在供应商端吊销并轮换。
-- [ ] Git 历史 6 个 secret 命中完成正式处置，required gate 成功。
+- [x] Git 历史 6 个 secret 命中完成正式处置（2026-07-17）：逐条确认为上游作者 fork 前提交 479454f 的本地实例网关示例 key（非云凭据，当前树已替换占位符），按既定规则建立精确 fingerprint 风险接受记录于 .gitleaksignore；`ENFORCE_HISTORY=true` 全历史扫描 no leaks found。
 - [ ] 真实 tag workflow 的 Cosign/OIDC provenance/SBOM attestation 独立验证成功。
 
 生产部署在上述后三项完成前应停止。完成后仍需保持单实例，设置 `session_cookie_secure: "always"`（HTTPS 部署）、仅配置可信代理 CIDR、保护独立 metrics listener，并优先使用加密备份。
