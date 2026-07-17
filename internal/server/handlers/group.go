@@ -97,7 +97,23 @@ func createGroup(c *gin.Context) {
 		return
 	}
 	balancer.InvalidateGroups()
+	resetGroupMemberCircuits(&group)
 	resp.Success(c, group)
+}
+
+// resetGroupMemberCircuits 在分组被创建或更新（且处于启用态）后，清除其直连
+// 渠道成员对应模型的熔断状态。用户手动启用/调整分组表达的是"立即投入使用"，
+// 不应再受成员此前累积的熔断冷却压制；嵌套子分组在其自身被操作时同样生效。
+func resetGroupMemberCircuits(group *model.Group) {
+	if group == nil || !group.Enabled {
+		return
+	}
+	for _, item := range group.Items {
+		if item.Type == model.GroupItemTypeGroup || item.ChannelID <= 0 {
+			continue
+		}
+		balancer.ResetCircuit(item.ChannelID, item.ModelName)
+	}
 }
 
 func updateGroup(c *gin.Context) {
@@ -122,6 +138,7 @@ func updateGroup(c *gin.Context) {
 		return
 	}
 	balancer.InvalidateGroups()
+	resetGroupMemberCircuits(group)
 	resp.Success(c, group)
 }
 

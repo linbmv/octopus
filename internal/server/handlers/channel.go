@@ -45,6 +45,10 @@ func init() {
 				Handle(enableChannel),
 		).
 		AddRoute(
+			router.NewRoute("/reset-circuit", http.MethodPost).
+				Handle(resetChannelCircuit),
+		).
+		AddRoute(
 			router.NewRoute("/delete/:id", http.MethodDelete).
 				Handle(deleteChannel),
 		).
@@ -310,6 +314,36 @@ func enableChannel(c *gin.Context) {
 		return
 	}
 	invalidateChannelRuntimeState(request.ID, channel)
+	resp.Success(c, nil)
+}
+
+// resetChannelCircuit 立即清除指定渠道（可选限定模型）的熔断状态，让被冻结的
+// 模型无需等待冷却即可重新投入使用。用于"用户手动要求立即恢复"的场景：
+// 相比改一个无关字段触发失效，这是语义明确的显式入口。
+func resetChannelCircuit(c *gin.Context) {
+	var request struct {
+		ID    int    `json:"id"`
+		Model string `json:"model,omitempty"`
+	}
+	if err := bindStrictJSON(c, &request); err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	if request.ID <= 0 {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	if _, err := op.ChannelGet(request.ID, c.Request.Context()); err != nil {
+		resp.Error(c, http.StatusNotFound, "channel not found")
+		return
+	}
+	balancer.ResetCircuit(request.ID, request.Model)
+	relay.InvalidateRuntimeURLState(request.ID)
+	middleware.AuditLog(c, middleware.EventChannelUpdate, map[string]interface{}{
+		"channel_id": request.ID,
+		"action":     "reset_circuit",
+		"model":      request.Model,
+	})
 	resp.Success(c, nil)
 }
 
