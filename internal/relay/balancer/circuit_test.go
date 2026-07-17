@@ -206,3 +206,40 @@ func TestHalfOpenConcurrentIsTrippedGrantsExactlyMaxProbes(t *testing.T) {
 		t.Fatalf("并发下应恰好授予 2 个试探（默认上限），got %d", count)
 	}
 }
+
+func TestCircuitStateCountsAndSnapshot(t *testing.T) {
+	advance := circuitTestClock(t, time.Unix(1000000, 0))
+
+	// channel 1: 一个 open（model a），一个 closed（model b，1 次失败未达阈值）。
+	RecordFailure(1, 1, "a")
+	RecordFailure(1, 1, "a") // open
+	RecordFailure(1, 2, "b") // closed（阈值 2）
+	// channel 2: 一个 open。
+	RecordFailure(2, 1, "c")
+	RecordFailure(2, 1, "c")
+
+	closed, open, halfOpen := CircuitStateCounts()
+	if open != 2 || halfOpen != 0 || closed != 1 {
+		t.Fatalf("状态计数 closed=%d open=%d halfOpen=%d, want closed=1 open=2 halfOpen=0", closed, open, halfOpen)
+	}
+
+	snap := CircuitSnapshotForChannel(1)
+	if len(snap) != 1 {
+		t.Fatalf("channel 1 快照应只含 1 个非 Closed 条目, got %d", len(snap))
+	}
+	if snap[0].State != "open" || snap[0].ModelName != "a" || snap[0].RemainingCooldownSeconds <= 0 {
+		t.Fatalf("快照内容异常: %+v", snap[0])
+	}
+
+	// 冷却到期转半开后，计数与快照状态应随之变化。
+	advance(61 * time.Second)
+	IsTripped(1, 1, "a") // open -> half_open（授予试探）
+	_, _, halfOpen = CircuitStateCounts()
+	if halfOpen != 1 {
+		t.Fatalf("半开计数应为 1, got %d", halfOpen)
+	}
+	snap = CircuitSnapshotForChannel(1)
+	if len(snap) != 1 || snap[0].State != "half_open" {
+		t.Fatalf("快照应显示 half_open, got %+v", snap)
+	}
+}

@@ -380,6 +380,81 @@ func (s *breakerState) resetCircuit(channelID int, modelName string) {
 	}
 }
 
+// CircuitStateCounts 按状态统计当前熔断器条目数，供 /metrics 快照。
+func CircuitStateCounts() (closed, open, halfOpen int) {
+	return globalBreaker.stateCounts(circuitNow())
+}
+
+func (s *breakerState) stateCounts(now time.Time) (closed, open, halfOpen int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for element := s.order.Front(); element != nil; element = element.Next() {
+		entry := element.Value.(*breakerRecord).entry
+		entry.mu.Lock()
+		state := entry.State
+		expired := stateExpired(entry.LastTouched, now, circuitStateTTL)
+		entry.mu.Unlock()
+		if expired {
+			continue
+		}
+		switch state {
+		case StateOpen:
+			open++
+		case StateHalfOpen:
+			halfOpen++
+		default:
+			closed++
+		}
+	}
+	return closed, open, halfOpen
+}
+
+// CircuitSnapshotForChannel 返回指定渠道当前所有非 Closed 的熔断条目
+//（含冻结剩余冷却），供渠道详情 UI 展示"哪些模型被冻结、还剩多久"。
+func CircuitSnapshotForChannel(channelID int) []model.ChannelCircuitStatus {
+	return globalBreaker.snapshotForChannel(channelID, circuitNow())
+}
+
+func (s *breakerState) snapshotForChannel(channelID int, now time.Time) []model.ChannelCircuitStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]model.ChannelCircuitStatus, 0)
+	for element := s.order.Front(); element != nil; element = element.Next() {
+		record := element.Value.(*breakerRecord)
+		if record.key.ChannelID != channelID {
+			continue
+		}
+		entry := record.entry
+		entry.mu.Lock()
+		state := entry.State
+		expired := stateExpired(entry.LastTouched, now, circuitStateTTL)
+		info := model.ChannelCircuitStatus{
+			ChannelID:           record.key.ChannelID,
+			ChannelKeyID:        record.key.KeyID,
+			ModelName:           record.key.ModelName,
+			ConsecutiveFailures: entry.ConsecutiveFailures,
+			TripCount:           entry.TripCount,
+		}
+		if state == StateOpen {
+			if remaining := GetCooldown(entry.TripCount) - now.Sub(entry.LastFailureTime); remaining > 0 {
+				info.RemainingCooldownSeconds = int(remaining.Seconds())
+			}
+		}
+		entry.mu.Unlock()
+		if expired || state == StateClosed {
+			continue
+		}
+		switch state {
+		case StateOpen:
+			info.State = "open"
+		case StateHalfOpen:
+			info.State = "half_open"
+		}
+		result = append(result, info)
+	}
+	return result
+}
+
 // RecordFailure 记录失败，可能触发熔断
 func RecordFailure(channelID, keyID int, modelName string) {
 	key := circuitKey(channelID, keyID, modelName)

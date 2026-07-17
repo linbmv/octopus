@@ -152,6 +152,7 @@ func newMetricsServer(config conf.Metrics) *http.Server {
 			return
 		}
 		relay.RefreshHealthMetrics()
+		relay.RefreshCircuitMetrics()
 		metrics.Handler().ServeHTTP(w, r)
 	})
 	return &http.Server{

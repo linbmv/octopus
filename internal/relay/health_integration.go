@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/metrics"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
@@ -38,6 +39,15 @@ func RefreshHealthMetrics() {
 		return
 	}
 	healthMetrics.UpdateAll(healthManager)
+}
+
+// RefreshCircuitMetrics 把熔断器各状态的条目数刷新到 Prometheus gauge，
+// 在 /metrics 抓取时随健康快照一起调用。
+func RefreshCircuitMetrics() {
+	closed, open, halfOpen := balancer.CircuitStateCounts()
+	metrics.CircuitBreakerEntries.WithLabelValues("closed").Set(float64(closed))
+	metrics.CircuitBreakerEntries.WithLabelValues("open").Set(float64(open))
+	metrics.CircuitBreakerEntries.WithLabelValues("half_open").Set(float64(halfOpen))
 }
 
 func StartHealthPersistenceContext(ctx context.Context) error {

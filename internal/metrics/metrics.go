@@ -58,6 +58,15 @@ var (
 			Buckets:   prometheus.DefBuckets,
 		},
 	)
+	CircuitBreakerEntries = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "octopus",
+			Subsystem: "circuit",
+			Name:      "breaker_entries",
+			Help:      "Circuit breaker entries by state, refreshed on each metrics scrape.",
+		},
+		[]string{"state"},
+	)
 	RelayLogDroppedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "octopus",

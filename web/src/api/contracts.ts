@@ -66,6 +66,16 @@ export interface ChannelAttempt {
   first_token_time?: number;
 }
 
+export interface ChannelCircuitStatus {
+  channel_id: number;
+  channel_key_id: number;
+  model_name: string;
+  state: string;
+  consecutive_failures: number;
+  trip_count: number;
+  remaining_cooldown_seconds: number;
+}
+
 export interface ChannelKey {
   id: number;
   uuid?: string;

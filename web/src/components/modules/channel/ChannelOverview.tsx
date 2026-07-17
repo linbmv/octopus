@@ -1,8 +1,8 @@
 'use client';
 
-import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, Trash2, TrendingUp, XCircle } from 'lucide-react';
+import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, ShieldAlert, Trash2, TrendingUp, XCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { type Channel } from '@/api/endpoints/channel';
+import { useChannelCircuit, useResetChannelCircuit, type Channel } from '@/api/endpoints/channel';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { ChannelErrorOverview } from '@/components/modules/error-observability';
 import { Badge } from '@/components/ui/badge';
@@ -36,6 +36,7 @@ export function ChannelOverview({
                 </dl>
 
                 <ChannelErrorOverview channelId={channel.id} />
+                <ChannelCircuitPanel channelId={channel.id} />
                 <CapabilityEvidencePanel channel={channel} />
                 <MetricSection title={t('sections.requests')} icon={TrendingUp}>
                     <DetailMetric icon={CheckCircle2} label={t('metrics.successRequests')} value={stats.request_success.formatted.value} unit={stats.request_success.formatted.unit} color="text-accent" />
@@ -70,6 +71,44 @@ export function ChannelOverview({
                 </Button>
             </div>
         </>
+    );
+}
+
+// ChannelCircuitPanel 展示当前被熔断冻结的 key×模型条目及剩余冷却，
+// 并提供一键"立即恢复"（清除熔断，无需等待冷却）。无冻结条目时不渲染。
+function ChannelCircuitPanel({ channelId }: { channelId: number }) {
+    const t = useTranslations('channel.detail.circuit');
+    const { data: entries } = useChannelCircuit(channelId);
+    const resetCircuit = useResetChannelCircuit(channelId);
+    if (!entries?.length) return null;
+    return (
+        <section className="space-y-3">
+            <div className="flex items-center justify-between">
+                <SectionTitle icon={ShieldAlert}>{t('title')}</SectionTitle>
+                <Button size="sm" variant="outline" className="h-7 rounded-xl px-2 text-xs" disabled={resetCircuit.isPending} onClick={() => resetCircuit.mutate(undefined)}>
+                    {resetCircuit.isPending ? t('resetting') : t('resetAll')}
+                </Button>
+            </div>
+            <div className="overflow-hidden rounded-2xl border bg-card">
+                {entries.map((entry) => (
+                    <div key={`${entry.channel_key_id}-${entry.model_name}`} className="flex items-center gap-3 border-b p-3 transition-colors last:border-0 hover:bg-accent/5 sm:p-4">
+                        <div className={cn('size-2 shrink-0 rounded-full', entry.state === 'open' ? 'bg-destructive' : 'bg-orange-500')} />
+                        <span className="min-w-0 flex-1 truncate font-mono text-sm" title={entry.model_name}>{entry.model_name}</span>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <Badge variant="secondary" className={cn('h-5 px-1.5 text-[10px]', entry.state === 'open' ? 'bg-red-500/15 text-red-700 dark:text-red-400' : 'bg-orange-500/15 text-orange-700 dark:text-orange-400')}>
+                                {entry.state === 'open' ? t('stateOpen') : t('stateHalfOpen')}
+                            </Badge>
+                            {entry.remaining_cooldown_seconds > 0 && (
+                                <span className="whitespace-nowrap text-xs text-muted-foreground">{t('remaining', { seconds: entry.remaining_cooldown_seconds })}</span>
+                            )}
+                            <Button size="sm" variant="ghost" className="h-6 rounded-lg px-2 text-xs" disabled={resetCircuit.isPending} onClick={() => resetCircuit.mutate(entry.model_name)}>
+                                {t('reset')}
+                            </Button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </section>
     );
 }
 

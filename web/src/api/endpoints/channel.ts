@@ -6,12 +6,13 @@ import { StatsChannel, type StatsMetricsFormatted } from './stats';
 import type {
     BaseUrl,
     Channel as ContractChannel,
+    ChannelCircuitStatus,
     ChannelKey,
     CustomHeader,
 	HeaderRule,
 	JSONRewriteRule,
 } from '../contracts';
-export type { BaseUrl, ChannelKey, CustomHeader, HeaderRule, JSONRewriteRule } from '../contracts';
+export type { BaseUrl, ChannelCircuitStatus, ChannelKey, CustomHeader, HeaderRule, JSONRewriteRule } from '../contracts';
 /**
  * 渠道类型枚举
  */
@@ -426,6 +427,40 @@ export function useProbeChannelCapabilities(channelId: number) {
         },
         onError: (error) => {
             logger.error('渠道能力探测失败:', error);
+        },
+    });
+}
+
+/**
+ * 渠道熔断状态 Hook：返回当前被冻结（open/half_open）的 key×模型条目及剩余冷却。
+ */
+export function useChannelCircuit(channelId: number, enabled: boolean = true) {
+    return useQuery({
+        queryKey: ['channels', channelId, 'circuit'],
+        queryFn: async () => apiClient.get<ChannelCircuitStatus[]>(`/api/v1/channel/${channelId}/circuit`),
+        enabled: enabled && channelId > 0,
+        refetchInterval: 5000,
+    });
+}
+
+/**
+ * 手动清除渠道熔断 Hook：被冻结的模型无需等待冷却即可重新投入使用。
+ * 可选 model 参数精确到单个模型；缺省清除整个渠道。
+ */
+export function useResetChannelCircuit(channelId: number) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (model?: string) => {
+            return apiClient.post<null>('/api/v1/channel/reset-circuit', {
+                id: channelId,
+                ...(model ? { model } : {}),
+            });
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['channels', channelId, 'circuit'] });
+        },
+        onError: (error) => {
+            logger.error('清除渠道熔断失败:', error);
         },
     });
 }

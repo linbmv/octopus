@@ -25,6 +25,7 @@ var modelTypes = []typeSpec{
 	{Name: "BaseUrl", Type: reflect.TypeOf(model.BaseUrl{})},
 	{Name: "Channel", Type: reflect.TypeOf(model.Channel{})},
 	{Name: "ChannelAttempt", Type: reflect.TypeOf(model.ChannelAttempt{})},
+	{Name: "ChannelCircuitStatus", Type: reflect.TypeOf(model.ChannelCircuitStatus{})},
 	{Name: "ChannelKey", Type: reflect.TypeOf(model.ChannelKey{})},
 	{Name: "ChannelKeyAddRequest", Type: reflect.TypeOf(model.ChannelKeyAddRequest{})},
 	{Name: "ChannelKeyUpdateRequest", Type: reflect.TypeOf(model.ChannelKeyUpdateRequest{})},

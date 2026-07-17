@@ -73,7 +73,26 @@ func init() {
 		AddRoute(
 			router.NewRoute("/:id/capabilities", http.MethodGet).
 				Handle(listChannelCapabilities),
+		).
+		AddRoute(
+			router.NewRoute("/:id/circuit", http.MethodGet).
+				Handle(getChannelCircuit),
 		)
+}
+
+// getChannelCircuit 返回指定渠道当前被冻结（open/half_open）的熔断条目，
+// 含剩余冷却秒数，供渠道详情 UI 展示冻结状态并配合 reset-circuit 手动恢复。
+func getChannelCircuit(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || channelID <= 0 {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	if _, err := op.ChannelGet(channelID, c.Request.Context()); err != nil {
+		resp.Error(c, http.StatusNotFound, "channel not found")
+		return
+	}
+	resp.Success(c, balancer.CircuitSnapshotForChannel(channelID))
 }
 
 type channelCapabilityEvidence struct {

@@ -229,10 +229,22 @@
             "shadowMode": "影子模式",
             "shadowModeHint": "观察并记录自适应决策，但不执行自动超时。",
             "presets": {
-                "off": { "label": "关闭", "description": "关闭自适应健康行为。" },
-                "shadow": { "label": "影子", "description": "仅观察决策，不实际执行。" },
-                "balanced": { "label": "均衡", "description": "启用自适应超时，保持稳定的手动排序。" },
-                "aggressive": { "label": "积极", "description": "同时使用健康度调整候选顺序。" }
+                "off": {
+                    "label": "关闭",
+                    "description": "关闭自适应健康行为。"
+                },
+                "shadow": {
+                    "label": "影子",
+                    "description": "仅观察决策，不实际执行。"
+                },
+                "balanced": {
+                    "label": "均衡",
+                    "description": "启用自适应超时，保持稳定的手动排序。"
+                },
+                "aggressive": {
+                    "label": "积极",
+                    "description": "同时使用健康度调整候选顺序。"
+                }
             },
             "fields": {
                 "minAdaptiveTimeout": "自适应超时下限（秒）",
@@ -695,6 +707,15 @@
                     "not_implemented": "未实现",
                     "transient": "暂时故障"
                 }
+            },
+            "circuit": {
+                "title": "被冻结的模型（熔断）",
+                "resetAll": "全部恢复",
+                "reset": "恢复",
+                "resetting": "恢复中...",
+                "stateOpen": "冻结中",
+                "stateHalfOpen": "试探中",
+                "remaining": "剩余 {seconds} 秒"
             }
         },
         "create": {

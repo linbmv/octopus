@@ -229,10 +229,22 @@
             "shadowMode": "影子模式",
             "shadowModeHint": "觀察並記錄自適應決策，但不執行自動逾時。",
             "presets": {
-                "off": { "label": "關閉", "description": "關閉自適應健康行為。" },
-                "shadow": { "label": "影子", "description": "僅觀察決策，不實際執行。" },
-                "balanced": { "label": "均衡", "description": "啟用自適應逾時，保持穩定的手動排序。" },
-                "aggressive": { "label": "積極", "description": "同時使用健康度調整候選順序。" }
+                "off": {
+                    "label": "關閉",
+                    "description": "關閉自適應健康行為。"
+                },
+                "shadow": {
+                    "label": "影子",
+                    "description": "僅觀察決策，不實際執行。"
+                },
+                "balanced": {
+                    "label": "均衡",
+                    "description": "啟用自適應逾時，保持穩定的手動排序。"
+                },
+                "aggressive": {
+                    "label": "積極",
+                    "description": "同時使用健康度調整候選順序。"
+                }
             },
             "fields": {
                 "minAdaptiveTimeout": "自適應逾時下限（秒）",
@@ -695,6 +707,15 @@
                     "not_implemented": "未實作",
                     "transient": "暫時故障"
                 }
+            },
+            "circuit": {
+                "title": "被凍結的模型（熔斷）",
+                "resetAll": "全部恢復",
+                "reset": "恢復",
+                "resetting": "恢復中...",
+                "stateOpen": "凍結中",
+                "stateHalfOpen": "試探中",
+                "remaining": "剩餘 {seconds} 秒"
             }
         },
         "create": {

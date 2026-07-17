@@ -229,10 +229,22 @@
             "shadowMode": "Shadow mode",
             "shadowModeHint": "Observe and record adaptive decisions without enforcing automatic timeouts.",
             "presets": {
-                "off": { "label": "Off", "description": "Disable adaptive health behavior." },
-                "shadow": { "label": "Shadow", "description": "Observe decisions without enforcement." },
-                "balanced": { "label": "Balanced", "description": "Adaptive timeout with stable manual ordering." },
-                "aggressive": { "label": "Aggressive", "description": "Also use health in candidate ordering." }
+                "off": {
+                    "label": "Off",
+                    "description": "Disable adaptive health behavior."
+                },
+                "shadow": {
+                    "label": "Shadow",
+                    "description": "Observe decisions without enforcement."
+                },
+                "balanced": {
+                    "label": "Balanced",
+                    "description": "Adaptive timeout with stable manual ordering."
+                },
+                "aggressive": {
+                    "label": "Aggressive",
+                    "description": "Also use health in candidate ordering."
+                }
             },
             "fields": {
                 "minAdaptiveTimeout": "Minimum adaptive timeout (seconds)",
@@ -695,6 +707,15 @@
                     "not_implemented": "Not implemented",
                     "transient": "Transient"
                 }
+            },
+            "circuit": {
+                "title": "Frozen models (circuit breaker)",
+                "resetAll": "Restore all",
+                "reset": "Restore",
+                "resetting": "Restoring...",
+                "stateOpen": "frozen",
+                "stateHalfOpen": "probing",
+                "remaining": "{seconds}s left"
             }
         },
         "create": {
