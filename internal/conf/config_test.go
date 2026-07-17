@@ -46,6 +46,12 @@ func TestLoadUsesDefaultValues(t *testing.T) {
 	if config.Relay.StreamFirstEventTimeoutSeconds != 600 || config.Relay.StreamIdleTimeoutSeconds != 600 {
 		t.Fatalf("Relay stream timeout defaults = %#v, want 600 seconds each", config.Relay)
 	}
+	if config.Relay.NonStreamAttemptTimeoutSeconds != 60 {
+		t.Fatalf("Relay.NonStreamAttemptTimeoutSeconds = %d, want 60", config.Relay.NonStreamAttemptTimeoutSeconds)
+	}
+	if config.Relay.StreamColdStartFirstEventTimeoutSeconds != 30 {
+		t.Fatalf("Relay.StreamColdStartFirstEventTimeoutSeconds = %d, want 30", config.Relay.StreamColdStartFirstEventTimeoutSeconds)
+	}
 	if config.Relay.MaxJSONRequestBytes != 32<<20 || config.Relay.MaxImageRequestBytes != 64<<20 || config.Relay.MaxNonStreamResponseBytes != 64<<20 {
 		t.Fatalf("Relay body limit defaults = %#v", config.Relay)
 	}
@@ -98,6 +104,10 @@ func TestValidateRejectsUnsafeRelayResourceLimits(t *testing.T) {
 		{name: "first event timeout too large", mutate: func(c *Config) { c.Relay.StreamFirstEventTimeoutSeconds = 86401 }},
 		{name: "idle timeout negative", mutate: func(c *Config) { c.Relay.StreamIdleTimeoutSeconds = -1 }},
 		{name: "idle timeout too large", mutate: func(c *Config) { c.Relay.StreamIdleTimeoutSeconds = 86401 }},
+		{name: "non-stream attempt timeout negative", mutate: func(c *Config) { c.Relay.NonStreamAttemptTimeoutSeconds = -1 }},
+		{name: "non-stream attempt timeout too large", mutate: func(c *Config) { c.Relay.NonStreamAttemptTimeoutSeconds = 86401 }},
+		{name: "cold start timeout negative", mutate: func(c *Config) { c.Relay.StreamColdStartFirstEventTimeoutSeconds = -1 }},
+		{name: "cold start timeout too large", mutate: func(c *Config) { c.Relay.StreamColdStartFirstEventTimeoutSeconds = 86401 }},
 		{name: "JSON body disabled", mutate: func(c *Config) { c.Relay.MaxJSONRequestBytes = 0 }},
 		{name: "image body disabled", mutate: func(c *Config) { c.Relay.MaxImageRequestBytes = 0 }},
 		{name: "response body disabled", mutate: func(c *Config) { c.Relay.MaxNonStreamResponseBytes = 0 }},

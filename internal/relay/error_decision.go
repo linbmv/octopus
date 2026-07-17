@@ -86,9 +86,14 @@ func decideRelayErrorWithOptions(statusCode int, headers http.Header, responseBo
 	}
 	classification := errorclass.ClassifyResponse(statusCode, headers, responseBody, contentType)
 	if isFirstTokenTimeoutError(err) {
+		reason := "first token timeout"
+		var timeoutErr *firstTokenTimeoutError
+		if errors.As(err, &timeoutErr) && timeoutErr.config.Source == firstTokenTimeoutNonStreamAttempt {
+			reason = "non-stream attempt timeout"
+		}
 		classification = errorclass.Classification{
 			Level:  errorclass.ErrorLevelChannel,
-			Reason: "first token timeout",
+			Reason: reason,
 		}
 	} else if errors.Is(err, errNonStreamRequestTimeout) {
 		classification = errorclass.Classification{

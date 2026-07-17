@@ -77,22 +77,32 @@ func TestFirstTokenTimeoutManualSourceTakesPrecedence(t *testing.T) {
 
 func TestFirstTokenTimeoutPriorityManualThenAdaptiveThenGlobal(t *testing.T) {
 	tests := []struct {
-		name          string
-		manualSeconds int
-		adaptive      time.Duration
-		hasAdaptive   bool
-		globalSeconds int
-		wantSource    firstTokenTimeoutSource
-		wantDuration  time.Duration
+		name             string
+		manualSeconds    int
+		adaptive         time.Duration
+		hasAdaptive      bool
+		globalSeconds    int
+		coldStartSeconds int
+		hasAlternative   bool
+		wantSource       firstTokenTimeoutSource
+		wantDuration     time.Duration
 	}{
-		{name: "manual wins", manualSeconds: 9, adaptive: 4 * time.Second, hasAdaptive: true, globalSeconds: 30, wantSource: firstTokenTimeoutManual, wantDuration: 9 * time.Second},
-		{name: "adaptive sample wins", adaptive: 4 * time.Second, hasAdaptive: true, globalSeconds: 30, wantSource: firstTokenTimeoutAdaptive, wantDuration: 4 * time.Second},
+		{name: "manual wins", manualSeconds: 9, adaptive: 4 * time.Second, hasAdaptive: true, globalSeconds: 30, coldStartSeconds: 5, hasAlternative: true, wantSource: firstTokenTimeoutManual, wantDuration: 9 * time.Second},
+		{name: "adaptive sample wins", adaptive: 4 * time.Second, hasAdaptive: true, globalSeconds: 30, coldStartSeconds: 5, hasAlternative: true, wantSource: firstTokenTimeoutAdaptive, wantDuration: 4 * time.Second},
 		{name: "global fallback", globalSeconds: 30, wantSource: firstTokenTimeoutGlobal, wantDuration: 30 * time.Second},
 		{name: "disabled", wantSource: firstTokenTimeoutDisabled},
+		// 冷启动收敛：无手工值、无健康样本、仍有故障转移余地 → 用更短的冷启动上限。
+		{name: "cold start with alternative", globalSeconds: 600, coldStartSeconds: 30, hasAlternative: true, wantSource: firstTokenTimeoutColdStart, wantDuration: 30 * time.Second},
+		// 最后一个候选保留全局耐心，避免误杀唯一可用但首字慢的模型。
+		{name: "cold start without alternative falls back to global", globalSeconds: 600, coldStartSeconds: 30, hasAlternative: false, wantSource: firstTokenTimeoutGlobal, wantDuration: 600 * time.Second},
+		// 冷启动值不小于全局值时没有意义，直接用全局值。
+		{name: "cold start not tighter than global ignored", globalSeconds: 20, coldStartSeconds: 30, hasAlternative: true, wantSource: firstTokenTimeoutGlobal, wantDuration: 20 * time.Second},
+		// 有健康样本时冷启动不介入。
+		{name: "adaptive beats cold start", adaptive: 8 * time.Second, hasAdaptive: true, globalSeconds: 600, coldStartSeconds: 30, hasAlternative: true, wantSource: firstTokenTimeoutAdaptive, wantDuration: 8 * time.Second},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := selectFirstTokenTimeout(test.manualSeconds, test.adaptive, test.hasAdaptive, test.globalSeconds)
+			got := selectFirstTokenTimeout(test.manualSeconds, test.adaptive, test.hasAdaptive, test.globalSeconds, test.coldStartSeconds, test.hasAlternative)
 			if got.Source != test.wantSource || got.Duration != test.wantDuration {
 				t.Fatalf("timeout = %#v, want source=%v duration=%s", got, test.wantSource, test.wantDuration)
 			}

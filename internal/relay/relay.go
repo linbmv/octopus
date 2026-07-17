@@ -28,6 +28,9 @@ import (
 func (ra *relayAttempt) run() (bool, error) {
 	releaseLimits, msg, ok := reserveChannelLimits(ra.channel)
 	if !ok {
+		// 该 key 可能刚被授予半开试探名额；未发请求即放弃必须归还，
+		// 否则 RPM/并发饱和会让半开态一直无有效试探。
+		balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		ra.iter.Skip(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, msg)
 		return false, errors.New(msg)
 	}
@@ -169,6 +172,9 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		if ra.c.Writer.Written() {
 			msg = "client disconnected"
 		}
+		// 客户端取消不能证明通道好坏，但若本次是半开试探必须归还名额：
+		// 这是"模型冻结后长期不恢复"的最常见触发路径。
+		balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		span.End(dbmodel.AttemptClientCancel, msg)
 		log.Infof("attempt %d/%d canceled by request context: channel=%s(%d), key=%d, duration=%dms, msg=%s, error=%v",
 			ra.iter.Index()+1, ra.iter.Len(),
@@ -204,7 +210,15 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		}
 		if !ra.isAdaptiveFirstTokenTimeout(fwdErr) {
 			balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+		} else {
+			// 自适应首字超时是激进优化信号而非通道故障证据，不计失败；
+			// 但若本次是半开试探仍需归还名额。
+			balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		}
+	} else {
+		// client 级错误证明请求本身不可重试，不给通道记失败；
+		// 同样必须归还可能持有的半开试探名额。
+		balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 	}
 
 	// 获取首 token 延迟（如果有）
@@ -275,6 +289,8 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		}
 		outAdapter, err := newOutbound(ra.channel.Type, ra.internalRequest, ra.baseURL, nextKey.ChannelKey)
 		if err != nil {
+			// 同 buildRealAttempt：刚被授予的半开试探名额必须归还。
+			balancer.RecordProbeAbort(ra.channel.ID, nextKey.ID, ra.internalRequest.Model)
 			ra.iter.Skip(ra.channel.ID, nextKey.ID, ra.channel.Name, err.Error())
 			continue
 		}
@@ -333,15 +349,26 @@ func (ra *relayAttempt) forwardWithAdapter(
 
 	// 首字超时覆盖"发出上游请求 → 收到首个 token"全过程，包含 pipeline.Process 内部阻塞等待响应头的阶段。
 	// 出站 HTTP client 没有响应头超时，仅靠 SSE 建立后的计时器无法打断仍卡在 client.Do 等响应头的请求。
-	// 只对客户端流式请求生效：非流式没有"首个 token"语义，整段响应可能合法地长于该阈值。
+	// 流式按首字超时守卫；非流式按 per-attempt 响应头守卫（存在其他候选时），
+	// 否则一个挂死渠道会吃光整个 non_stream_timeout_seconds 预算，永远轮不到可用渠道。
 	fwdCtx := ctx
 	stopFirstTokenGuard := func() {}
 	wantStream := ra.internalRequest.Stream != nil && *ra.internalRequest.Stream
 	firstTokenTimeout := ra.firstTokenTimeout()
-	if firstTokenTimeout.Duration > 0 && wantStream {
-		var release func()
-		fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, firstTokenTimeout.Duration)
-		defer release()
+	attemptTimeout := firstTokenTimeoutConfig{}
+	if wantStream {
+		if firstTokenTimeout.Duration > 0 {
+			var release func()
+			fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, firstTokenTimeout.Duration)
+			defer release()
+		}
+	} else {
+		attemptTimeout = ra.nonStreamAttemptTimeout()
+		if attemptTimeout.Duration > 0 {
+			var release func()
+			fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, attemptTimeout.Duration)
+			defer release()
+		}
 	}
 
 	relayMiddleware := &relayPipelineMiddleware{attempt: ra}
@@ -351,9 +378,12 @@ func (ra *relayAttempt) forwardWithAdapter(
 	if wantStream {
 		activity, touchActivity := newStreamActivitySignal()
 		ra.streamActivity = activity
-		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, false, touchActivity)
+		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, false, touchActivity, nil)
 	} else {
-		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, true, nil)
+		// 非流式在响应头到达时停表：LLM 上游的生成时间几乎全部消耗在
+		// 响应头之前，头到达后读 body 不再受 per-attempt 守卫约束
+		//（仍受字节上限与全局预算约束），避免误杀合法的大响应传输。
+		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, true, nil, stopFirstTokenGuard)
 	}
 
 	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(limitedHTTPClient)).
@@ -365,10 +395,13 @@ func (ra *relayAttempt) forwardWithAdapter(
 		).
 		Process(fwdCtx, ra.internalRequest.RawRequest)
 	if err != nil {
-		// 等待响应头阶段触发首字超时：此时尚未写客户端，返回明确错误以便切换下一通道。
+		// 等待响应头阶段触发首字/attempt 超时：此时尚未写客户端，返回明确错误以便切换下一通道。
 		if errors.Is(context.Cause(fwdCtx), errFirstTokenTimeout) {
-			ra.recordFirstTokenTimeout(firstTokenTimeout)
-			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamHeaders, relayMiddleware.upstreamResponseBody, firstTokenTimeout.Error(firstTokenTimeoutPhaseWaitingHeaders)
+			if wantStream {
+				ra.recordFirstTokenTimeout(firstTokenTimeout)
+				return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamHeaders, relayMiddleware.upstreamResponseBody, firstTokenTimeout.Error(firstTokenTimeoutPhaseWaitingHeaders)
+			}
+			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamHeaders, relayMiddleware.upstreamResponseBody, attemptTimeout.Error(firstTokenTimeoutPhaseWaitingHeaders)
 		}
 		return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamHeaders, relayMiddleware.upstreamResponseBody, err
 	}

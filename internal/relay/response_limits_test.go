@@ -33,7 +33,7 @@ func TestResponseLimitSurvivesAxonHTTPClientWrapping(t *testing.T) {
 				}, nil
 			})
 			client := &http.Client{Transport: base}
-			limited := httpClientWithResponseLimit(client, 4, true, nil)
+			limited := httpClientWithResponseLimit(client, 4, true, nil, nil)
 			axonClient := httpclient.NewHttpClientWithClient(limited)
 			_, err := axonClient.Do(context.Background(), &httpclient.Request{
 				Method:  http.MethodGet,
@@ -61,7 +61,7 @@ func TestStreamingResponseLimitOnlyCapsErrorsAndReportsRawActivity(t *testing.T)
 			ContentLength: int64(len("unlimited-stream")),
 		}, nil
 	})
-	client := httpClientWithResponseLimit(&http.Client{Transport: base}, 4, false, func() { activity.Add(1) })
+	client := httpClientWithResponseLimit(&http.Client{Transport: base}, 4, false, func() { activity.Add(1) }, nil)
 	response, err := client.Get("https://upstream.example/stream")
 	if err != nil {
 		t.Fatalf("stream GET error = %v", err)
@@ -89,7 +89,7 @@ func TestStreamingHTTPErrorBodyRemainsBounded(t *testing.T) {
 			ContentLength: -1,
 		}, nil
 	})
-	limited := httpClientWithResponseLimit(&http.Client{Transport: base}, 4, false, nil)
+	limited := httpClientWithResponseLimit(&http.Client{Transport: base}, 4, false, nil, nil)
 	axonClient := httpclient.NewHttpClientWithClient(limited)
 	_, err := axonClient.DoStream(context.Background(), &httpclient.Request{
 		Method:  http.MethodGet,

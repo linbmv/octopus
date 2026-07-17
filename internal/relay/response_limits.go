@@ -17,10 +17,15 @@ type responseLimitTransport struct {
 	maxBytes   int64
 	limitAll   bool
 	onActivity func()
+	onResponse func()
 }
 
 func (t *responseLimitTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := t.base.RoundTrip(request)
+	if err == nil && t.onResponse != nil {
+		// 响应头已到达：per-attempt 守卫在此停表，body 读取阶段不再受其约束。
+		t.onResponse()
+	}
 	if err != nil || response == nil || response.Body == nil {
 		return response, err
 	}
@@ -38,7 +43,7 @@ func (t *responseLimitTransport) RoundTrip(request *http.Request) (*http.Respons
 	return response, nil
 }
 
-func httpClientWithResponseLimit(client *http.Client, maxBytes int64, limitAll bool, onActivity func()) *http.Client {
+func httpClientWithResponseLimit(client *http.Client, maxBytes int64, limitAll bool, onActivity func(), onResponse func()) *http.Client {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -52,6 +57,7 @@ func httpClientWithResponseLimit(client *http.Client, maxBytes int64, limitAll b
 		maxBytes:   maxBytes,
 		limitAll:   limitAll,
 		onActivity: onActivity,
+		onResponse: onResponse,
 	}
 	return &clone
 }
