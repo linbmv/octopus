@@ -172,8 +172,10 @@ func (ra *relayAttempt) hasFailoverAlternative() bool {
 	if ra.iter != nil && ra.iter.Index()+1 < ra.iter.Len() {
 		return true
 	}
+	// relayRun 是嵌入指针：nil 守卫必须保留（提升字段访问在 nil 时 panic），
+	// 但选择器直接用提升后的 iterStack（staticcheck QF1008）。
 	if ra.relayRun != nil {
-		for _, frame := range ra.relayRun.iterStack {
+		for _, frame := range ra.iterStack {
 			if frame == nil || frame.iter == nil || frame.iter == ra.iter {
 				continue
 			}
