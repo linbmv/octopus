@@ -183,13 +183,17 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		return ra.c.Writer.Written(), upstreamHeaders, upstreamResponseBody, fwdErr
 	}
 
-	recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
 	if updateErr := op.ChannelKeyUpdate(ra.usedKey); updateErr != nil {
 		log.WithContext(ctx).Warnw("failed to update channel key runtime state",
 			"channel_id", ra.channel.ID, "channel_key_id", ra.usedKey.ID, "error", updateErr)
 	}
 	// 使用完整的上游响应体进行智能错误决策。
 	decision := ra.decideError(upstreamStatusCode, upstreamHeaders, upstreamResponseBody, fwdErr)
+	// URL 冷却只针对通道级故障（网络/5xx/超时/软错误）。key 级（401/配额）与
+	// client 级错误与端点本身无关，误记会让多 URL 渠道被轮换到次优端点。
+	if shouldRecordURLFailure(decision) {
+		recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
+	}
 	ra.applyCompactCompatibilityDecision(ctx, decision)
 	upstreamSpan.RecordError(fwdErr)
 	upstreamSpan.SetStatus(codes.Error, fwdErr.Error())

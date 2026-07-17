@@ -193,3 +193,27 @@ func TestHasFailoverAlternative(t *testing.T) {
 		t.Fatal("最后一个 key 且无候选时应为 false")
 	}
 }
+
+// TestShouldRecordURLFailureFiltersByErrorClass 锁定 URL 冷却语义：
+// 只有通道级失败才是端点状态的证据。
+func TestShouldRecordURLFailureFiltersByErrorClass(t *testing.T) {
+	// 401 → key 级：换 URL 也一样，不应记 URL 冷却。
+	keyLevel := decideRelayError(401, nil, []byte(`{"error":{"message":"invalid api key"}}`), errors.New("upstream 401"))
+	if shouldRecordURLFailure(keyLevel) {
+		t.Fatalf("key 级错误不应记 URL 冷却, classification=%+v", keyLevel.Classification)
+	}
+
+	// 纯网络/传输故障（无 HTTP 状态）→ 通道级：应记 URL 冷却。
+	channelLevel := decideRelayError(0, nil, nil, errors.New("dial tcp: connection refused"))
+	if !shouldRecordURLFailure(channelLevel) {
+		t.Fatalf("通道级错误应记 URL 冷却, classification=%+v", channelLevel.Classification)
+	}
+
+	// 非流式 attempt 超时（挂死端点）→ 通道级：应记 URL 冷却。
+	timeoutErr := firstTokenTimeoutConfig{Duration: time.Second, Source: firstTokenTimeoutNonStreamAttempt}.
+		Error(firstTokenTimeoutPhaseWaitingHeaders)
+	timeoutDecision := decideRelayError(0, nil, nil, timeoutErr)
+	if !shouldRecordURLFailure(timeoutDecision) {
+		t.Fatalf("attempt 超时应记 URL 冷却, classification=%+v", timeoutDecision.Classification)
+	}
+}

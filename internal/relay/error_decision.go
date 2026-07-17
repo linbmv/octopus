@@ -168,6 +168,13 @@ func (ra *relayAttempt) decideError(statusCode int, headers http.Header, respons
 	})
 }
 
+// shouldRecordURLFailure 判定一次失败是否应给所选 base URL 记冷却。
+// 只有通道级分类（网络故障、5xx、超时、软错误）才是端点状态的证据；
+// key 级与 client 级失败换个 URL 也一样，不应影响 URL 优选。
+func shouldRecordURLFailure(decision ErrorDecision) bool {
+	return decision.Classification.Level == errorclass.ErrorLevelChannel
+}
+
 // isEndpointUnsupportedError is retained as a compatibility wrapper for the
 // focused endpoint tests. Compact routing uses isCompactEndpointUnsupported so
 // it can also inspect the response body and avoid model_not_found false marks.
