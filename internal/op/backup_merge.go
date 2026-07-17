@@ -94,6 +94,7 @@ func DBImportV2(ctx context.Context, dump *model.DBDump, options model.DBImportO
 			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.CapabilityEvidence{}).Error; err != nil {
 				return fmt.Errorf("clear capability evidence after import: %w", err)
 			}
+			bumpCapabilityEvidenceVersion()
 		}
 		return nil
 	})

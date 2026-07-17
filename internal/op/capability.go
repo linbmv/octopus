@@ -58,13 +58,17 @@ func CapabilityEvidenceUpsert(ctx context.Context, evidence *model.CapabilityEvi
 		"expires_at":        evidence.ExpiresAt,
 		"updated_at":        time.Now().UTC(),
 	}
-	return db.GetDB().WithContext(ctx).Clauses(clause.OnConflict{
+	err := db.GetDB().WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "channel_id"}, {Name: "channel_key_id"}, {Name: "model"},
 			{Name: "wire_protocol"}, {Name: "capability"}, {Name: "endpoint_fingerprint"},
 		},
 		DoUpdates: clause.Assignments(updates),
 	}).Create(evidence).Error
+	if err == nil {
+		bumpCapabilityEvidenceVersion()
+	}
+	return err
 }
 
 func CapabilityEvidenceList(ctx context.Context, channelID int) ([]model.CapabilityEvidence, error) {
@@ -85,15 +89,24 @@ func deleteCapabilityEvidenceChannelTx(tx *gorm.DB, channelID int) error {
 	if channelID <= 0 {
 		return nil
 	}
-	return tx.Where("channel_id = ?", channelID).Delete(&model.CapabilityEvidence{}).Error
+	err := tx.Where("channel_id = ?", channelID).Delete(&model.CapabilityEvidence{}).Error
+	if err == nil {
+		// 事务提交前递增：并发请求最多把旧数据以新版本缓存一个 TTL 窗口。
+		bumpCapabilityEvidenceVersion()
+	}
+	return err
 }
 
 func deleteCapabilityEvidenceKeysTx(tx *gorm.DB, channelID int, keyIDs []int) error {
 	if channelID <= 0 || len(keyIDs) == 0 {
 		return nil
 	}
-	return tx.Where("channel_id = ? AND channel_key_id IN ?", channelID, keyIDs).
+	err := tx.Where("channel_id = ? AND channel_key_id IN ?", channelID, keyIDs).
 		Delete(&model.CapabilityEvidence{}).Error
+	if err == nil {
+		bumpCapabilityEvidenceVersion()
+	}
+	return err
 }
 
 // RankChannelKeysByCapability keeps every available key as a fallback. Fresh
@@ -168,6 +181,12 @@ func capabilityKeyRanks(
 	}
 
 	now := time.Now().UTC()
+	version := capabilityEvidenceVersion.Load()
+	cacheKey := capabilityRankCacheKey(channel, keyIDs, modelName, required, endpoint)
+	if ranks, ok := capabilityRankCache.get(cacheKey, version, now); ok {
+		return ranks, true
+	}
+
 	var evidence []model.CapabilityEvidence
 	database := db.GetDB()
 	if database == nil {
@@ -221,6 +240,7 @@ func capabilityKeyRanks(
 		}
 	}
 
+	capabilityRankCache.put(cacheKey, rank, version, now)
 	return rank, true
 }
 
