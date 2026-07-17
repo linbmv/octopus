@@ -146,6 +146,21 @@ jobs:
       - name: Require clean tagged source after verification
         run: |
           set -euo pipefail
+          # 防篡改硬门禁：verify 阶段不得修改任何已跟踪的 tag 源文件。
+          modified="$(git status --porcelain=v1 --untracked-files=no)"
+          if [ -n "${modified}" ]; then
+            echo "::error::Verification modified tracked tagged sources:"
+            printf '%s\n' "${modified}"
+            exit 1
+          fi
+          # 验证工具可能留下非忽略的临时文件。先暴露并清理它们，避免未跟踪
+          # 的源文件参与后续发布构建；被 .gitignore 覆盖的依赖和报告会保留。
+          untracked="$(git ls-files --others --exclude-standard)"
+          if [ -n "${untracked}" ]; then
+            echo "::warning::Removing untracked files left by verification:"
+            printf '%s\n' "${untracked}"
+            git clean -fd --
+          fi
           status="$(git status --porcelain=v1 --untracked-files=all)"
           test -z "${status}"
 
@@ -164,6 +179,19 @@ jobs:
       - name: Require build and E2E to preserve tagged source
         run: |
           set -euo pipefail
+          # 同上：构建与 E2E 后已跟踪源文件必须与 tag 完全一致。
+          modified="$(git status --porcelain=v1 --untracked-files=no)"
+          if [ -n "${modified}" ]; then
+            echo "::error::Build or E2E modified tracked tagged sources:"
+            printf '%s\n' "${modified}"
+            exit 1
+          fi
+          untracked="$(git ls-files --others --exclude-standard)"
+          if [ -n "${untracked}" ]; then
+            echo "::warning::Removing untracked files left by build or E2E:"
+            printf '%s\n' "${untracked}"
+            git clean -fd --
+          fi
           status="$(git status --porcelain=v1 --untracked-files=all)"
           test -z "${status}"
 
