@@ -190,6 +190,8 @@ Next.js 16.2.10 是当前固定的最新版，但自身精确固定了旧 PostCS
     "non_stream_timeout_seconds": 600,
     "stream_first_event_timeout_seconds": 600,
     "stream_idle_timeout_seconds": 600,
+    "non_stream_attempt_timeout_seconds": 60,
+    "stream_cold_start_first_event_timeout_seconds": 30,
     "max_json_request_bytes": 33554432,
     "max_image_request_bytes": 67108864,
     "max_non_stream_response_bytes": 67108864
@@ -226,6 +228,8 @@ Next.js 16.2.10 是当前固定的最新版，但自身精确固定了旧 PostCS
 | `relay.non_stream_timeout_seconds` | 非流式上游请求跨全部重试的总时限（`0` 关闭，最大 86400 秒） | `600` |
 | `relay.stream_first_event_timeout_seconds` | 从发起上游请求到首个非空流事件的全局兜底时限（`0` 关闭，最大 86400 秒）；分组手动值优先，其次为已有样本的自适应值 | `600` |
 | `relay.stream_idle_timeout_seconds` | 首个非空事件后才启动的流空闲时限；每个上游事件或原始 heartbeat 都会重置（`0` 关闭，最大 86400 秒） | `600` |
+| `relay.non_stream_attempt_timeout_seconds` | 单次非流式尝试等待响应头的上限，仅在还有其他候选可故障转移时生效；挂死渠道会在此时限内让位而非吃满整个请求预算，最后一个候选保留完整 `non_stream_timeout_seconds`（`0` 关闭，最大 86400 秒） | `60` |
+| `relay.stream_cold_start_first_event_timeout_seconds` | 无自适应健康样本的流式尝试在仍有备选候选时的首事件冷启动上限，用于加速故障转移收敛；有手动值或健康样本时不介入，最后一个候选回落到全局值（`0` 关闭，最大 86400 秒） | `30` |
 | `relay.max_json_request_bytes` | 解码后 JSON 请求体上限；有效范围 1 字节–1 GiB | `33554432`（32 MiB） |
 | `relay.max_image_request_bytes` | 图片编辑/变体完整 multipart 请求体上限；有效范围 1 字节–1 GiB | `67108864`（64 MiB） |
 | `relay.max_non_stream_response_bytes` | 解码后上游非流式响应及流式 HTTP 错误响应体上限；成功流不设总字节上限 | `67108864`（64 MiB） |
