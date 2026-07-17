@@ -17,6 +17,8 @@ export const SettingKey = {
     CircuitBreakerThreshold: 'circuit_breaker_threshold',
     CircuitBreakerCooldown: 'circuit_breaker_cooldown',
     CircuitBreakerMaxCooldown: 'circuit_breaker_max_cooldown',
+    CircuitBreakerHalfOpenProbes: 'circuit_breaker_half_open_probes',
+    CircuitBreakerProbeLease: 'circuit_breaker_probe_lease',
     SmartHealthEnabled: 'smart_health_enabled',
     HealthWeightedBalancerEnabled: 'health_weighted_balancer_enabled',
     HealthMinAdaptiveTimeout: 'health_min_adaptive_timeout',

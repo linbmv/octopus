@@ -8,6 +8,7 @@ import (
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
@@ -243,6 +244,9 @@ func (r *relayRun) buildRealAttempt(
 		}
 		outAdapter, err := newOutbound(channel.Type, r.internalRequest, baseURL, usedKey.ChannelKey)
 		if err != nil {
+			// SkipCircuitBreak 通过时可能已把该 key 置为半开试探者；此处未发出
+			// 真实请求即放弃，必须归还试探名额，否则半开态会滞留到租约超时。
+			balancer.RecordProbeAbort(channel.ID, usedKey.ID, item.ModelName)
 			r.iter.Skip(channel.ID, usedKey.ID, channel.Name, err.Error())
 			continue
 		}

@@ -22,6 +22,8 @@ const (
 	SettingKeyCircuitBreakerThreshold        SettingKey = "circuit_breaker_threshold"          // 熔断触发阈值（连续失败次数）
 	SettingKeyCircuitBreakerCooldown         SettingKey = "circuit_breaker_cooldown"           // 熔断基础冷却时间（秒）
 	SettingKeyCircuitBreakerMaxCooldown      SettingKey = "circuit_breaker_max_cooldown"       // 熔断最大冷却时间（秒），指数退避上限
+	SettingKeyCircuitBreakerHalfOpenProbes   SettingKey = "circuit_breaker_half_open_probes"   // 半开态并发试探数上限
+	SettingKeyCircuitBreakerProbeLease       SettingKey = "circuit_breaker_probe_lease"        // 半开试探租约（秒）：在途试探超时未结算则放行新试探
 	SettingKeySmartHealthEnabled             SettingKey = "smart_health_enabled"               // 是否启用智能健康系统
 	SettingKeyHealthWeightedBalancerEnabled  SettingKey = "health_weighted_balancer_enabled"   // 是否启用健康权重参与加权调度
 	SettingKeyHealthMinAdaptiveTimeout       SettingKey = "health_min_adaptive_timeout"        // 自动首字超时下限（秒）
@@ -66,6 +68,8 @@ var settingSchemas = map[SettingKey]settingSchema{
 	SettingKeyCircuitBreakerThreshold:        {validate: validateIntegerRange(1, math.MaxInt32, "failures")},
 	SettingKeyCircuitBreakerCooldown:         {validate: validateIntegerRange(1, maxDurationValue/int64(time.Second), "seconds")},
 	SettingKeyCircuitBreakerMaxCooldown:      {validate: validateIntegerRange(1, maxDurationValue/int64(time.Second), "seconds")},
+	SettingKeyCircuitBreakerHalfOpenProbes:   {validate: validateIntegerRange(1, 64, "probes")},
+	SettingKeyCircuitBreakerProbeLease:       {validate: validateIntegerRange(1, 86400, "seconds")},
 	SettingKeySmartHealthEnabled:             {validate: validateBoolean},
 	SettingKeyHealthWeightedBalancerEnabled:  {validate: validateBoolean},
 	SettingKeyHealthMinAdaptiveTimeout:       {validate: validateIntegerRange(1, maxDurationValue/int64(time.Second), "seconds")},
@@ -92,6 +96,8 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyCircuitBreakerThreshold, Value: "2"},                             // 默认连续失败2次触发熔断
 		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},                             // 默认基础冷却60秒
 		{Key: SettingKeyCircuitBreakerMaxCooldown, Value: "600"},                         // 默认最大冷却600秒（10分钟）
+		{Key: SettingKeyCircuitBreakerHalfOpenProbes, Value: "2"},                        // 半开态默认允许2个并发试探
+		{Key: SettingKeyCircuitBreakerProbeLease, Value: "60"},                           // 试探租约默认60秒，超时未结算即放行新试探
 		{Key: SettingKeySmartHealthEnabled, Value: "true"},                               // 默认启用智能健康系统
 		{Key: SettingKeyHealthWeightedBalancerEnabled, Value: "false"},                   // 默认关闭健康度参与调度，显式启用后才改变候选顺序
 		{Key: SettingKeyHealthMinAdaptiveTimeout, Value: "15"},                           // 自动首字超时不低于15秒

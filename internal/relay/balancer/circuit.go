@@ -34,7 +34,12 @@ type circuitEntry struct {
 	LastFailureTime     time.Time
 	LastTouched         time.Time
 	TripCount           int // 累计熔断触发次数（用于指数退避）
-	mu                  sync.Mutex
+	// HalfOpenProbes 记录当前在途试探数。试探者可能在到达上游前被跳过或被
+	// 客户端取消（不会走到 RecordSuccess/RecordFailure），必须通过
+	// RecordProbeAbort 或租约超时归还名额，否则条目会永久卡在 HalfOpen。
+	HalfOpenProbes     int
+	HalfOpenLastProbe  time.Time
+	mu                 sync.Mutex
 }
 
 type breakerKey struct {
@@ -201,6 +206,27 @@ func getThreshold() int64 {
 	return int64(v)
 }
 
+// getHalfOpenMaxProbes 半开态允许的并发试探数上限（默认 2）。
+// >1 可避免恢复期"唯一可用模型"被单试探串行化，导致其余请求全部失败。
+func getHalfOpenMaxProbes() int {
+	v, err := op.SettingGetInt(model.SettingKeyCircuitBreakerHalfOpenProbes)
+	if err != nil || v <= 0 {
+		return 2
+	}
+	return v
+}
+
+// getProbeLease 半开试探租约时长（默认 60s）。
+// 在途试探超过该时长仍无终局结论时，视为试探者已丢失（如取消后未结算的
+// 历史路径或未来新增的早退路径），允许放行新的试探，防止半开态永久冻结。
+func getProbeLease() time.Duration {
+	v, err := op.SettingGetInt(model.SettingKeyCircuitBreakerProbeLease)
+	if err != nil || v <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(v) * time.Second
+}
+
 // GetCooldown 获取当前冷却时间（带指数退避）
 func GetCooldown(tripCount int) time.Duration {
 	base, err := op.SettingGetInt(model.SettingKeyCircuitBreakerCooldown)
@@ -255,6 +281,8 @@ func IsTripped(channelID, keyID int, modelName string) (tripped bool, remaining 
 		elapsed := now.Sub(entry.LastFailureTime)
 		if elapsed >= cooldown {
 			entry.State = StateHalfOpen
+			entry.HalfOpenProbes = 1
+			entry.HalfOpenLastProbe = now
 			log.Infof("circuit breaker [%s] Open -> HalfOpen (cooldown %v elapsed)", key, cooldown)
 			tripped = false
 		} else {
@@ -264,8 +292,20 @@ func IsTripped(channelID, keyID int, modelName string) (tripped bool, remaining 
 		}
 
 	case StateHalfOpen:
-		// 已有试探请求在进行中，拒绝其他请求
-		tripped = true
+		// 允许有限并发试探；在途试探超过租约仍无结论时视为丢失，放行新试探。
+		// 这是防止"试探者被取消/跳过后未结算 → 半开态永久拒绝一切请求"的兜底。
+		switch {
+		case entry.HalfOpenProbes < getHalfOpenMaxProbes():
+			entry.HalfOpenProbes++
+			entry.HalfOpenLastProbe = now
+			tripped = false
+		case now.Sub(entry.HalfOpenLastProbe) >= getProbeLease():
+			entry.HalfOpenLastProbe = now
+			log.Warnf("circuit breaker [%s] probe lease expired, granting replacement probe", key)
+			tripped = false
+		default:
+			tripped = true
+		}
 
 	default:
 		tripped = false
@@ -292,9 +332,52 @@ func RecordSuccess(channelID, keyID int, modelName string) {
 	entry.State = StateClosed
 	entry.ConsecutiveFailures = 0
 	entry.TripCount = 0
+	entry.HalfOpenProbes = 0
+	entry.HalfOpenLastProbe = time.Time{}
 	entry.LastTouched = circuitNow()
 	entry.mu.Unlock()
 	globalBreaker.touch(key, entry)
+}
+
+// RecordProbeAbort 归还一个半开试探名额但不给出成败结论。
+// 用于试探请求未到达上游即终止的路径：出站适配器构造失败、渠道限流预留失败、
+// 客户端取消、client 级错误、自适应首字超时等。这些情况不能证明通道恢复或
+// 仍然故障，但必须释放名额，否则半开态会在租约期内拒绝后续试探。
+func RecordProbeAbort(channelID, keyID int, modelName string) {
+	key := circuitKey(channelID, keyID, modelName)
+	entry := globalBreaker.get(key)
+	if entry == nil {
+		return
+	}
+
+	entry.mu.Lock()
+	if entry.State == StateHalfOpen && entry.HalfOpenProbes > 0 {
+		entry.HalfOpenProbes--
+		log.Infof("circuit breaker [%s] probe aborted without verdict (in-flight probes=%d)", key, entry.HalfOpenProbes)
+	}
+	entry.LastTouched = circuitNow()
+	entry.mu.Unlock()
+	globalBreaker.touch(key, entry)
+}
+
+// ResetCircuit 立即清除指定 (channel, model) 的全部熔断状态（跨所有 key）。
+// modelName 为空时清除该渠道全部模型。用于手动启用分组/渠道成员后要求
+// 立即投入使用的场景：清除后下一个请求按 Closed 正常放行，不再等待冷却。
+func ResetCircuit(channelID int, modelName string) {
+	globalBreaker.resetCircuit(channelID, modelName)
+}
+
+func (s *breakerState) resetCircuit(channelID int, modelName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for element := s.order.Front(); element != nil; {
+		next := element.Next()
+		key := element.Value.(*breakerRecord).key
+		if key.ChannelID == channelID && (modelName == "" || key.ModelName == modelName) {
+			s.removeElementLocked(element)
+		}
+		element = next
+	}
 }
 
 // RecordFailure 记录失败，可能触发熔断
@@ -323,6 +406,7 @@ func RecordFailure(channelID, keyID int, modelName string) {
 		entry.State = StateOpen
 		entry.TripCount++
 		entry.ConsecutiveFailures = 0 // 重新开始计数
+		entry.HalfOpenProbes = 0
 		log.Warnf("circuit breaker [%s] HalfOpen -> Open (probe failed, tripCount=%d, cooldown=%v)",
 			key, entry.TripCount, GetCooldown(entry.TripCount))
 
