@@ -48,6 +48,11 @@ named volume。若需 bind mount，请先执行
 限制应根据实际负载调整或移除。旧版 root 镜像创建的数据也需要在升级前完成这次
 所有权迁移；容器不会在每次启动时递归执行 `chown`。
 
+**镜像通道说明**：`latest` / `latest-alpine` 与 `vX.Y.Z` 由正式 tag 发布流程产出
+（带 Cosign 签名与 SBOM attestation）。`edge` / `edge-alpine` 与 `dev-<sha>` 是开发
+通道镜像——dev 分支每次通过 Quality Gate 后自动构建，包含最新改动但未经签名，
+适合尝鲜与回归验证，不建议生产环境使用。
+
 或者使用 docker compose 运行
 
 ```bash

@@ -49,6 +49,12 @@ CPU, memory, and process limits to match the workload. Data created by an older
 root-running image also needs this one-time ownership migration before upgrade;
 the container deliberately does not recursively `chown` it on every start.
 
+**Image channels**: `latest` / `latest-alpine` and `vX.Y.Z` come from the formal
+tag release pipeline (Cosign-signed with SBOM attestations). `edge` /
+`edge-alpine` and `dev-<sha>` are the development channel — rebuilt whenever the
+dev branch passes the Quality Gate. They carry the newest changes but are
+unsigned; use them for previews and regression testing, not production.
+
 Or use docker compose:
 
 ```bash

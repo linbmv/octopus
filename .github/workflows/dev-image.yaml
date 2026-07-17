@@ -1,0 +1,119 @@
+name: Dev Image
+
+# 开发通道镜像：Quality Gate 在 dev 分支成功后，构建并发布 edge / dev-<sha>
+# 镜像，供测试用户拉取最新代码。绝不发布 latest / v* —— 那些是正式
+# release workflow（v* tag，带 Cosign 签名与 SBOM attestation）的专属输出。
+# 本通道镜像未经签名，仅供尝鲜与回归验证。
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_run:
+    workflows: [Quality Gate]
+    types: [completed]
+    branches: [dev]
+
+permissions: {}
+
+concurrency:
+  group: dev-image-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  dev-image:
+    name: Build and publish dev channel image
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout gated commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.5'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+        with:
+          version: '9.15.9'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build container binaries with the release script
+        run: |
+          set -euo pipefail
+          bash scripts/build.sh build linux x86_64
+          bash scripts/build.sh build linux arm64
+          mkdir -p build/docker/linux/amd64 build/docker/linux/arm64
+          install -m 0555 build/bin/octopus-linux-x86_64 build/docker/linux/amd64/octopus
+          install -m 0555 build/bin/octopus-linux-arm64 build/docker/linux/arm64/octopus
+
+      - name: Compute image references
+        id: image
+        run: |
+          set -euo pipefail
+          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >>"${GITHUB_OUTPUT}"
+          echo "shortsha=$(git rev-parse --short "${{ github.event.workflow_run.head_sha }}")" >>"${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Debian (distroless) dev image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: scripts/dockerfiles/Dockerfile.debian
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:edge
+            ${{ steps.image.outputs.name }}:dev-${{ steps.image.outputs.shortsha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.title=octopus
+            org.opencontainers.image.version=edge
+          provenance: false
+          sbom: false
+
+      - name: Build and push Alpine dev image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: scripts/dockerfiles/Dockerfile.alpine
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:edge-alpine
+            ${{ steps.image.outputs.name }}:dev-${{ steps.image.outputs.shortsha }}-alpine
+          labels: |
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.title=octopus
+            org.opencontainers.image.version=edge
+          provenance: false
+          sbom: false
