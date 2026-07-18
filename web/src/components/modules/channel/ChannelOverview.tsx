@@ -2,7 +2,7 @@
 
 import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, ShieldAlert, Trash2, TrendingUp, XCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useChannelCircuit, useResetChannelCircuit, type Channel } from '@/api/endpoints/channel';
+import { useChannelCircuit, useChannelRuntimeURLs, useResetChannelCircuit, type Channel } from '@/api/endpoints/channel';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { ChannelErrorOverview } from '@/components/modules/error-observability';
 import { Badge } from '@/components/ui/badge';
@@ -34,6 +34,11 @@ export function ChannelOverview({
                     <SummaryMetric icon={FileText} label={t('metrics.totalToken')} value={stats.total_token.formatted.value} unit={stats.total_token.formatted.unit} color="text-chart-3" />
                     <SummaryMetric icon={DollarSign} label={t('metrics.totalCost')} value={stats.total_cost.formatted.value} unit={stats.total_cost.formatted.unit} color="text-chart-5" />
                 </dl>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <ShieldAlert className="size-3.5" />
+                    <span>{t('policyProfile')}</span>
+                    <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{t(`policyProfiles.${channel.policy_profile}`)}</Badge>
+                </div>
 
                 <ChannelErrorOverview channelId={channel.id} />
                 <ChannelCircuitPanel channelId={channel.id} />
@@ -114,15 +119,24 @@ function ChannelCircuitPanel({ channelId }: { channelId: number }) {
 
 function RuntimeLists({ channel }: { channel: Channel }) {
     const t = useTranslations('channel.detail');
+    const { data: runtimeURLs } = useChannelRuntimeURLs(channel.id);
     return (
         <>
             <section className="space-y-3">
                 <SectionTitle icon={Globe}>{t('sections.baseUrls')}</SectionTitle>
                 <div className="overflow-hidden rounded-2xl border bg-card">
-                    {channel.base_urls?.map((url, index) => (
+                    {runtimeURLs?.length ? runtimeURLs.map((url) => (
+                        <div key={url.url} className="flex items-center gap-3 border-b p-3 transition-colors last:border-0 hover:bg-accent/5 sm:p-4">
+                            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{url.rank || '-'}</span>
+                            <span className="min-w-0 flex-1 truncate font-mono text-sm select-all" title={url.url}>{url.url}</span>
+                            <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:inline">{t(`urlReasons.${url.selection_reason}`)}</span>
+                            {url.cooldown_remaining_seconds ? <Badge variant="secondary" className="h-5 shrink-0 bg-red-500/15 px-1.5 text-[10px] text-red-700 dark:text-red-400">{t('urlCooldown', { seconds: url.cooldown_remaining_seconds })}</Badge> : null}
+                            {url.latency_ms ? <Badge variant="secondary" className={cn('h-5 shrink-0 px-1.5 text-[10px]', url.latency_ms < 300 ? 'bg-green-500/15 text-green-700 dark:text-green-400' : url.latency_ms < 1000 ? 'bg-orange-500/15 text-orange-700 dark:text-orange-400' : 'bg-red-500/15 text-red-700 dark:text-red-400')}>{url.latency_ms}ms</Badge> : <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">{t('urlUnmeasured')}</Badge>}
+                        </div>
+                    )) : channel.base_urls?.map((url, index) => (
                         <div key={`${url.url}-${index}`} className="flex items-center justify-between border-b p-3 transition-colors last:border-0 hover:bg-accent/5 sm:p-4">
                             <span className="min-w-0 truncate font-mono text-sm select-all">{url.url}</span>
-                            <Badge variant="secondary" className={cn('h-5 px-1.5 text-xs', url.delay < 300 ? 'bg-green-500/15 text-green-700 dark:text-green-400' : url.delay < 1000 ? 'bg-orange-500/15 text-orange-700 dark:text-orange-400' : 'bg-red-500/15 text-red-700 dark:text-red-400')}>{url.delay}ms</Badge>
+                            <Badge variant="secondary" className="h-5 px-1.5 text-xs">{url.delay}ms</Badge>
                         </div>
                     ))}
                     {!channel.base_urls?.length && <div className="p-4 text-center text-sm text-muted-foreground">{t('noBaseUrls')}</div>}

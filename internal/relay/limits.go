@@ -1,12 +1,29 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 )
+
+type channelRequestLimitError struct {
+	message string
+}
+
+func (e *channelRequestLimitError) Error() string {
+	if e == nil {
+		return "channel request limit reached"
+	}
+	return e.message
+}
+
+func isChannelRequestLimitError(err error) bool {
+	var target *channelRequestLimitError
+	return errors.As(err, &target)
+}
 
 type channelRPMReservation struct {
 	Allowed    bool
@@ -117,11 +134,16 @@ func reserveChannelLimits(channel *model.Channel) (func(), string, bool) {
 	if !ok {
 		return nil, fmt.Sprintf("channel concurrency limit reached: active=%d limit=%d", active, limit), false
 	}
+	return release, "", true
+}
 
+func reserveChannelRPM(channel *model.Channel) (string, bool) {
+	if channel == nil {
+		return "", true
+	}
 	reservation := globalChannelRPMLimiter.reserve(channel.ID, channel.RPMLimit)
 	if reservation.Allowed {
-		return release, "", true
+		return "", true
 	}
-	release()
-	return nil, fmt.Sprintf("channel RPM limit reached: retry_after=%ds", int(reservation.RetryAfter.Seconds())), false
+	return fmt.Sprintf("channel RPM limit reached: retry_after=%ds", int(reservation.RetryAfter.Seconds())), false
 }

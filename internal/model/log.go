@@ -28,12 +28,16 @@ type ChannelAttempt struct {
 	ChannelID        int               `json:"channel_id"`
 	ChannelKeyID     int               `json:"channel_key_id,omitempty"`
 	ChannelKeyRemark string            `json:"channel_key_remark,omitempty"`
+	BaseURL          string            `json:"base_url,omitempty"`
 	ChannelName      string            `json:"channel_name"`
 	ModelName        string            `json:"model_name"`
 	AttemptNum       int               `json:"attempt_num"`
 	Status           AttemptStatus     `json:"status"`
 	Duration         int               `json:"duration"`
 	Sticky           bool              `json:"sticky,omitempty"`
+	HealthPenalty    bool              `json:"health_penalty"`
+	Action           string            `json:"action,omitempty"`
+	SelectionReason  string            `json:"selection_reason,omitempty"`
 	Msg              string            `json:"msg,omitempty"`
 	ErrorLevel       AttemptErrorLevel `json:"error_level,omitempty"`
 	ErrorReason      string            `json:"error_reason,omitempty"`

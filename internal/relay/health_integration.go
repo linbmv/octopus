@@ -33,6 +33,15 @@ func InitHealthSystem(config health.HealthConfig) {
 	balancer.SetHealthWeightFunc(healthWeightForGroupItem)
 }
 
+// ReloadHealthSettings hot-applies persisted health policy changes while
+// retaining runtime samples and persistence ownership.
+func ReloadHealthSettings() {
+	if healthManager == nil {
+		return
+	}
+	healthManager.UpdateConfig(applyHealthSettings(health.DefaultHealthConfig()))
+}
+
 // RefreshHealthMetrics 刷新 Prometheus 指标快照。
 func RefreshHealthMetrics() {
 	if healthMetrics == nil || healthManager == nil {

@@ -18,6 +18,24 @@ const (
 
 const ChannelTypeDoubao llm.APIFormat = "doubao"
 
+type ChannelPolicyProfile string
+
+const (
+	ChannelPolicyStandard       ChannelPolicyProfile = "standard"
+	ChannelPolicyOfficial       ChannelPolicyProfile = "official"
+	ChannelPolicyTrustedProxy   ChannelPolicyProfile = "trusted_proxy"
+	ChannelPolicyUntrustedProxy ChannelPolicyProfile = "untrusted_proxy"
+)
+
+func (p ChannelPolicyProfile) Valid() bool {
+	switch p {
+	case ChannelPolicyStandard, ChannelPolicyOfficial, ChannelPolicyTrustedProxy, ChannelPolicyUntrustedProxy:
+		return true
+	default:
+		return false
+	}
+}
+
 type Channel struct {
 	ID               int               `json:"id" gorm:"primaryKey"`
 	UUID             string            `json:"uuid,omitempty" gorm:"size:36;uniqueIndex"`
@@ -43,7 +61,8 @@ type Channel struct {
 	MatchRegex       *string           `json:"match_regex"`
 	// UserAgent 覆盖该渠道出站请求的 User-Agent。留空则用默认浏览器 UA。
 	// 部分上游按客户端标识放行（如"仅 Claude Code 客户端"的中转站），需在此填对应 UA。
-	UserAgent string `json:"user_agent" gorm:"default:''"`
+	UserAgent     string               `json:"user_agent" gorm:"default:''"`
+	PolicyProfile ChannelPolicyProfile `json:"policy_profile" gorm:"size:32;not null;default:standard"`
 }
 
 type BaseUrl struct {
@@ -81,32 +100,34 @@ type ChannelKey struct {
 	ChannelKey       string  `json:"channel_key"`
 	StatusCode       int     `json:"status_code"`
 	LastUseTimeStamp int64   `json:"last_use_time_stamp"`
+	RetryAfterUntil  int64   `json:"retry_after_until"`
 	TotalCost        float64 `json:"total_cost"`
 	Remark           string  `json:"remark"`
 }
 
 // ChannelUpdateRequest 渠道更新请求 - 仅包含变更的数据
 type ChannelUpdateRequest struct {
-	ID               int                `json:"id" binding:"required"`
-	Name             *string            `json:"name,omitempty"`
-	Type             *llm.APIFormat     `json:"type,omitempty"`
-	Enabled          *bool              `json:"enabled,omitempty"`
-	BaseUrls         *[]BaseUrl         `json:"base_urls,omitempty"`
-	Model            *string            `json:"model,omitempty"`
-	CustomModel      *string            `json:"custom_model,omitempty"`
-	Proxy            *bool              `json:"proxy,omitempty"`
-	AutoSync         *bool              `json:"auto_sync,omitempty"`
-	AutoGroup        *AutoGroupType     `json:"auto_group,omitempty"`
-	CustomHeader     *[]CustomHeader    `json:"custom_header,omitempty"`
-	HeaderRules      *[]HeaderRule      `json:"header_rules,omitempty"`
-	JSONRewriteRules *[]JSONRewriteRule `json:"json_rewrite_rules,omitempty"`
-	ChannelProxy     *string            `json:"channel_proxy,omitempty"`
-	ParamOverride    *string            `json:"param_override,omitempty"`
-	RawPassthrough   *bool              `json:"raw_passthrough,omitempty"`
-	RPMLimit         *int               `json:"rpm_limit,omitempty"`
-	MaxConcurrency   *int               `json:"max_concurrency,omitempty"`
-	MatchRegex       *string            `json:"match_regex,omitempty"`
-	UserAgent        *string            `json:"user_agent,omitempty"`
+	ID               int                   `json:"id" binding:"required"`
+	Name             *string               `json:"name,omitempty"`
+	Type             *llm.APIFormat        `json:"type,omitempty"`
+	Enabled          *bool                 `json:"enabled,omitempty"`
+	BaseUrls         *[]BaseUrl            `json:"base_urls,omitempty"`
+	Model            *string               `json:"model,omitempty"`
+	CustomModel      *string               `json:"custom_model,omitempty"`
+	Proxy            *bool                 `json:"proxy,omitempty"`
+	AutoSync         *bool                 `json:"auto_sync,omitempty"`
+	AutoGroup        *AutoGroupType        `json:"auto_group,omitempty"`
+	CustomHeader     *[]CustomHeader       `json:"custom_header,omitempty"`
+	HeaderRules      *[]HeaderRule         `json:"header_rules,omitempty"`
+	JSONRewriteRules *[]JSONRewriteRule    `json:"json_rewrite_rules,omitempty"`
+	ChannelProxy     *string               `json:"channel_proxy,omitempty"`
+	ParamOverride    *string               `json:"param_override,omitempty"`
+	RawPassthrough   *bool                 `json:"raw_passthrough,omitempty"`
+	RPMLimit         *int                  `json:"rpm_limit,omitempty"`
+	MaxConcurrency   *int                  `json:"max_concurrency,omitempty"`
+	MatchRegex       *string               `json:"match_regex,omitempty"`
+	UserAgent        *string               `json:"user_agent,omitempty"`
+	PolicyProfile    *ChannelPolicyProfile `json:"policy_profile,omitempty"`
 
 	KeysToAdd    []ChannelKeyAddRequest    `json:"keys_to_add,omitempty"`
 	KeysToUpdate []ChannelKeyUpdateRequest `json:"keys_to_update,omitempty"`
@@ -156,6 +177,11 @@ func (k ChannelKey) IsAvailable(nowSec int64) bool {
 	if !k.Enabled || k.ChannelKey == "" {
 		return false
 	}
+	if k.StatusCode == 429 && k.RetryAfterUntil > 0 {
+		return nowSec >= k.RetryAfterUntil
+	}
+	// Backward compatibility for runtime state written before RetryAfterUntil
+	// existed. New 429 responses always persist the provider-derived deadline.
 	if k.StatusCode == 429 && k.LastUseTimeStamp > 0 {
 		return nowSec-k.LastUseTimeStamp >= int64(5*time.Minute/time.Second)
 	}

@@ -366,6 +366,34 @@ func TestHealthManager_Concurrency(t *testing.T) {
 	}
 }
 
+func TestHealthManagerUpdateConfigPreservesEvidence(t *testing.T) {
+	manager := NewHealthManager(DefaultHealthConfig())
+	key := HealthKey{ChannelID: 7, KeyID: 11, Model: "reasoning-model"}
+	manager.RecordSuccess(key.ChannelID, key.KeyID, key.Model, 3*time.Second)
+	before, ok := manager.Get(key)
+	if !ok {
+		t.Fatal("health state was not created")
+	}
+
+	updated := DefaultHealthConfig()
+	updated.ShadowMode = true
+	updated.MinAdaptiveTimeout = 23 * time.Second
+	updated.WindowSize = 10
+	manager.UpdateConfig(updated)
+
+	after, ok := manager.Get(key)
+	if !ok || after != before {
+		t.Fatal("UpdateConfig replaced existing health evidence")
+	}
+	stats := after.GetStats()
+	if stats.SuccessCount != 1 || stats.TotalCount != 1 {
+		t.Fatalf("evidence changed after hot reload: %+v", stats)
+	}
+	if after.Config.MinAdaptiveTimeout != 23*time.Second || !manager.IsShadowMode() {
+		t.Fatalf("updated policy was not applied: timeout=%v shadow=%t", after.Config.MinAdaptiveTimeout, manager.IsShadowMode())
+	}
+}
+
 // BenchmarkHealthManager_RecordSuccess 性能测试
 func BenchmarkHealthManager_RecordSuccess(b *testing.B) {
 	config := DefaultHealthConfig()

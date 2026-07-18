@@ -17,6 +17,7 @@ import (
 	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
@@ -96,6 +97,7 @@ func setSetting(c *gin.Context) {
 		respondInternalError(c, "reconfigure setting task failed", err)
 		return
 	}
+	relay.ReloadHealthSettings()
 	resp.Success(c, setting)
 }
 

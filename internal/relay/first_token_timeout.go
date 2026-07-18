@@ -27,6 +27,7 @@ const (
 	// firstTokenTimeoutNonStreamAttempt 限制单次非流式尝试等待响应头的时长，
 	// 仅在存在其他候选时生效；最后一个候选保留完整请求预算。
 	firstTokenTimeoutNonStreamAttempt
+	firstTokenTimeoutBudget
 )
 
 type firstTokenTimeoutConfig struct {
@@ -53,6 +54,8 @@ func (c firstTokenTimeoutConfig) Reason() string {
 		return "cold_start_first_event_timeout"
 	case firstTokenTimeoutNonStreamAttempt:
 		return "non_stream_attempt_timeout"
+	case firstTokenTimeoutBudget:
+		return "stream_first_event_budget"
 	default:
 		return "first_token_timeout"
 	}
@@ -121,9 +124,33 @@ func newFirstTokenGuard(parent context.Context, timeout time.Duration) (ctx cont
 	return cctx, stop, release
 }
 
+// newFirstTokenShadowObserver records that an adaptive threshold elapsed but
+// never cancels the request. It lets operators evaluate a proposed timeout
+// against live traffic without changing routing or client-visible behavior.
+func newFirstTokenShadowObserver(timeout time.Duration, onElapsed func()) (stop func(), release func()) {
+	var settled atomic.Bool
+	timer := time.AfterFunc(timeout, func() {
+		if settled.CompareAndSwap(false, true) && onElapsed != nil {
+			onElapsed()
+		}
+	})
+	stop = func() {
+		if settled.CompareAndSwap(false, true) {
+			timer.Stop()
+		}
+	}
+	release = stop
+	return stop, release
+}
+
 func (ra *relayAttempt) firstTokenTimeout() firstTokenTimeoutConfig {
+	enforced, _ := ra.firstTokenTimeoutPolicies()
+	return enforced
+}
+
+func (ra *relayAttempt) firstTokenTimeoutPolicies() (enforced firstTokenTimeoutConfig, shadow firstTokenTimeoutConfig) {
 	if ra == nil {
-		return firstTokenTimeoutConfig{}
+		return firstTokenTimeoutConfig{}, firstTokenTimeoutConfig{}
 	}
 	adaptiveTimeout := time.Duration(0)
 	hasAdaptiveTimeout := false
@@ -136,7 +163,15 @@ func (ra *relayAttempt) firstTokenTimeout() firstTokenTimeoutConfig {
 	if ra.firstTokenPolicyGroup != nil {
 		manualTimeout = ra.firstTokenPolicyGroup.FirstTokenTimeOut
 	}
-	return selectFirstTokenTimeout(
+	if manualTimeout == 0 && hasAdaptiveTimeout && healthManager.IsShadowMode() {
+		shadow = firstTokenTimeoutConfig{Duration: adaptiveTimeout, Source: firstTokenTimeoutAdaptive}
+		// Shadow mode observes only the adaptive threshold. Preserve the global
+		// production safety guard, but do not substitute the aggressive cold-start
+		// timeout because this candidate already has mature health samples.
+		enforced = selectFirstTokenTimeout(0, 0, false, relayConf.StreamFirstEventTimeoutSeconds, 0, false)
+		return enforced, shadow
+	}
+	enforced = selectFirstTokenTimeout(
 		manualTimeout,
 		adaptiveTimeout,
 		hasAdaptiveTimeout,
@@ -144,6 +179,7 @@ func (ra *relayAttempt) firstTokenTimeout() firstTokenTimeoutConfig {
 		relayConf.StreamColdStartFirstEventTimeoutSeconds,
 		ra.hasFailoverAlternative(),
 	)
+	return enforced, firstTokenTimeoutConfig{}
 }
 
 // nonStreamAttemptTimeout 返回单次非流式尝试的响应头等待上限。
@@ -222,15 +258,22 @@ func (ra *relayAttempt) recordFirstTokenTimeout(timeout firstTokenTimeoutConfig)
 	if timeout.Source != firstTokenTimeoutAdaptive || timeout.Duration <= 0 || !smartHealthEnabled() || healthManager == nil {
 		return
 	}
-	// Shadow mode: 只记录统计，不触发实际超时切换
-	if healthManager.IsShadowMode() {
-		healthManager.RecordShadowTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
+	healthManager.RecordTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel, timeout.Duration)
+}
+
+func (ra *relayAttempt) recordShadowFirstTokenTimeout(timeout firstTokenTimeoutConfig) {
+	if timeout.Source != firstTokenTimeoutAdaptive || timeout.Duration <= 0 || !smartHealthEnabled() || healthManager == nil {
 		return
 	}
-	healthManager.RecordTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel, timeout.Duration)
+	healthManager.RecordShadowTimeout(ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
 }
 
 func (ra *relayAttempt) isAdaptiveFirstTokenTimeout(err error) bool {
 	var timeoutErr *firstTokenTimeoutError
 	return errors.As(err, &timeoutErr) && timeoutErr.config.Source == firstTokenTimeoutAdaptive
+}
+
+func isFirstTokenBudgetTimeout(err error) bool {
+	var timeoutErr *firstTokenTimeoutError
+	return errors.As(err, &timeoutErr) && timeoutErr.config.Source == firstTokenTimeoutBudget
 }

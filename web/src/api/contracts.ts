@@ -4,6 +4,7 @@ export type APIFormat = string;
 export type AttemptErrorLevel = 'key' | 'channel' | 'client';
 export type AttemptStatus = 'success' | 'failed' | 'client_canceled' | 'circuit_break' | 'skipped' | 'redirect';
 export type AutoGroupType = number;
+export type ChannelPolicyProfile = 'standard' | 'official' | 'trusted_proxy' | 'untrusted_proxy';
 export type DBImportConflictPolicy = 'reject' | 'skip' | 'replace' | 'merge';
 export type GroupMode = number;
 export type SettingKey = string;
@@ -48,18 +49,23 @@ export interface Channel {
   stats?: StatsChannel | null;
   match_regex?: string | null;
   user_agent: string;
+  policy_profile: ChannelPolicyProfile;
 }
 
 export interface ChannelAttempt {
   channel_id: number;
   channel_key_id?: number;
   channel_key_remark?: string;
+  base_url?: string;
   channel_name: string;
   model_name: string;
   attempt_num: number;
   status: AttemptStatus;
   duration: number;
   sticky?: boolean;
+  health_penalty: boolean;
+  action?: string;
+  selection_reason?: string;
   msg?: string;
   error_level?: AttemptErrorLevel;
   error_reason?: string;
@@ -84,6 +90,7 @@ export interface ChannelKey {
   channel_key: string;
   status_code: number;
   last_use_time_stamp: number;
+  retry_after_until: number;
   total_cost: number;
   remark: string;
 }
@@ -122,6 +129,7 @@ export interface ChannelUpdateRequest {
   max_concurrency?: number | null;
   match_regex?: string | null;
   user_agent?: string | null;
+  policy_profile?: ChannelPolicyProfile | null;
   keys_to_add?: ChannelKeyAddRequest[];
   keys_to_update?: ChannelKeyUpdateRequest[];
   keys_to_delete?: number[];
@@ -360,4 +368,3 @@ export interface UserStatusResponse {
   webauthn_enabled: boolean;
   webauthn_credentials: number;
 }
-

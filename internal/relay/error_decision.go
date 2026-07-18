@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/errorclass"
 	"github.com/bestruirui/octopus/internal/utils/bodylimit"
 	"github.com/looplj/axonhub/llm"
@@ -43,6 +44,7 @@ type ErrorDecision struct {
 
 type errorDecisionOptions struct {
 	OfficialCompactEndpoint bool
+	PolicyProfile           dbmodel.ChannelPolicyProfile
 }
 
 type terminalRelayError struct {
@@ -73,6 +75,33 @@ func (e *terminalRelayError) StatusCode() int {
 
 func newTerminalRelayError(statusCode int, err error) error {
 	return &terminalRelayError{statusCode: statusCode, err: err}
+}
+
+type classifiedClientRelayError struct {
+	cause      error
+	reason     string
+	statusCode int
+}
+
+func (e *classifiedClientRelayError) Error() string {
+	if e == nil || strings.TrimSpace(e.reason) == "" {
+		return "upstream rejected request"
+	}
+	return e.reason
+}
+
+func (e *classifiedClientRelayError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func (e *classifiedClientRelayError) StatusCode() int {
+	if e == nil || e.statusCode < 400 || e.statusCode > 499 {
+		return http.StatusBadRequest
+	}
+	return e.statusCode
 }
 
 func decideRelayError(statusCode int, headers http.Header, responseBody []byte, err error) ErrorDecision {
@@ -125,6 +154,7 @@ func decideRelayErrorWithOptions(statusCode int, headers http.Header, responseBo
 		}
 	}
 	decision := decisionForClassification(statusCode, classification)
+	applyClientErrorRetryPolicy(&decision, options.PolicyProfile)
 	if options.OfficialCompactEndpoint && isCompactEndpointUnsupported(statusCode, responseBody, err) {
 		decision.Classification = errorclass.Classification{
 			Level:  errorclass.ErrorLevelChannel,
@@ -146,12 +176,11 @@ func decisionForClassification(statusCode int, classification errorclass.Classif
 	}
 	switch classification.Level {
 	case errorclass.ErrorLevelClient:
-		// Upstream 4xx/validation-style errors are not trusted as request-terminal in
-		// relay routing. Different providers disagree on tool-call state, endpoint
-		// compatibility, model aliases and request validation details, so keep
-		// failover moving across the configured group and only return an error after
-		// all candidates are exhausted.
-		decision.Action = ErrorActionRetryChannel
+		decision.Action = ErrorActionReturnClient
+		decision.ClientStatusCode = statusCode
+		if decision.ClientStatusCode < 400 || decision.ClientStatusCode > 499 {
+			decision.ClientStatusCode = http.StatusBadRequest
+		}
 	case errorclass.ErrorLevelKey:
 		decision.Action = ErrorActionRetryKey
 		decision.RetryNextKey = true
@@ -161,11 +190,29 @@ func decisionForClassification(statusCode int, classification errorclass.Classif
 	return decision
 }
 
+func applyClientErrorRetryPolicy(decision *ErrorDecision, profile dbmodel.ChannelPolicyProfile) {
+	if decision == nil || decision.Classification.Level != errorclass.ErrorLevelClient {
+		return
+	}
+	reason := strings.ToLower(strings.TrimSpace(decision.Classification.Reason))
+	providerSpecific := strings.Contains(reason, "tool call state mismatch") ||
+		strings.Contains(reason, "model_not_found")
+	proxyProfile := profile == dbmodel.ChannelPolicyTrustedProxy || profile == dbmodel.ChannelPolicyUntrustedProxy
+	if providerSpecific || proxyProfile {
+		decision.Action = ErrorActionRetryChannel
+	}
+}
+
 func (ra *relayAttempt) decideError(statusCode int, headers http.Header, responseBody []byte, err error) ErrorDecision {
 	officialCompact := ra != nil && ra.relayRun != nil && ra.channel != nil &&
 		isCompactOpenAIChannel(ra.channel.Type, ra.internalRequest)
+	profile := dbmodel.ChannelPolicyStandard
+	if ra != nil && ra.channel != nil && ra.channel.PolicyProfile != "" {
+		profile = ra.channel.PolicyProfile
+	}
 	return decideRelayErrorWithOptions(statusCode, headers, responseBody, err, errorDecisionOptions{
 		OfficialCompactEndpoint: officialCompact,
+		PolicyProfile:           profile,
 	})
 }
 

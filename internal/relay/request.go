@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -94,14 +96,15 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 
 	apiKeyID := c.GetInt("api_key_id")
 	selectedBaseURLs := make(map[int]string)
-	iter := newRelayIteratorWithBaseURLs(group, apiKeyID, internalRequest, c.Request.Context(), selectedBaseURLs)
+	sessionID := relaySessionID(c, internalRequest)
+	iter := newRelayIteratorWithSessionAndBaseURLs(group, apiKeyID, internalRequest, c.Request.Context(), selectedBaseURLs, sessionID)
 	if iter.Len() == 0 {
 		err := errors.New("no available channel")
 		respondRelayError(c, http.StatusServiceUnavailable, err)
 		return nil, err
 	}
 
-	return &relayRun{
+	run := &relayRun{
 		c:               c,
 		inAdapter:       inAdapter,
 		internalRequest: internalRequest,
@@ -112,12 +115,17 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 			StartTime:       time.Now(),
 			InternalRequest: internalRequest,
 		},
-		iter:             iter,
-		iterStack:        []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
-		iterHistory:      []*balancer.Iterator{iter},
-		group:            group,
-		selectedBaseURLs: selectedBaseURLs,
-	}, nil
+		iter:                   iter,
+		iterStack:              []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:            []*balancer.Iterator{iter},
+		group:                  group,
+		selectedBaseURLs:       selectedBaseURLs,
+		sessionID:              sessionID,
+		maxUpstreamAttempts:    conf.Current().Relay.MaxUpstreamAttempts,
+		streamFirstEventBudget: time.Duration(conf.Current().Relay.StreamFirstEventBudgetSeconds) * time.Second,
+	}
+	run.attachIteratorTimeline(iter)
+	return run, nil
 }
 
 func newRelayIterator(group dbmodel.Group, apiKeyID int, request *llm.Request, ctx context.Context) *balancer.Iterator {
@@ -131,18 +139,78 @@ func newRelayIteratorWithBaseURLs(
 	ctx context.Context,
 	selectedBaseURLs map[int]string,
 ) *balancer.Iterator {
+	return newRelayIteratorWithSessionAndBaseURLs(group, apiKeyID, request, ctx, selectedBaseURLs, "")
+}
+
+func newRelayIteratorWithSessionAndBaseURLs(
+	group dbmodel.Group,
+	apiKeyID int,
+	request *llm.Request,
+	ctx context.Context,
+	selectedBaseURLs map[int]string,
+	sessionID string,
+) *balancer.Iterator {
 	candidates := nestedFallbackCandidates(group)
+	policyProfiles := candidatePolicyProfiles(candidates, ctx)
 	if request == nil || request.RequestType != llm.RequestTypeCompact {
 		requestModel := ""
 		if request != nil {
 			requestModel = request.Model
 		}
 		ranks := capabilityCandidateRanks(candidates, request, ctx, selectedBaseURLs)
-		return balancer.NewIteratorFromCandidates(group, apiKeyID, requestModel, candidates, ranks)
+		return balancer.NewIteratorFromCandidatesWithSession(group, apiKeyID, requestModel, sessionID, candidates, ranks, policyProfiles)
 	}
 	group.Items = candidates
 	ranks := compactCandidateRanks(group, ctx)
-	return balancer.NewIteratorFromCandidates(group, apiKeyID, request.Model, candidates, ranks)
+	return balancer.NewIteratorFromCandidatesWithSession(group, apiKeyID, request.Model, sessionID, candidates, ranks, policyProfiles)
+}
+
+func candidatePolicyProfiles(candidates []dbmodel.GroupItem, ctx context.Context) map[int]string {
+	profiles := make(map[int]string)
+	for _, item := range candidates {
+		if item.ID == 0 || item.ChannelID <= 0 {
+			continue
+		}
+		channel, err := op.ChannelGet(item.ChannelID, ctx)
+		if err == nil && channel != nil {
+			profiles[item.ID] = string(channel.PolicyProfile)
+		}
+	}
+	return profiles
+}
+
+func relaySessionID(c *gin.Context, request *llm.Request) string {
+	if request == nil {
+		return ""
+	}
+	var raw string
+	for _, key := range []string{"session_id", "conversation_id", "thread_id"} {
+		if value := validSessionIdentity(request.Metadata[key]); value != "" {
+			raw = value
+			break
+		}
+	}
+	if raw == "" && request.PromptCacheKey != nil {
+		raw = validSessionIdentity(*request.PromptCacheKey)
+	}
+	if raw == "" && request.User != nil {
+		raw = validSessionIdentity(*request.User)
+	}
+	if raw == "" && c != nil {
+		raw = validSessionIdentity(c.GetHeader("X-Octopus-Session-ID"))
+	}
+	if raw == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(digest[:])
+}
+
+func validSessionIdentity(raw string) string {
+	if raw == "" || len(raw) > 256 || strings.ContainsAny(raw, "\r\n\x00") {
+		return ""
+	}
+	return strings.TrimSpace(raw)
 }
 
 func capabilityCandidateRanks(
@@ -155,19 +223,83 @@ func capabilityCandidateRanks(
 		return nil
 	}
 	required := dbmodel.RequiredCapabilities(request)
-	ranks := make(map[int]int, len(candidates))
-	for _, item := range candidates {
-		if item.ID == 0 || item.ChannelID == 0 || item.Type == dbmodel.GroupItemTypeGroup {
-			continue
-		}
+	return candidateRanksFromTree(candidates, ctx, op.GroupGetEnabledTreeByID, 1, func(item dbmodel.GroupItem) int {
 		channel, err := op.ChannelGet(item.ChannelID, ctx)
 		if err != nil {
-			continue
+			return 1
 		}
 		endpoint := selectedBaseURLForChannel(channel, selectedBaseURLs)
-		ranks[item.ID] = op.CapabilityChannelRank(ctx, channel, item.ModelName, required, endpoint)
+		return op.CapabilityChannelRank(ctx, channel, item.ModelName, required, endpoint)
+	})
+}
+
+type enabledGroupResolver func(int, context.Context) (*dbmodel.Group, error)
+type groupLeafRanker func(dbmodel.GroupItem) int
+
+// candidateRanksFromTree assigns every parent candidate a rank. A nested group
+// inherits the best rank among its enabled descendant channels, so capability
+// ordering cannot silently demote the group merely because the parent item has
+// no ChannelID of its own.
+func candidateRanksFromTree(
+	candidates []dbmodel.GroupItem,
+	ctx context.Context,
+	resolve enabledGroupResolver,
+	unknownRank int,
+	rankLeaf groupLeafRanker,
+) map[int]int {
+	if len(candidates) == 0 || resolve == nil || rankLeaf == nil {
+		return nil
+	}
+	ranks := make(map[int]int, len(candidates))
+	for _, item := range candidates {
+		if item.ID == 0 {
+			continue
+		}
+		ranks[item.ID] = groupItemTreeRank(item, ctx, resolve, unknownRank, rankLeaf, make(map[int]struct{}))
 	}
 	return ranks
+}
+
+func groupItemTreeRank(
+	item dbmodel.GroupItem,
+	ctx context.Context,
+	resolve enabledGroupResolver,
+	unknownRank int,
+	rankLeaf groupLeafRanker,
+	visited map[int]struct{},
+) int {
+	if item.Type != dbmodel.GroupItemTypeGroup {
+		if item.ChannelID <= 0 {
+			return unknownRank
+		}
+		return rankLeaf(item)
+	}
+	if item.TargetGroupID <= 0 {
+		return unknownRank
+	}
+	if _, exists := visited[item.TargetGroupID]; exists {
+		return unknownRank
+	}
+	visited[item.TargetGroupID] = struct{}{}
+	defer delete(visited, item.TargetGroupID)
+
+	group, err := resolve(item.TargetGroupID, ctx)
+	if err != nil || group == nil || len(group.Items) == 0 {
+		return unknownRank
+	}
+	best := unknownRank
+	found := false
+	for _, child := range group.Items {
+		rank := groupItemTreeRank(child, ctx, resolve, unknownRank, rankLeaf, visited)
+		if !found || rank < best {
+			best = rank
+			found = true
+		}
+	}
+	if !found {
+		return unknownRank
+	}
+	return best
 }
 
 func selectedBaseURLForChannel(channel *dbmodel.Channel, selected map[int]string) string {
@@ -184,6 +316,32 @@ func selectedBaseURLForChannel(channel *dbmodel.Channel, selected map[int]string
 	return endpoint
 }
 
+func baseURLCandidatesForChannel(channel *dbmodel.Channel, selected map[int]string) []string {
+	if channel == nil {
+		return nil
+	}
+	candidates := runtimeBaseURLCandidates(channel)
+	if len(candidates) == 0 {
+		return nil
+	}
+	preferred := ""
+	if selected != nil {
+		preferred = selected[channel.ID]
+	}
+	if preferred == "" || candidates[0] == preferred {
+		return candidates
+	}
+	for i, candidate := range candidates {
+		if candidate != preferred {
+			continue
+		}
+		copy(candidates[1:i+1], candidates[:i])
+		candidates[0] = preferred
+		break
+	}
+	return candidates
+}
+
 // nestedFallbackCandidates returns group items ordered by the parent group's
 // balancer without treating nested groups as a separate fallback partition.
 // Nested group items therefore participate in the same priority/weight/random
@@ -197,26 +355,20 @@ func nestedFallbackCandidates(group dbmodel.Group) []dbmodel.GroupItem {
 }
 
 func compactCandidateRanks(group dbmodel.Group, ctx context.Context) map[int]int {
-	ranks := make(map[int]int, len(group.Items))
-	for _, item := range group.Items {
-		if item.ID == 0 || item.ChannelID == 0 {
-			continue
-		}
+	return candidateRanksFromTree(group.Items, ctx, op.GroupGetEnabledTreeByID, 5, func(item dbmodel.GroupItem) int {
 		switch item.CompactStrategy {
 		case dbmodel.CompactStrategyOfficial,
 			dbmodel.CompactStrategyIncompatible:
-			ranks[item.ID] = compactGroupItemRank(item, nil)
-			continue
+			return compactGroupItemRank(item, nil)
 		}
 		// Unknown strategies still need channel.Type to distinguish OpenAI-compatible
 		// candidates, but op.ChannelGet is a pure in-memory cache lookup.
 		channel, err := op.ChannelGet(item.ChannelID, ctx)
 		if err != nil {
-			continue
+			return 5
 		}
-		ranks[item.ID] = compactGroupItemRank(item, channel)
-	}
-	return ranks
+		return compactGroupItemRank(item, channel)
+	})
 }
 
 func compactGroupItemRank(item dbmodel.GroupItem, channel *dbmodel.Channel) int {

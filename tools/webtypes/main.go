@@ -68,6 +68,7 @@ var namedTypes = map[reflect.Type]string{
 	reflect.TypeOf(model.AttemptErrorLevel("")):      "AttemptErrorLevel",
 	reflect.TypeOf(model.AttemptStatus("")):          "AttemptStatus",
 	reflect.TypeOf(model.AutoGroupType(0)):           "AutoGroupType",
+	reflect.TypeOf(model.ChannelPolicyProfile("")):   "ChannelPolicyProfile",
 	reflect.TypeOf(model.DBImportConflictPolicy("")): "DBImportConflictPolicy",
 	reflect.TypeOf(model.GroupMode(0)):               "GroupMode",
 	reflect.TypeOf(model.SettingKey("")):             "SettingKey",
@@ -93,6 +94,7 @@ func Generate() ([]byte, error) {
 	b.WriteString("export type AttemptErrorLevel = 'key' | 'channel' | 'client';\n")
 	b.WriteString("export type AttemptStatus = 'success' | 'failed' | 'client_canceled' | 'circuit_break' | 'skipped' | 'redirect';\n")
 	b.WriteString("export type AutoGroupType = number;\n")
+	b.WriteString("export type ChannelPolicyProfile = 'standard' | 'official' | 'trusted_proxy' | 'untrusted_proxy';\n")
 	b.WriteString("export type DBImportConflictPolicy = 'reject' | 'skip' | 'replace' | 'merge';\n")
 	b.WriteString("export type GroupMode = number;\n")
 	b.WriteString("export type SettingKey = string;\n")
@@ -104,7 +106,7 @@ func Generate() ([]byte, error) {
 		}
 		writeInterface(&b, spec.Name, spec.Type)
 	}
-	return b.Bytes(), nil
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 func writeInterface(b *bytes.Buffer, name string, typ reflect.Type) {

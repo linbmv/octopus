@@ -5,7 +5,7 @@ import {
     MorphingDialogDescription,
     useMorphingDialog,
 } from '@/components/ui/morphing-dialog';
-import { useCreateChannel, ChannelType, AutoGroupType } from '@/api/endpoints/channel';
+import { useCreateChannel, ChannelType, AutoGroupType, ChannelPolicyProfile } from '@/api/endpoints/channel';
 import { useTranslations } from 'next-intl';
 import { ChannelForm, type ChannelFormData } from './Form';
 import { normalizeHeaderRules, normalizeJSONRewriteRules } from './request-rewrite';
@@ -34,6 +34,7 @@ export function CreateDialogContent() {
         rpm_limit: 0,
         max_concurrency: 0,
         user_agent: '',
+        policy_profile: ChannelPolicyProfile.Standard,
     });
     const t = useTranslations('channel.create');
 
@@ -74,6 +75,7 @@ export function CreateDialogContent() {
                 rpm_limit: Math.max(0, Number(formData.rpm_limit || 0)),
                 max_concurrency: Math.max(0, Number(formData.max_concurrency || 0)),
                 user_agent: formData.user_agent.trim(),
+                policy_profile: formData.policy_profile,
             },
             {
                 onSuccess: () => {
@@ -98,6 +100,7 @@ export function CreateDialogContent() {
                         rpm_limit: 0,
                         max_concurrency: 0,
                         user_agent: '',
+                        policy_profile: ChannelPolicyProfile.Standard,
                     });
                     setIsOpen(false);
                 }

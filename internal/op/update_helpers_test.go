@@ -25,6 +25,7 @@ func TestChannelKeyUpdatesResetsRuntimeStateWhenKeyBecomesUsable(t *testing.T) {
 		"remark":              "rotated",
 		"status_code":         0,
 		"last_use_time_stamp": 0,
+		"retry_after_until":   0,
 	}
 	if !reflect.DeepEqual(updates, want) {
 		t.Fatalf("channelKeyUpdates() = %#v, want %#v", updates, want)

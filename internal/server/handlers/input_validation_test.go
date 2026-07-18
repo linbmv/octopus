@@ -20,6 +20,7 @@ func TestAdminCRUDHandlersRejectInvalidBusinessInput(t *testing.T) {
 		handler gin.HandlerFunc
 	}{
 		{name: "channel unknown type", body: `{"name":"channel","type":"unknown","base_urls":[{"url":"https://example.com"}],"keys":[{"channel_key":"secret"}]}`, handler: createChannel},
+		{name: "channel unknown policy profile", body: `{"name":"channel","type":"openai/chat_completions","policy_profile":"reckless","base_urls":[{"url":"https://example.com"}],"keys":[{"channel_key":"secret"}]}`, handler: createChannel},
 		{name: "channel server-owned id", body: `{"id":7,"name":"channel","type":"openai/chat_completions","base_urls":[{"url":"https://example.com"}],"keys":[{"channel_key":"secret"}]}`, handler: createChannel},
 		{name: "channel key runtime state", body: `{"name":"channel","type":"openai/chat_completions","base_urls":[{"url":"https://example.com"}],"keys":[{"channel_key":"secret","total_cost":100}]}`, handler: createChannel},
 		{name: "channel invalid override", body: `{"name":"channel","type":"openai/chat_completions","base_urls":[{"url":"https://example.com"}],"keys":[{"channel_key":"secret"}],"param_override":"[]"}`, handler: createChannel},

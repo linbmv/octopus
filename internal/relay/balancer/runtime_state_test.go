@@ -13,6 +13,7 @@ func resetBalancerRuntimeState() {
 	globalSession.clear()
 	globalBreaker.clear()
 	smoothWeightedState.clear()
+	smoothRoundRobinState.clear()
 	SetHealthWeightFunc(nil)
 }
 
@@ -137,6 +138,28 @@ func TestWeightedStateHardLimitExpiryAndInvalidation(t *testing.T) {
 	smoothWeightedState.mu.Unlock()
 	if got := smoothWeightedState.len(); got != 0 {
 		t.Fatalf("weighted state length after TTL sweep = %d, want 0", got)
+	}
+}
+
+func TestRoundRobinStateHardLimitAndInvalidation(t *testing.T) {
+	resetBalancerRuntimeState()
+	defer resetBalancerRuntimeState()
+	originalNow := roundRobinNow
+	defer func() { roundRobinNow = originalNow }()
+	base := time.Unix(1_700_000_000, 0)
+	roundRobinNow = func() time.Time { return base }
+	for i := 0; i < roundRobinStateLimit+32; i++ {
+		(&RoundRobin{}).Candidates([]model.GroupItem{{ID: i*2 + 1, ChannelID: i + 1}, {ID: i*2 + 2, ChannelID: i + 1, ModelName: "b"}})
+	}
+	if got := smoothRoundRobinState.len(); got != roundRobinStateLimit {
+		t.Fatalf("round robin state length = %d, want %d", got, roundRobinStateLimit)
+	}
+	smoothRoundRobinState.clear()
+	(&RoundRobin{}).Candidates([]model.GroupItem{{ID: 1, ChannelID: 10}, {ID: 2, ChannelID: 11}})
+	(&RoundRobin{}).Candidates([]model.GroupItem{{ID: 3, ChannelID: 20}, {ID: 4, ChannelID: 21}})
+	InvalidateChannel(10)
+	if got := smoothRoundRobinState.len(); got != 1 {
+		t.Fatalf("round robin state after invalidation = %d, want 1", got)
 	}
 }
 

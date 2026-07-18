@@ -31,6 +31,22 @@ export function AttemptStatusBadges({ attempt }: { attempt: ChannelAttempt }) {
     );
 }
 
+function AttemptRoutingDetails({ attempt, compact = false }: { attempt: ChannelAttempt; compact?: boolean }) {
+    const t = useTranslations('log.card');
+    return (
+        <div className={cn('flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground', compact && 'mt-0.5')}>
+            {attempt.action && <Badge variant="outline" className="h-5 max-w-full px-1.5 text-[10px] font-normal">{t(`attemptActions.${attempt.action}`)}</Badge>}
+            {attempt.selection_reason && <span className="truncate">{t(`selectionReasons.${attempt.selection_reason}`)}</span>}
+            {attempt.status === 'failed' && (
+                <Badge variant="secondary" className={cn('h-5 px-1.5 text-[10px] font-normal', attempt.health_penalty ? 'bg-red-500/15 text-red-700 dark:text-red-400' : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400')}>
+                    {attempt.health_penalty ? t('healthPenalty') : t('noHealthPenalty')}
+                </Badge>
+            )}
+            {attempt.base_url && <span className="max-w-full truncate font-mono" title={attempt.base_url}>{attempt.base_url}</span>}
+        </div>
+    );
+}
+
 export function RetryBadgeWithTooltip({ channelName, brandColor, attempts }: { channelName: string; brandColor: string; attempts: ChannelAttempt[] }) {
     return (
         <Tooltip>
@@ -47,6 +63,7 @@ export function RetryBadgeWithTooltip({ channelName, brandColor, attempts }: { c
                             <div className="flex min-w-0 flex-1 flex-col">
                                 <div className="flex min-w-0 items-center gap-1.5"><span className="truncate text-xs font-semibold text-foreground">{attempt.channel_name}</span>{attempt.sticky && <Pin className="size-3 shrink-0 text-amber-500" />}</div>
                                 <span className="text-[10px] text-muted-foreground">{[attempt.model_name, formatAttemptKey(attempt), formatLogDuration(attempt.duration)].filter(Boolean).join(' • ')}</span>
+                                <AttemptRoutingDetails attempt={attempt} compact />
                             </div>
                         </div>
                         {index < attempts.length - 1 && <div className="flex justify-center py-0.5"><ArrowDown className="size-3 text-muted-foreground/30" /></div>}
@@ -68,6 +85,7 @@ export function AttemptList({ attempts }: { attempts: ChannelAttempt[] }) {
                         <div className="min-w-0 flex-1">
                             <div className="flex min-w-0 items-center gap-1.5"><span className="truncate font-semibold text-foreground">{attempt.channel_name}</span>{attempt.sticky && <Pin className="size-3.5 shrink-0 text-amber-500" />}</div>
                             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground"><span>{attempt.model_name}</span>{formatAttemptKey(attempt) && <span>{formatAttemptKey(attempt)}</span>}<span>{t('attemptNumber', { number: attempt.attempt_num })}</span></div>
+                            <AttemptRoutingDetails attempt={attempt} />
                         </div>
                         <span className="font-mono tabular-nums text-muted-foreground">{formatLogDuration(attempt.duration)}</span>
                     </div>

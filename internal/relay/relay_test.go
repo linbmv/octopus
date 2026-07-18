@@ -127,6 +127,23 @@ func TestAdaptiveTimeoutClassificationUsesErrorSnapshot(t *testing.T) {
 	}
 }
 
+func TestFirstTokenShadowObserverDoesNotCancelRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fired := make(chan struct{}, 1)
+	_, release := newFirstTokenShadowObserver(10*time.Millisecond, func() { fired <- struct{}{} })
+	defer release()
+
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("shadow observer did not record elapsed threshold")
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("shadow observer canceled request context: %v", ctx.Err())
+	}
+}
+
 func TestHealthPolicyDefaultsPreserveRecoveryProbeSettings(t *testing.T) {
 	policy := currentHealthPolicy()
 	if policy.RecoveryProbeEvery != 20 {
@@ -677,6 +694,79 @@ func TestCompactCandidateOrderingPlacesIncompatibleAfterUsable(t *testing.T) {
 	}
 	if got := iter.Item().ID; got != 1 {
 		t.Fatalf("second candidate ID = %d, want 1", got)
+	}
+}
+
+func TestCandidateRanksFromTreeUsesBestNestedDescendant(t *testing.T) {
+	groups := map[int]dbmodel.Group{
+		2: {
+			ID: 2,
+			Items: []dbmodel.GroupItem{
+				{ID: 21, Type: dbmodel.GroupItemTypeGroup, TargetGroupID: 3},
+				{ID: 22, Type: dbmodel.GroupItemTypeChannel, ChannelID: 22},
+			},
+		},
+		3: {
+			ID: 3,
+			Items: []dbmodel.GroupItem{
+				{ID: 31, Type: dbmodel.GroupItemTypeChannel, ChannelID: 31},
+			},
+		},
+	}
+	resolve := func(id int, _ context.Context) (*dbmodel.Group, error) {
+		group, ok := groups[id]
+		if !ok {
+			return nil, errors.New("group not found")
+		}
+		return &group, nil
+	}
+	candidates := []dbmodel.GroupItem{
+		{ID: 1, Type: dbmodel.GroupItemTypeGroup, TargetGroupID: 2, Priority: 1},
+		{ID: 2, Type: dbmodel.GroupItemTypeChannel, ChannelID: 10, Priority: 2},
+	}
+	leafRanks := map[int]int{10: 1, 22: 2, 31: 0}
+	ranks := candidateRanksFromTree(candidates, context.Background(), resolve, 1, func(item dbmodel.GroupItem) int {
+		return leafRanks[item.ChannelID]
+	})
+	if ranks[1] != 0 || ranks[2] != 1 {
+		t.Fatalf("ranks = %#v, want nested=0 direct=1", ranks)
+	}
+
+	group := dbmodel.Group{Mode: dbmodel.GroupModeFailover, Items: candidates}
+	iter := balancer.NewIteratorFromCandidates(group, 0, "m", append([]dbmodel.GroupItem(nil), candidates...), ranks)
+	if !iter.Next() || iter.Item().Type != dbmodel.GroupItemTypeGroup {
+		t.Fatalf("first candidate = %+v, want nested group with supported descendant", iter.Item())
+	}
+}
+
+func TestCompactNestedRankUsesOfficialDescendant(t *testing.T) {
+	groups := map[int]dbmodel.Group{
+		2: {
+			ID: 2,
+			Items: []dbmodel.GroupItem{
+				{ID: 21, Type: dbmodel.GroupItemTypeChannel, ChannelID: 21, CompactStrategy: dbmodel.CompactStrategyOfficial},
+			},
+		},
+	}
+	resolve := func(id int, _ context.Context) (*dbmodel.Group, error) {
+		group, ok := groups[id]
+		if !ok {
+			return nil, errors.New("group not found")
+		}
+		return &group, nil
+	}
+	candidates := []dbmodel.GroupItem{
+		{ID: 1, Type: dbmodel.GroupItemTypeGroup, TargetGroupID: 2, Priority: 1},
+		{ID: 2, Type: dbmodel.GroupItemTypeChannel, ChannelID: 10, Priority: 2},
+	}
+	ranks := candidateRanksFromTree(candidates, context.Background(), resolve, 5, func(item dbmodel.GroupItem) int {
+		if item.CompactStrategy == dbmodel.CompactStrategyOfficial {
+			return compactGroupItemRank(item, nil)
+		}
+		return 4
+	})
+	if ranks[1] != 0 || ranks[2] != 4 {
+		t.Fatalf("compact ranks = %#v, want nested official=0 direct=4", ranks)
 	}
 }
 

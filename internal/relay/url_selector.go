@@ -2,7 +2,7 @@ package relay
 
 import (
 	"math"
-	"math/rand/v2"
+	"net/url"
 	"sync"
 	"time"
 
@@ -31,6 +31,19 @@ type runtimeURLCandidate struct {
 	Known   bool
 	Cooled  bool
 	Until   time.Time
+}
+
+// RuntimeURLStatus is the operationally safe URL state exposed to the
+// management API. It deliberately omits provider errors and authentication
+// material that may be present in a configured URL.
+type RuntimeURLStatus struct {
+	URL                      string `json:"url"`
+	Rank                     int    `json:"rank"`
+	Known                    bool   `json:"known"`
+	LatencyMS                int    `json:"latency_ms,omitempty"`
+	CooldownRemainingSeconds int    `json:"cooldown_remaining_seconds,omitempty"`
+	Cooled                   bool   `json:"cooled"`
+	SelectionReason          string `json:"selection_reason"`
 }
 
 type runtimeURLSelector struct {
@@ -76,6 +89,13 @@ func selectRuntimeBaseURL(channel *model.Channel) string {
 	return globalRuntimeURLSelector.Select(channel.ID, channel.BaseUrls)
 }
 
+func runtimeBaseURLCandidates(channel *model.Channel) []string {
+	if channel == nil {
+		return nil
+	}
+	return globalRuntimeURLSelector.Candidates(channel.ID, channel.BaseUrls)
+}
+
 func recordRuntimeURLSuccess(channelID int, baseURL string, duration time.Duration) {
 	globalRuntimeURLSelector.RecordSuccess(channelID, baseURL, duration)
 }
@@ -89,18 +109,36 @@ func recordRuntimeURLFailure(channelID int, baseURL string) {
 // change succeeds so stale URLs cannot influence subsequent routing.
 func InvalidateRuntimeURLState(channelID int) {
 	globalRuntimeURLSelector.InvalidateChannel(channelID)
+	globalChannelRateLimits.invalidate(channelID)
 }
 
 func (s *runtimeURLSelector) Select(channelID int, baseURLs []model.BaseUrl) string {
-	urls := compactBaseURLs(baseURLs)
-	if len(urls) == 0 {
+	candidates := s.Candidates(channelID, baseURLs)
+	if len(candidates) == 0 {
 		return ""
 	}
+	return candidates[0]
+}
+
+// Candidates returns a stable, health-aware endpoint order for one channel.
+// The caller may walk this list during a single request without selecting an
+// endpoint again and accidentally repeating a failed URL.
+func (s *runtimeURLSelector) Candidates(channelID int, baseURLs []model.BaseUrl) []string {
+	urls := compactBaseURLs(baseURLs)
+	if len(urls) == 0 {
+		return nil
+	}
 	if len(urls) == 1 {
-		return urls[0]
+		return urls
 	}
 
 	now := s.now()
+	configuredLatency := make(map[string]float64, len(baseURLs))
+	for _, baseURL := range baseURLs {
+		if baseURL.URL != "" && baseURL.Delay > 0 {
+			configuredLatency[baseURL.URL] = float64(baseURL.Delay)
+		}
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -110,6 +148,9 @@ func (s *runtimeURLSelector) Select(channelID int, baseURLs []model.BaseUrl) str
 		item := runtimeURLCandidate{URL: url}
 		if latency, ok := s.latencies[key]; ok && !runtimeURLStateExpired(latency.LastSeen, now, s.stateTTL) {
 			item.Latency = latency.ValueMS
+			item.Known = true
+		} else if latency := configuredLatency[url]; latency > 0 {
+			item.Latency = latency
 			item.Known = true
 		}
 		if cooldown, ok := s.cooldowns[key]; ok &&
@@ -134,7 +175,7 @@ func (s *runtimeURLSelector) Select(channelID int, baseURLs []model.BaseUrl) str
 		available = earliestCooldownCandidates(cooled)
 	}
 	if len(available) == 0 {
-		return urls[0]
+		return nil
 	}
 
 	unknown := make([]runtimeURLCandidate, 0)
@@ -146,10 +187,88 @@ func (s *runtimeURLSelector) Select(channelID int, baseURLs []model.BaseUrl) str
 		}
 		known = append(known, candidate)
 	}
-	if len(unknown) > 0 {
-		return unknown[rand.IntN(len(unknown))].URL
+	ordered := make([]string, 0, len(available))
+	// Unknown endpoints are deliberately explored first, but retain configured
+	// order so one request cannot oscillate randomly between URLs. Once samples
+	// exist, the known endpoints follow by measured/configured latency.
+	for _, candidate := range unknown {
+		ordered = append(ordered, candidate.URL)
 	}
-	return weightedLatencyPick(known)
+	for len(known) > 0 {
+		best := 0
+		bestLatency := normalizedCandidateLatency(known[0])
+		for i := 1; i < len(known); i++ {
+			latency := normalizedCandidateLatency(known[i])
+			if latency < bestLatency {
+				best = i
+				bestLatency = latency
+			}
+		}
+		ordered = append(ordered, known[best].URL)
+		known = append(known[:best], known[best+1:]...)
+	}
+	return ordered
+}
+
+func RuntimeURLState(channel *model.Channel) []RuntimeURLStatus {
+	if channel == nil {
+		return nil
+	}
+	return globalRuntimeURLSelector.Snapshot(channel.ID, channel.BaseUrls)
+}
+
+func (s *runtimeURLSelector) Snapshot(channelID int, baseURLs []model.BaseUrl) []RuntimeURLStatus {
+	urls := compactBaseURLs(baseURLs)
+	if len(urls) == 0 {
+		return nil
+	}
+	ordered := s.Candidates(channelID, baseURLs)
+	order := make(map[string]int, len(ordered))
+	for i, endpoint := range ordered {
+		order[endpoint] = i + 1
+	}
+	now := s.now()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	configuredLatency := make(map[string]float64, len(baseURLs))
+	for _, baseURL := range baseURLs {
+		if baseURL.URL != "" && baseURL.Delay > 0 {
+			configuredLatency[baseURL.URL] = float64(baseURL.Delay)
+		}
+	}
+	result := make([]RuntimeURLStatus, 0, len(urls))
+	for _, endpoint := range urls {
+		key := runtimeURLKey{ChannelID: channelID, URL: endpoint}
+		status := RuntimeURLStatus{URL: safeRuntimeURL(endpoint), Rank: order[endpoint]}
+		if latency, ok := s.latencies[key]; ok && !runtimeURLStateExpired(latency.LastSeen, now, s.stateTTL) {
+			status.Known = true
+			status.LatencyMS = max(1, int(math.Round(latency.ValueMS)))
+			status.SelectionReason = "measured_latency"
+		} else if configured := configuredLatency[endpoint]; configured > 0 {
+			status.Known = true
+			status.LatencyMS = max(1, int(math.Round(configured)))
+			status.SelectionReason = "configured_delay"
+		} else {
+			status.SelectionReason = "unmeasured"
+		}
+		if cooldown, ok := s.cooldowns[key]; ok && !runtimeURLStateExpired(cooldown.LastTouched, now, s.stateTTL) && now.Before(cooldown.Until) {
+			status.Cooled = true
+			status.CooldownRemainingSeconds = max(1, int(math.Ceil(cooldown.Until.Sub(now).Seconds())))
+		}
+		result = append(result, status)
+	}
+	return result
+}
+
+func safeRuntimeURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func (s *runtimeURLSelector) RecordSuccess(channelID int, baseURL string, duration time.Duration) {

@@ -621,6 +621,22 @@
             "retryDetails": "重試詳情",
             "attempts": "次嘗試",
             "attemptNumber": "第 {number} 次",
+            "healthPenalty": "計入健康懲罰",
+            "noHealthPenalty": "未計入健康懲罰",
+            "attemptActions": {
+                "selected": "已選取",
+                "retry_base_url": "切換 URL",
+                "retry_key": "切換金鑰",
+                "retry_channel": "切換供應源",
+                "return_client": "返回客戶端",
+                "client_cancel": "客戶端取消",
+                "stop": "停止"
+            },
+            "selectionReasons": {
+                "runtime_url_selector": "即時 URL 選擇",
+                "base_url_failover": "URL 故障轉移",
+                "key_failover": "金鑰故障轉移"
+            },
             "attemptStatus": {
                 "success": "成功",
                 "failed": "失敗",
@@ -657,6 +673,20 @@
             },
             "noBaseUrls": "暫無 Base URL",
             "noKeys": "暫無金鑰",
+            "policyProfile": "可靠性設定檔",
+            "policyProfiles": {
+                "standard": "標準",
+                "official": "官方供應源",
+                "trusted_proxy": "可信中轉",
+                "untrusted_proxy": "非可信中轉"
+            },
+            "urlCooldown": "冷卻 {seconds} 秒",
+            "urlUnmeasured": "未測量",
+            "urlReasons": {
+                "measured_latency": "即時延遲",
+                "configured_delay": "設定延遲",
+                "unmeasured": "探索中"
+            },
             "metrics": {
                 "totalRequests": "總請求",
                 "totalToken": "總 Token",
@@ -731,6 +761,14 @@
             "baseUrlUrl": "地址",
             "baseUrlDelay": "延遲(ms)",
             "advanced": "進階設定",
+            "policyProfile": "可靠性設定檔",
+            "policyProfileHint": "控制模糊上游 4xx 是否參與故障轉移。明確的模型映射與工具呼叫狀態錯誤在所有設定檔下仍可切換供應源。",
+            "policyProfiles": {
+                "standard": "標準",
+                "official": "官方供應源",
+                "trusted_proxy": "可信中轉",
+                "untrusted_proxy": "非可信中轉"
+            },
             "apiKey": "API Key",
             "customHeader": "自定義 Header",
             "customHeaderKey": "Header Key",

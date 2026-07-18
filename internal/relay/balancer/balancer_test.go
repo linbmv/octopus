@@ -8,7 +8,52 @@ import (
 
 func resetSmoothWeightedState() {
 	smoothWeightedState.clear()
+	smoothRoundRobinState.clear()
 	SetHealthWeightFunc(nil)
+}
+
+func TestRoundRobinStateIsolatedByCandidateSet(t *testing.T) {
+	resetSmoothWeightedState()
+	defer resetSmoothWeightedState()
+	balancer := &RoundRobin{}
+	groupA := []model.GroupItem{{ID: 1, ChannelID: 1}, {ID: 2, ChannelID: 2}}
+	groupB := []model.GroupItem{{ID: 3, ChannelID: 3}, {ID: 4, ChannelID: 4}}
+	if got := balancer.Candidates(groupA)[0].ChannelID; got != 1 {
+		t.Fatalf("group A first channel = %d, want 1", got)
+	}
+	if got := balancer.Candidates(groupB)[0].ChannelID; got != 3 {
+		t.Fatalf("group B first channel = %d, want 3", got)
+	}
+	if got := balancer.Candidates(groupA)[0].ChannelID; got != 2 {
+		t.Fatalf("group A second channel = %d, want 2", got)
+	}
+	if got := balancer.Candidates(groupB)[0].ChannelID; got != 4 {
+		t.Fatalf("group B second channel = %d, want 4", got)
+	}
+}
+
+func TestWeightedFallbackUsesPriorityAndHealth(t *testing.T) {
+	resetSmoothWeightedState()
+	defer resetSmoothWeightedState()
+	SetHealthWeightFunc(func(item model.GroupItem) float64 {
+		if item.ChannelID == 3 {
+			return 0.9
+		}
+		if item.ChannelID == 2 {
+			return 0.1
+		}
+		return 1
+	})
+	items := []model.GroupItem{
+		{ID: 1, ChannelID: 1, Weight: 100, Priority: 0},
+		{ID: 2, ChannelID: 2, Weight: 1, Priority: 2},
+		{ID: 3, ChannelID: 3, Weight: 1, Priority: 2},
+		{ID: 4, ChannelID: 4, Weight: 1, Priority: 1},
+	}
+	got := (&Weighted{}).Candidates(items)
+	if got[0].ChannelID != 1 || got[1].ChannelID != 4 || got[2].ChannelID != 3 || got[3].ChannelID != 2 {
+		t.Fatalf("weighted fallback order = [%d %d %d %d], want [1 4 3 2]", got[0].ChannelID, got[1].ChannelID, got[2].ChannelID, got[3].ChannelID)
+	}
 }
 
 func TestWeightedCandidatesUsesSmoothWeightedRoundRobin(t *testing.T) {

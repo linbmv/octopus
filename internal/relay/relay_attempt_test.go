@@ -32,6 +32,32 @@ func TestRecordUsageNilNoop(t *testing.T) {
 	}
 }
 
+func TestRelaySessionIDUsesStableDigestWithoutPersistingRawValue(t *testing.T) {
+	ctx := testGinContext()
+	request := &llm.Request{Metadata: map[string]string{"conversation_id": "conversation-42"}}
+	first := relaySessionID(ctx, request)
+	second := relaySessionID(ctx, request)
+	if first == "" || first != second || len(first) != 64 {
+		t.Fatalf("session digest = %q/%q, want stable SHA-256 hex", first, second)
+	}
+	if strings.Contains(first, "conversation-42") {
+		t.Fatal("session digest leaked raw conversation ID")
+	}
+	request.Metadata = map[string]string{"session_id": "\ninvalid"}
+	if got := relaySessionID(ctx, request); got != "" {
+		t.Fatalf("invalid session ID digest = %q, want empty", got)
+	}
+}
+
+func TestRelaySessionIDFallsBackToControlledHeader(t *testing.T) {
+	ctx := testGinContext()
+	ctx.Request.Header.Set("X-Octopus-Session-ID", "header-session")
+	got := relaySessionID(ctx, &llm.Request{})
+	if got == "" || len(got) != 64 {
+		t.Fatalf("header session digest = %q, want SHA-256 hex", got)
+	}
+}
+
 func TestRecordUsageRecordsTokensWithoutPrice(t *testing.T) {
 	// 价格缓存未命中（无 DB 环境）时，仍应记录 token 用量，成本保持 0。
 	m := &RelayMetrics{ActualModel: "model-without-price"}
@@ -147,6 +173,45 @@ func TestRelayRunAttemptsRenumbersNestedIteratorAttempts(t *testing.T) {
 	}
 	if attempts[0].ChannelID != 1 || attempts[1].ChannelID != 2 {
 		t.Fatalf("attempt 顺序被改变: %+v", attempts)
+	}
+}
+
+func TestRelayRunTimelinePreservesNestedEventOrder(t *testing.T) {
+	parentGroup := dbmodel.Group{Items: []dbmodel.GroupItem{
+		{ID: 1, Type: dbmodel.GroupItemTypeGroup, TargetGroupID: 10},
+		{ID: 2, Type: dbmodel.GroupItemTypeGroup, TargetGroupID: 20},
+	}}
+	childGroup := dbmodel.Group{Items: []dbmodel.GroupItem{{ID: 3, ChannelID: 30, ModelName: "m"}}}
+	parentIter := balancer.NewIterator(parentGroup, 1, "m")
+	childIter := balancer.NewIterator(childGroup, 1, "m")
+	r := &relayRun{}
+	r.attachIteratorTimeline(parentIter)
+	r.attachIteratorTimeline(childIter)
+
+	if !parentIter.Next() {
+		t.Fatal("parent iterator missing first nested group")
+	}
+	parentIter.RedirectFor(parentIter.Item(), 0, "root", 10, "child-a", 1, "enter")
+	if !childIter.Next() {
+		t.Fatal("child iterator missing channel")
+	}
+	childIter.Skip(30, 0, "child-channel", "failed child candidate")
+	if !parentIter.Next() {
+		t.Fatal("parent iterator missing second nested group")
+	}
+	parentIter.RedirectFor(parentIter.Item(), 0, "root", 20, "child-b", 1, "enter")
+
+	attempts := r.attempts()
+	if len(attempts) != 3 {
+		t.Fatalf("timeline length = %d, want 3", len(attempts))
+	}
+	if attempts[0].Status != dbmodel.AttemptRedirect || attempts[1].ChannelID != 30 || attempts[2].Status != dbmodel.AttemptRedirect {
+		t.Fatalf("timeline order = %+v, want redirect -> child event -> redirect", attempts)
+	}
+	for i, attempt := range attempts {
+		if attempt.AttemptNum != i+1 {
+			t.Fatalf("attempt %d number = %d, want %d", i, attempt.AttemptNum, i+1)
+		}
 	}
 }
 
@@ -465,6 +530,46 @@ func TestRelayRunStopsOnTerminalClientError(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "bad request") {
 		t.Fatalf("client-correctable error detail should be preserved: %s", recorder.Body.String())
+	}
+}
+
+func TestRelayRunReturnsRetryableClientErrorAfterCandidatesExhausted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	group := dbmodel.Group{
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: 10, ModelName: "m", Priority: 1},
+			{ID: 2, Type: dbmodel.GroupItemTypeChannel, ChannelID: 11, ModelName: "m", Priority: 2},
+		},
+	}
+	iter := balancer.NewIterator(group, 1, "m")
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: "m"},
+		metrics:         &RelayMetrics{StartTime: time.Now(), RequestModel: "m", ActualModel: "m"},
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:     []*balancer.Iterator{iter},
+		group:           group,
+	}
+	r.resolveGroupItemFunc = func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error) {
+		return &relayAttempt{relayRun: r, channel: &dbmodel.Channel{ID: item.ChannelID}}, nil
+	}
+	r.runAttemptFunc = func(attempt *relayAttempt) (bool, error) {
+		return false, &classifiedClientRelayError{
+			cause: errors.New("provider detail"), reason: "upstream tool call state mismatch", statusCode: http.StatusBadRequest,
+		}
+	}
+
+	r.run()
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want preserved 400; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "tool call state mismatch") || strings.Contains(recorder.Body.String(), "provider detail") {
+		t.Fatalf("client response did not preserve safe classified reason: %s", recorder.Body.String())
 	}
 }
 

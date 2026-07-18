@@ -27,6 +27,7 @@ type SessionEntry struct {
 type sessionCacheKey struct {
 	APIKeyID int
 	Model    string
+	Session  string
 }
 
 type sessionRecord struct {
@@ -54,9 +55,14 @@ var globalSession = newSessionState()
 // sessionKey 生成规范化会话键。模型名不区分首尾空白和大小写，避免同一
 // 请求模型因为客户端格式差异不断创建新条目。
 func sessionKey(apiKeyID int, requestModel string) sessionCacheKey {
+	return sessionKeyForID(apiKeyID, requestModel, "")
+}
+
+func sessionKeyForID(apiKeyID int, requestModel, sessionID string) sessionCacheKey {
 	return sessionCacheKey{
 		APIKeyID: apiKeyID,
 		Model:    strings.ToLower(strings.TrimSpace(requestModel)),
+		Session:  strings.TrimSpace(sessionID),
 	}
 }
 
@@ -64,6 +70,10 @@ func sessionKey(apiKeyID int, requestModel string) sessionCacheKey {
 // ttl 由 Group.SessionKeepTime 决定，返回 nil 表示无有效会话。
 func GetSticky(apiKeyID int, requestModel string, ttl time.Duration) *SessionEntry {
 	return globalSession.get(sessionKey(apiKeyID, requestModel), ttl, sessionNow())
+}
+
+func GetStickyForSession(apiKeyID int, requestModel, sessionID string, ttl time.Duration) *SessionEntry {
+	return globalSession.get(sessionKeyForID(apiKeyID, requestModel, sessionID), ttl, sessionNow())
 }
 
 func (s *sessionState) get(key sessionCacheKey, ttl time.Duration, now time.Time) *SessionEntry {
@@ -89,7 +99,11 @@ func (s *sessionState) get(key sessionCacheKey, ttl time.Duration, now time.Time
 // SetSticky 写入/更新粘性记录
 // actualModel 为本次成功 attempt 使用的实际上游模型名，命中复用时需与候选模型一致。
 func SetSticky(apiKeyID int, requestModel string, channelID, keyID int, actualModel string) {
-	globalSession.set(sessionKey(apiKeyID, requestModel), SessionEntry{
+	SetStickyForSession(apiKeyID, requestModel, "", channelID, keyID, actualModel)
+}
+
+func SetStickyForSession(apiKeyID int, requestModel, sessionID string, channelID, keyID int, actualModel string) {
+	globalSession.set(sessionKeyForID(apiKeyID, requestModel, sessionID), SessionEntry{
 		ChannelID:    channelID,
 		ChannelKeyID: keyID,
 		ModelName:    actualModel,

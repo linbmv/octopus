@@ -52,6 +52,9 @@ func TestLoadUsesDefaultValues(t *testing.T) {
 	if config.Relay.StreamColdStartFirstEventTimeoutSeconds != 30 {
 		t.Fatalf("Relay.StreamColdStartFirstEventTimeoutSeconds = %d, want 30", config.Relay.StreamColdStartFirstEventTimeoutSeconds)
 	}
+	if config.Relay.MaxUpstreamAttempts != 8 || config.Relay.StreamFirstEventBudgetSeconds != 120 {
+		t.Fatalf("Relay request budget defaults = %#v, want attempts=8 budget=120s", config.Relay)
+	}
 	if config.Relay.MaxJSONRequestBytes != 32<<20 || config.Relay.MaxImageRequestBytes != 64<<20 || config.Relay.MaxNonStreamResponseBytes != 64<<20 {
 		t.Fatalf("Relay body limit defaults = %#v", config.Relay)
 	}
@@ -108,6 +111,10 @@ func TestValidateRejectsUnsafeRelayResourceLimits(t *testing.T) {
 		{name: "non-stream attempt timeout too large", mutate: func(c *Config) { c.Relay.NonStreamAttemptTimeoutSeconds = 86401 }},
 		{name: "cold start timeout negative", mutate: func(c *Config) { c.Relay.StreamColdStartFirstEventTimeoutSeconds = -1 }},
 		{name: "cold start timeout too large", mutate: func(c *Config) { c.Relay.StreamColdStartFirstEventTimeoutSeconds = 86401 }},
+		{name: "attempt budget negative", mutate: func(c *Config) { c.Relay.MaxUpstreamAttempts = -1 }},
+		{name: "attempt budget too large", mutate: func(c *Config) { c.Relay.MaxUpstreamAttempts = 1001 }},
+		{name: "stream budget negative", mutate: func(c *Config) { c.Relay.StreamFirstEventBudgetSeconds = -1 }},
+		{name: "stream budget too large", mutate: func(c *Config) { c.Relay.StreamFirstEventBudgetSeconds = 86401 }},
 		{name: "JSON body disabled", mutate: func(c *Config) { c.Relay.MaxJSONRequestBytes = 0 }},
 		{name: "image body disabled", mutate: func(c *Config) { c.Relay.MaxImageRequestBytes = 0 }},
 		{name: "response body disabled", mutate: func(c *Config) { c.Relay.MaxNonStreamResponseBytes = 0 }},

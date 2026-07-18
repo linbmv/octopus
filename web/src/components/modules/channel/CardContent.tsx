@@ -30,6 +30,7 @@ function initialChannelForm(channel: Channel): ChannelFormData {
         rpm_limit: channel.rpm_limit ?? 0,
         max_concurrency: channel.max_concurrency ?? 0,
         user_agent: channel.user_agent ?? '',
+        policy_profile: channel.policy_profile ?? 'standard',
     };
 }
 
@@ -58,6 +59,7 @@ function channelUpdateRequest(channel: Channel, form: ChannelFormData): UpdateCh
     setTrimmedChange(request, 'param_override', form.param_override, channel.param_override);
     setTrimmedChange(request, 'match_regex', form.match_regex, channel.match_regex);
     setTrimmedChange(request, 'user_agent', form.user_agent, channel.user_agent);
+    if (form.policy_profile !== channel.policy_profile) request.policy_profile = form.policy_profile;
     if (form.raw_passthrough !== channel.raw_passthrough) request.raw_passthrough = form.raw_passthrough;
     const rpm = Math.max(0, Number(form.rpm_limit || 0));
     if (rpm !== (channel.rpm_limit ?? 0)) request.rpm_limit = rpm;

@@ -13,6 +13,16 @@ import type {
 	JSONRewriteRule,
 } from '../contracts';
 export type { BaseUrl, ChannelCircuitStatus, ChannelKey, CustomHeader, HeaderRule, JSONRewriteRule } from '../contracts';
+
+export type ChannelRuntimeURLStatus = {
+    url: string;
+    rank: number;
+    known: boolean;
+    latency_ms?: number;
+    cooldown_remaining_seconds?: number;
+    cooled: boolean;
+    selection_reason: string;
+};
 /**
  * 渠道类型枚举
  */
@@ -34,6 +44,15 @@ export enum AutoGroupType {
     Exact = 2,  // 准确匹配
     Regex = 3,  // 正则匹配
 }
+
+export const ChannelPolicyProfile = {
+    Standard: 'standard',
+    Official: 'official',
+    TrustedProxy: 'trusted_proxy',
+    UntrustedProxy: 'untrusted_proxy',
+} as const;
+
+export type ChannelPolicyProfile = ContractChannel['policy_profile'];
 
 /**
  * 渠道完整数据（与后端 model.Channel 对齐；数组字段在前端保证为 []）
@@ -77,6 +96,7 @@ export type CreateChannelRequest = {
     rpm_limit?: number;
     max_concurrency?: number;
     user_agent?: string;
+    policy_profile?: ChannelPolicyProfile;
 };
 
 /**
@@ -103,6 +123,7 @@ export type UpdateChannelRequest = {
     rpm_limit?: number;
     max_concurrency?: number;
     user_agent?: string;
+    policy_profile?: ChannelPolicyProfile;
     // keys diff
     keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
     keys_to_update?: Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string }>;
@@ -440,6 +461,16 @@ export function useChannelCircuit(channelId: number, enabled: boolean = true) {
         queryFn: async () => apiClient.get<ChannelCircuitStatus[]>(`/api/v1/channel/${channelId}/circuit`),
         enabled: enabled && channelId > 0,
         refetchInterval: 5000,
+    });
+}
+
+export function useChannelRuntimeURLs(channelId: number, enabled: boolean = true) {
+    return useQuery({
+        queryKey: ['channels', channelId, 'runtime-urls'],
+        queryFn: async () => apiClient.get<ChannelRuntimeURLStatus[]>(`/api/v1/channel/${channelId}/runtime-urls`),
+        enabled: enabled && channelId > 0,
+        staleTime: 5000,
+        refetchInterval: 10000,
     });
 }
 

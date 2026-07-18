@@ -27,6 +27,27 @@ func NewHealthManager(config HealthConfig) *HealthManager {
 	}
 }
 
+// UpdateConfig applies runtime health settings without discarding accumulated
+// latency and success-rate evidence. Existing ChannelHealth instances keep
+// their estimators and counters while adopting the new policy immediately.
+func (m *HealthManager) UpdateConfig(config HealthConfig) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config = config
+	for _, channelHealth := range m.states {
+		channelHealth.mu.Lock()
+		channelHealth.Config = config
+		if config.WindowSize > 0 && len(channelHealth.Stats.RecentResults) > config.WindowSize {
+			channelHealth.Stats.RecentResults = append([]bool(nil), channelHealth.Stats.RecentResults[len(channelHealth.Stats.RecentResults)-config.WindowSize:]...)
+		}
+		channelHealth.recomputeLocked()
+		channelHealth.mu.Unlock()
+	}
+}
+
 // GetOrCreate 获取或创建渠道健康状态
 func (m *HealthManager) GetOrCreate(key HealthKey) *ChannelHealth {
 	// 快速路径：只读锁

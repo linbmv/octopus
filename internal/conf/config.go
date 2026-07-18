@@ -39,9 +39,9 @@ type JWT struct {
 type Relay struct {
 	// NonStreamTimeoutSeconds bounds the complete upstream lifecycle for a
 	// non-streaming relay request, including retries. Zero disables the guard.
-	NonStreamTimeoutSeconds        int   `mapstructure:"non_stream_timeout_seconds"`
-	StreamFirstEventTimeoutSeconds int   `mapstructure:"stream_first_event_timeout_seconds"`
-	StreamIdleTimeoutSeconds       int   `mapstructure:"stream_idle_timeout_seconds"`
+	NonStreamTimeoutSeconds        int `mapstructure:"non_stream_timeout_seconds"`
+	StreamFirstEventTimeoutSeconds int `mapstructure:"stream_first_event_timeout_seconds"`
+	StreamIdleTimeoutSeconds       int `mapstructure:"stream_idle_timeout_seconds"`
 	// NonStreamAttemptTimeoutSeconds bounds one non-streaming upstream attempt
 	// while waiting for response headers, so a hung channel yields to remaining
 	// failover candidates instead of consuming the whole request budget. It is
@@ -52,6 +52,8 @@ type Relay struct {
 	// stream event on channels without adaptive health samples when another
 	// failover candidate exists. Zero disables the cold-start override.
 	StreamColdStartFirstEventTimeoutSeconds int   `mapstructure:"stream_cold_start_first_event_timeout_seconds"`
+	MaxUpstreamAttempts                     int   `mapstructure:"max_upstream_attempts"`
+	StreamFirstEventBudgetSeconds           int   `mapstructure:"stream_first_event_budget_seconds"`
 	MaxJSONRequestBytes                     int64 `mapstructure:"max_json_request_bytes"`
 	MaxImageRequestBytes                    int64 `mapstructure:"max_image_request_bytes"`
 	MaxNonStreamResponseBytes               int64 `mapstructure:"max_non_stream_response_bytes"`
@@ -230,6 +232,8 @@ func setDefaultsFor(v *viper.Viper) {
 	v.SetDefault("relay.stream_idle_timeout_seconds", 600)
 	v.SetDefault("relay.non_stream_attempt_timeout_seconds", 60)
 	v.SetDefault("relay.stream_cold_start_first_event_timeout_seconds", 30)
+	v.SetDefault("relay.max_upstream_attempts", 8)
+	v.SetDefault("relay.stream_first_event_budget_seconds", 120)
 	v.SetDefault("relay.max_json_request_bytes", 32<<20)
 	v.SetDefault("relay.max_image_request_bytes", 64<<20)
 	v.SetDefault("relay.max_non_stream_response_bytes", 64<<20)
@@ -309,6 +313,12 @@ func Validate(config Config) error {
 	}
 	if config.Relay.StreamColdStartFirstEventTimeoutSeconds < 0 || config.Relay.StreamColdStartFirstEventTimeoutSeconds > 24*60*60 {
 		return fmt.Errorf("relay.stream_cold_start_first_event_timeout_seconds must be between 0 and 86400")
+	}
+	if config.Relay.MaxUpstreamAttempts < 0 || config.Relay.MaxUpstreamAttempts > 1000 {
+		return fmt.Errorf("relay.max_upstream_attempts must be between 0 and 1000")
+	}
+	if config.Relay.StreamFirstEventBudgetSeconds < 0 || config.Relay.StreamFirstEventBudgetSeconds > 24*60*60 {
+		return fmt.Errorf("relay.stream_first_event_budget_seconds must be between 0 and 86400")
 	}
 	const maxConfiguredBodyBytes = int64(1 << 30)
 	for name, value := range map[string]int64{

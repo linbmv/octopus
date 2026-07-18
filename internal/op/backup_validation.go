@@ -293,6 +293,9 @@ func validateDumpChannels(dump *model.DBDump, state *backupValidationState) erro
 		if key.LastUseTimeStamp < 0 || key.LastUseTimeStamp > model.MaxUnixTimestamp {
 			return invalidDump(path+".last_use_time_stamp", "must be 0 or a valid Unix timestamp")
 		}
+		if key.RetryAfterUntil < 0 || key.RetryAfterUntil > model.MaxUnixTimestamp {
+			return invalidDump(path+".retry_after_until", "must be 0 or a valid Unix timestamp")
+		}
 		if !finiteNonNegative(key.TotalCost) {
 			return invalidDump(path+".total_cost", "must be a finite non-negative number")
 		}

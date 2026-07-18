@@ -621,6 +621,22 @@
             "retryDetails": "Retry Details",
             "attempts": "attempts",
             "attemptNumber": "Attempt {number}",
+            "healthPenalty": "Health penalty",
+            "noHealthPenalty": "No health penalty",
+            "attemptActions": {
+                "selected": "selected",
+                "retry_base_url": "retry URL",
+                "retry_key": "retry key",
+                "retry_channel": "retry channel",
+                "return_client": "returned to client",
+                "client_cancel": "client canceled",
+                "stop": "stopped"
+            },
+            "selectionReasons": {
+                "runtime_url_selector": "runtime URL selection",
+                "base_url_failover": "URL failover",
+                "key_failover": "key failover"
+            },
             "attemptStatus": {
                 "success": "Success",
                 "failed": "Failed",
@@ -657,6 +673,20 @@
             },
             "noBaseUrls": "No Base URLs",
             "noKeys": "No Keys",
+            "policyProfile": "Reliability profile",
+            "policyProfiles": {
+                "standard": "Standard",
+                "official": "Official provider",
+                "trusted_proxy": "Trusted proxy",
+                "untrusted_proxy": "Untrusted proxy"
+            },
+            "urlCooldown": "{seconds}s cooldown",
+            "urlUnmeasured": "unmeasured",
+            "urlReasons": {
+                "measured_latency": "measured",
+                "configured_delay": "configured",
+                "unmeasured": "exploring"
+            },
             "metrics": {
                 "totalRequests": "Total Requests",
                 "totalToken": "Total Tokens",
@@ -731,6 +761,14 @@
             "baseUrlUrl": "URL",
             "baseUrlDelay": "Delay(ms)",
             "advanced": "Advanced Settings",
+            "policyProfile": "Reliability profile",
+            "policyProfileHint": "Controls how ambiguous upstream 4xx errors participate in failover. Provider-specific model and tool-state errors can still switch channels in every profile.",
+            "policyProfiles": {
+                "standard": "Standard",
+                "official": "Official provider",
+                "trusted_proxy": "Trusted proxy",
+                "untrusted_proxy": "Untrusted proxy"
+            },
             "apiKey": "API Key",
             "customHeader": "Custom Headers",
             "customHeaderKey": "Header Key",

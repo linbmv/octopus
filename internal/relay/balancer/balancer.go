@@ -13,8 +13,6 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 )
 
-var roundRobinCounter uint64
-
 // HealthWeightFunc returns a multiplicative health factor for a weighted
 // candidate. A value <= 0 keeps the candidate selectable with a tiny weight so
 // a bad health sample cannot permanently starve recovery probes.
@@ -71,20 +69,135 @@ func GetBalancer(mode model.GroupMode) Balancer {
 	}
 }
 
-// RoundRobin 轮询：从上次位置开始轮转排列
+// RoundRobin 轮询：每个候选集合独立维护当前位置，避免一个组的流量
+// 改变另一个组的起点。
 type RoundRobin struct{}
+
+const (
+	roundRobinStateLimit = 2048
+	roundRobinStateTTL   = time.Hour
+)
+
+var roundRobinNow = time.Now
+
+type roundRobinGroupState struct {
+	next       uint64
+	channelIDs map[int]struct{}
+	lastUsed   time.Time
+	element    *list.Element
+}
+
+type roundRobinState struct {
+	mu         sync.Mutex
+	groups     map[string]*roundRobinGroupState
+	order      *list.List
+	operations uint64
+}
+
+func newRoundRobinState() *roundRobinState {
+	return &roundRobinState{groups: make(map[string]*roundRobinGroupState), order: list.New()}
+}
+
+var smoothRoundRobinState = newRoundRobinState()
 
 func (b *RoundRobin) Candidates(items []model.GroupItem) []model.GroupItem {
 	n := len(items)
 	if n == 0 {
 		return nil
 	}
-	idx := int(atomic.AddUint64(&roundRobinCounter, 1) % uint64(n))
+	groupKey := weightedGroupKey(items)
+	now := roundRobinNow()
+	smoothRoundRobinState.mu.Lock()
+	defer smoothRoundRobinState.mu.Unlock()
+	smoothRoundRobinState.operations++
+	if smoothRoundRobinState.operations%runtimeStateSweepEvery == 0 {
+		smoothRoundRobinState.sweepExpiredLocked(now)
+	}
+	state := smoothRoundRobinState.groups[groupKey]
+	if state == nil {
+		if len(smoothRoundRobinState.groups) >= roundRobinStateLimit {
+			smoothRoundRobinState.sweepExpiredLocked(now)
+		}
+		if len(smoothRoundRobinState.groups) >= roundRobinStateLimit {
+			smoothRoundRobinState.removeOldestLocked()
+		}
+		channelIDs := make(map[int]struct{}, n)
+		for _, item := range items {
+			if item.ChannelID > 0 {
+				channelIDs[item.ChannelID] = struct{}{}
+			}
+		}
+		state = &roundRobinGroupState{channelIDs: channelIDs, lastUsed: now}
+		state.element = smoothRoundRobinState.order.PushBack(groupKey)
+		smoothRoundRobinState.groups[groupKey] = state
+	} else {
+		state.lastUsed = now
+		smoothRoundRobinState.order.MoveToBack(state.element)
+	}
+	idx := int(state.next % uint64(n))
+	state.next++
 	result := make([]model.GroupItem, n)
 	for i := 0; i < n; i++ {
 		result[i] = items[(idx+i)%n]
 	}
 	return result
+}
+
+func (s *roundRobinState) sweepExpiredLocked(now time.Time) {
+	for element := s.order.Front(); element != nil; {
+		next := element.Next()
+		key := element.Value.(string)
+		state := s.groups[key]
+		if state == nil || stateExpired(state.lastUsed, now, roundRobinStateTTL) {
+			s.removeGroupLocked(key, state)
+		}
+		element = next
+	}
+}
+
+func (s *roundRobinState) removeOldestLocked() {
+	element := s.order.Front()
+	if element == nil {
+		return
+	}
+	key := element.Value.(string)
+	s.removeGroupLocked(key, s.groups[key])
+}
+
+func (s *roundRobinState) removeGroupLocked(key string, state *roundRobinGroupState) {
+	if state == nil {
+		delete(s.groups, key)
+		return
+	}
+	delete(s.groups, key)
+	if state.element != nil {
+		s.order.Remove(state.element)
+		state.element = nil
+	}
+}
+
+func (s *roundRobinState) invalidateChannel(channelID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, state := range s.groups {
+		if _, ok := state.channelIDs[channelID]; ok {
+			s.removeGroupLocked(key, state)
+		}
+	}
+}
+
+func (s *roundRobinState) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groups = make(map[string]*roundRobinGroupState)
+	s.order.Init()
+	s.operations = 0
+}
+
+func (s *roundRobinState) len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.groups)
 }
 
 // Random 随机：随机打乱所有 items
@@ -228,14 +341,25 @@ func (b *Weighted) Candidates(items []model.GroupItem) []model.GroupItem {
 
 	result := make([]model.GroupItem, n)
 	result[0] = items[selectedIdx]
-	next := 1
+	fallback := make([]model.GroupItem, 0, n-1)
 	for i, item := range items {
 		if i == selectedIdx {
 			continue
 		}
-		result[next] = item
-		next++
+		fallback = append(fallback, item)
 	}
+	sort.SliceStable(fallback, func(i, j int) bool {
+		if fallback[i].Priority != fallback[j].Priority {
+			return fallback[i].Priority < fallback[j].Priority
+		}
+		leftHealth := healthWeight(fallback[i])
+		rightHealth := healthWeight(fallback[j])
+		if leftHealth != rightHealth {
+			return leftHealth > rightHealth
+		}
+		return fallback[i].ID < fallback[j].ID
+	})
+	copy(result[1:], fallback)
 	return result
 }
 

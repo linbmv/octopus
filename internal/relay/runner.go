@@ -17,6 +17,7 @@ import (
 func (r *relayRun) run() {
 	ctx := r.c.Request.Context()
 	var lastErr error
+	var lastClientErr *classifiedClientRelayError
 
 	for {
 		select {
@@ -45,6 +46,10 @@ func (r *relayRun) run() {
 				return
 			}
 			lastErr = err
+			var clientErr *classifiedClientRelayError
+			if errors.As(err, &clientErr) {
+				lastClientErr = clientErr
+			}
 			continue
 		}
 		if attempt == nil {
@@ -71,10 +76,19 @@ func (r *relayRun) run() {
 			return
 		}
 		lastErr = err
+		var clientErr *classifiedClientRelayError
+		if errors.As(err, &clientErr) {
+			lastClientErr = clientErr
+		}
 	}
 
 	if lastErr == nil {
 		lastErr = errors.New("all channels failed")
+	}
+	if lastClientErr != nil {
+		r.metrics.Save(ctx, false, lastClientErr, r.attempts())
+		respondRelayError(r.c, lastClientErr.StatusCode(), lastClientErr)
+		return
 	}
 	r.metrics.Save(ctx, false, lastErr, r.attempts())
 	respondRelayError(r.c, http.StatusBadGateway, lastErr)
@@ -111,6 +125,9 @@ func isNonStreamRequestTimeout(ctx context.Context) bool {
 }
 
 func (r *relayRun) attempts() []dbmodel.ChannelAttempt {
+	if r.timeline != nil {
+		return append([]dbmodel.ChannelAttempt(nil), r.timeline...)
+	}
 	attempts := make([]dbmodel.ChannelAttempt, 0)
 	for _, iter := range r.iterHistory {
 		attempts = append(attempts, iter.Attempts()...)
@@ -119,6 +136,19 @@ func (r *relayRun) attempts() []dbmodel.ChannelAttempt {
 		attempts[i].AttemptNum = i + 1
 	}
 	return attempts
+}
+
+func (r *relayRun) attachIteratorTimeline(iter *balancer.Iterator) {
+	if r == nil || iter == nil {
+		return
+	}
+	if r.timeline == nil {
+		r.timeline = make([]dbmodel.ChannelAttempt, 0)
+	}
+	iter.SetAttemptEventSink(func(attempt dbmodel.ChannelAttempt) {
+		attempt.AttemptNum = len(r.timeline) + 1
+		r.timeline = append(r.timeline, attempt)
+	})
 }
 
 func (r *relayRun) runAttempt(attempt *relayAttempt) (bool, error) {
@@ -199,7 +229,8 @@ func (r *relayRun) pushNestedGroupIterator(parent *relayIteratorFrame, item dbmo
 		return nil
 	}
 	parent.iter.RedirectFor(item, 0, parent.group.Name, targetGroup.ID, targetGroup.Name, parent.depth+1, "enter nested group")
-	childIter := newRelayIteratorWithBaseURLs(*targetGroup, r.c.GetInt("api_key_id"), r.internalRequest, r.c.Request.Context(), r.selectedBaseURLs)
+	childIter := newRelayIteratorWithSessionAndBaseURLs(*targetGroup, r.c.GetInt("api_key_id"), r.internalRequest, r.c.Request.Context(), r.selectedBaseURLs, r.sessionID)
+	r.attachIteratorTimeline(childIter)
 	r.iterHistory = append(r.iterHistory, childIter)
 	r.iterStack = append(r.iterStack, &relayIteratorFrame{
 		group: *targetGroup,
@@ -235,8 +266,21 @@ func (r *relayRun) buildRealAttempt(
 		r.iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
 		return nil, nil
 	}
+	if remaining := channelRateLimitRemaining(channel.ID); remaining > 0 {
+		r.iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("channel rate limited, retry after %ds", max(1, int(remaining.Seconds()))))
+		return nil, nil
+	}
 
-	baseURL := selectedBaseURLForChannel(channel, r.selectedBaseURLs)
+	baseURLOptions := baseURLCandidatesForChannel(channel, r.selectedBaseURLs)
+	baseURL := ""
+	if len(baseURLOptions) > 0 {
+		baseURL = baseURLOptions[0]
+	} else {
+		baseURL = selectedBaseURLForChannel(channel, r.selectedBaseURLs)
+		if baseURL != "" {
+			baseURLOptions = []string{baseURL}
+		}
+	}
 	keyOptions := channel.AvailableKeysForAttempt(stickyKeyID)
 	keyOptions = op.RankChannelKeysByCapability(
 		r.c.Request.Context(), channel, keyOptions, item.ModelName,
@@ -275,15 +319,18 @@ func (r *relayRun) buildRealAttempt(
 		)
 
 		return &relayAttempt{
-			relayRun:   r,
-			outAdapter: outAdapter,
-			channel:    channel,
-			groupItem:  item,
-			usedKey:    usedKey,
-			keyOptions: keyOptions,
-			keyIndex:   keyIndex,
-			baseURL:    baseURL,
-			keyRemark:  keyRemark,
+			relayRun:        r,
+			outAdapter:      outAdapter,
+			channel:         channel,
+			groupItem:       item,
+			usedKey:         usedKey,
+			keyOptions:      keyOptions,
+			keyIndex:        keyIndex,
+			baseURL:         baseURL,
+			baseURLOptions:  baseURLOptions,
+			attemptAction:   "selected",
+			selectionReason: "runtime_url_selector",
+			keyRemark:       keyRemark,
 		}, nil
 	}
 

@@ -39,11 +39,26 @@ func (ra *relayAttempt) run() (bool, error) {
 
 	var lastErr error
 	for {
+		if ra.streamFirstEventBudget > 0 && ra.remainingStreamFirstEventBudget() <= 0 {
+			balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+			return false, newTerminalRelayError(http.StatusGatewayTimeout, errStreamFirstEventBudget)
+		}
+		if !ra.reserveUpstreamAttempt() {
+			balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+			return false, newTerminalRelayError(http.StatusServiceUnavailable, errUpstreamAttemptBudget)
+		}
 		written, responseHeaders, responseBody, err := ra.runWithCurrentKey()
 		if err == nil || written {
 			return written, err
 		}
 		lastErr = err
+		if ra.canRetryNextBaseURL(err, responseHeaders, responseBody) {
+			if ra.switchToNextBaseURL() {
+				log.Infof("retrying channel %s(%d) with next base URL after endpoint-level error: %v",
+					ra.channel.Name, ra.channel.ID, lastErr)
+				continue
+			}
+		}
 		if !ra.canRetryNextKey(err, responseHeaders, responseBody) {
 			return false, err
 		}
@@ -56,6 +71,12 @@ func (ra *relayAttempt) run() (bool, error) {
 }
 
 func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
+	if msg, ok := reserveChannelRPM(ra.channel); !ok {
+		balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+		ra.iter.Skip(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, msg)
+		return false, nil, nil, &channelRequestLimitError{message: msg}
+	}
+
 	ctx := log.WithChannelID(ra.c.Request.Context(), ra.channel.ID)
 	ctx, upstreamSpan := tracing.Tracer().Start(ctx, "relay.upstream",
 		trace.WithSpanKind(trace.SpanKindClient),
@@ -75,6 +96,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		ra.channel.Name,
 		ra.keyRemark,
 	)
+	span.SetRoutingMetadata(safeRuntimeURL(ra.baseURL), ra.attemptAction, false, ra.selectionReason)
 	ra.span = span // 保存 span 到 relayAttempt，供 writeStream 记录首 token 时间
 
 	// 开始跟踪活跃请求
@@ -94,6 +116,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID, ra.iter.IsSticky(), ra.metrics.ActualModel)
 
 	upstreamStatusCode, upstreamHeaders, upstreamResponseBody, fwdErr := ra.forward()
+	ra.recordStreamFirstEventWait(span, fwdErr)
 	if fwdErr != nil && isNonStreamRequestTimeout(ra.c.Request.Context()) {
 		fwdErr = fmt.Errorf("%w: %v", errNonStreamRequestTimeout, fwdErr)
 	}
@@ -101,11 +124,25 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		upstreamStatusCode = http.StatusOK
 	}
 	ra.usedKey.StatusCode = upstreamStatusCode
-	ra.usedKey.LastUseTimeStamp = time.Now().Unix()
+	now := time.Now()
+	ra.usedKey.LastUseTimeStamp = now.Unix()
+	if upstreamStatusCode == http.StatusTooManyRequests {
+		cooldown := retryAfterDuration(upstreamHeaders, now, defaultRateLimitCooldown)
+		ra.usedKey.RetryAfterUntil = now.Add(cooldown).Unix()
+	} else {
+		ra.usedKey.RetryAfterUntil = 0
+	}
 
 	if fwdErr == nil {
 		upstreamSpan.SetAttributes(attribute.Int("http.response.status_code", upstreamStatusCode))
-		recordRuntimeURLSuccess(ra.channel.ID, ra.baseURL, span.Duration())
+		urlLatency := ra.responseHeaderDuration
+		if firstTokenDuration, ok := span.FirstTokenDuration(); ok {
+			urlLatency = firstTokenDuration
+		}
+		if urlLatency <= 0 {
+			urlLatency = span.Duration()
+		}
+		recordRuntimeURLSuccess(ra.channel.ID, ra.baseURL, urlLatency)
 		ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
 		if updateErr := op.ChannelKeyUpdate(ra.usedKey); updateErr != nil {
 			log.WithContext(ctx).Warnw("failed to update channel key runtime state",
@@ -151,7 +188,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		}
 
 		if shouldSticky {
-			balancer.SetSticky(ra.metrics.APIKeyID, ra.metrics.RequestModel, ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
+			balancer.SetStickyForSession(ra.metrics.APIKeyID, ra.metrics.RequestModel, ra.sessionID, ra.channel.ID, ra.usedKey.ID, ra.metrics.ActualModel)
 		}
 
 		// attempt 成功日志（第一阶段可观测性增强）
@@ -176,6 +213,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		// 客户端取消不能证明通道好坏，但若本次是半开试探必须归还名额：
 		// 这是"模型冻结后长期不恢复"的最常见触发路径。
 		balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+		span.SetRoutingMetadata(safeRuntimeURL(ra.baseURL), "client_cancel", false, ra.selectionReason)
 		span.End(dbmodel.AttemptClientCancel, msg)
 		log.Infof("attempt %d/%d canceled by request context: channel=%s(%d), key=%d, duration=%dms, msg=%s, error=%v",
 			ra.iter.Index()+1, ra.iter.Len(),
@@ -190,11 +228,19 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 	}
 	// 使用完整的上游响应体进行智能错误决策。
 	decision := ra.decideError(upstreamStatusCode, upstreamHeaders, upstreamResponseBody, fwdErr)
+	if upstreamStatusCode == http.StatusTooManyRequests && decision.Classification.Level == errorclass.ErrorLevelChannel {
+		recordChannelRateLimit(ra.channel.ID, retryAfterDuration(upstreamHeaders, now, defaultRateLimitCooldown))
+	}
 	// URL 冷却只针对通道级故障（网络/5xx/超时/软错误）。key 级（401/配额）与
 	// client 级错误与端点本身无关，误记会让多 URL 渠道被轮换到次优端点。
-	if shouldRecordURLFailure(decision) {
+	if shouldRecordURLFailure(decision) && !ra.isAdaptiveFirstTokenTimeout(fwdErr) && !isFirstTokenBudgetTimeout(fwdErr) {
 		recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
 	}
+	endpointFallbackPending := decision.Action == ErrorActionRetryChannel &&
+		!ra.isAdaptiveFirstTokenTimeout(fwdErr) && !isFirstTokenBudgetTimeout(fwdErr) && ra.hasNextBaseURL()
+	healthPenalty := decision.Classification.Level != errorclass.ErrorLevelClient &&
+		!ra.isAdaptiveFirstTokenTimeout(fwdErr) && !isFirstTokenBudgetTimeout(fwdErr) && !endpointFallbackPending
+	span.SetRoutingMetadata(safeRuntimeURL(ra.baseURL), attemptDecisionAction(decision, endpointFallbackPending), healthPenalty, ra.selectionReason)
 	ra.applyCompactCompatibilityDecision(ctx, decision)
 	upstreamSpan.RecordError(fwdErr)
 	upstreamSpan.SetStatus(codes.Error, fwdErr.Error())
@@ -217,11 +263,11 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 			log.WithContext(ctx).Warnw("failed to update failed channel attempt statistics",
 				"channel_id", ra.channel.ID, "error", statsErr)
 		}
-		if !ra.isAdaptiveFirstTokenTimeout(fwdErr) {
+		if !ra.isAdaptiveFirstTokenTimeout(fwdErr) && !isFirstTokenBudgetTimeout(fwdErr) && !endpointFallbackPending {
 			balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		} else {
-			// 自适应首字超时是激进优化信号而非通道故障证据，不计失败；
-			// 但若本次是半开试探仍需归还名额。
+			// 自适应超时或仍可进行端点级故障转移时，不提前惩罚整个
+			// channel+key+model；若本次是半开试探则归还名额。
 			balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		}
 	} else {
@@ -256,10 +302,34 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
 		span.Duration().Milliseconds(), decision.Classification.Level, fwdErr)
 	if decision.Action == ErrorActionReturnClient {
-		return false, upstreamHeaders, upstreamResponseBody, newTerminalRelayError(decision.ClientStatusCode, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr))
+		clientErr := &classifiedClientRelayError{
+			cause: fwdErr, reason: decision.Classification.Reason, statusCode: decision.ClientStatusCode,
+		}
+		return false, upstreamHeaders, upstreamResponseBody, newTerminalRelayError(clientErr.StatusCode(), clientErr)
+	}
+	if decision.Classification.Level == errorclass.ErrorLevelClient {
+		return false, upstreamHeaders, upstreamResponseBody, &classifiedClientRelayError{
+			cause: fwdErr, reason: decision.Classification.Reason, statusCode: decision.ClientStatusCode,
+		}
 	}
 
-	return ra.c.Writer.Written(), upstreamHeaders, upstreamResponseBody, fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr)
+	return ra.c.Writer.Written(), upstreamHeaders, upstreamResponseBody, fmt.Errorf("channel %s failed: %w", ra.channel.Name, fwdErr)
+}
+
+func attemptDecisionAction(decision ErrorDecision, endpointFallbackPending bool) string {
+	if endpointFallbackPending {
+		return "retry_base_url"
+	}
+	switch decision.Action {
+	case ErrorActionRetryKey:
+		return "retry_key"
+	case ErrorActionRetryChannel:
+		return "retry_channel"
+	case ErrorActionReturnClient:
+		return "return_client"
+	default:
+		return "stop"
+	}
 }
 
 func isRequestContextCanceled(ctx context.Context, err error) bool {
@@ -279,11 +349,51 @@ func isRequestContextCanceled(ctx context.Context, err error) bool {
 }
 
 func (ra *relayAttempt) canRetryNextKey(err error, upstreamHeaders http.Header, upstreamResponseBody []byte) bool {
-	if err == nil || ra.c.Writer.Written() || ra.keyIndex+1 >= len(ra.keyOptions) {
+	if err == nil || ra.c.Writer.Written() || ra.keyIndex+1 >= len(ra.keyOptions) || isChannelRequestLimitError(err) {
 		return false
 	}
 
 	return ra.decideError(ra.usedKey.StatusCode, upstreamHeaders, upstreamResponseBody, err).Action == ErrorActionRetryKey
+}
+
+func (ra *relayAttempt) canRetryNextBaseURL(err error, upstreamHeaders http.Header, upstreamResponseBody []byte) bool {
+	if err == nil || ra.c.Writer.Written() || !ra.hasNextBaseURL() ||
+		isChannelRequestLimitError(err) || ra.isAdaptiveFirstTokenTimeout(err) || isFirstTokenBudgetTimeout(err) {
+		return false
+	}
+	return ra.decideError(ra.usedKey.StatusCode, upstreamHeaders, upstreamResponseBody, err).Action == ErrorActionRetryChannel
+}
+
+func (ra *relayAttempt) hasNextBaseURL() bool {
+	for i := ra.baseURLIndex + 1; i < len(ra.baseURLOptions); i++ {
+		if ra.baseURLOptions[i] != "" && ra.baseURLOptions[i] != ra.baseURL {
+			return true
+		}
+	}
+	return false
+}
+
+func (ra *relayAttempt) switchToNextBaseURL() bool {
+	for ra.baseURLIndex+1 < len(ra.baseURLOptions) {
+		ra.baseURLIndex++
+		nextBaseURL := ra.baseURLOptions[ra.baseURLIndex]
+		if nextBaseURL == "" || nextBaseURL == ra.baseURL {
+			continue
+		}
+		outAdapter, err := newOutbound(ra.channel.Type, ra.internalRequest, nextBaseURL, ra.usedKey.ChannelKey)
+		if err != nil {
+			continue
+		}
+		ra.baseURL = nextBaseURL
+		ra.outAdapter = outAdapter
+		ra.metrics.ParamOverride = ""
+		ra.metrics.OutboundRequestSummary = nil
+		ra.responseHeaderDuration = 0
+		ra.attemptAction = "selected"
+		ra.selectionReason = "base_url_failover"
+		return true
+	}
+	return false
 }
 
 func (ra *relayAttempt) switchToNextKey() bool {
@@ -309,6 +419,8 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		ra.outAdapter = outAdapter
 		ra.metrics.ParamOverride = ""
 		ra.metrics.OutboundRequestSummary = nil
+		ra.attemptAction = "selected"
+		ra.selectionReason = "key_failover"
 		return true
 	}
 	return false
@@ -356,6 +468,13 @@ func (ra *relayAttempt) forwardWithAdapter(
 ) (int, http.Header, []byte, error) {
 	// 更新活跃请求状态为等待上游（第一阶段可观测性增强）
 	UpdateState(ra.trackingID, StateWaitingUpstream)
+	requestStartedAt := time.Now()
+	ra.responseHeaderDuration = 0
+	recordResponseHeaders := func() {
+		if ra.responseHeaderDuration == 0 {
+			ra.responseHeaderDuration = time.Since(requestStartedAt)
+		}
+	}
 
 	// 首字超时覆盖"发出上游请求 → 收到首个 token"全过程，包含 pipeline.Process 内部阻塞等待响应头的阶段。
 	// 出站 HTTP client 没有响应头超时，仅靠 SSE 建立后的计时器无法打断仍卡在 client.Do 等响应头的请求。
@@ -364,13 +483,36 @@ func (ra *relayAttempt) forwardWithAdapter(
 	fwdCtx := ctx
 	stopFirstTokenGuard := func() {}
 	wantStream := ra.internalRequest.Stream != nil && *ra.internalRequest.Stream
-	firstTokenTimeout := ra.firstTokenTimeout()
+	firstTokenTimeout, shadowFirstTokenTimeout := ra.firstTokenTimeoutPolicies()
+	if wantStream {
+		if remaining := ra.remainingStreamFirstEventBudget(); remaining > 0 {
+			if firstTokenTimeout.Duration <= 0 {
+				firstTokenTimeout = firstTokenTimeoutConfig{Duration: remaining, Source: firstTokenTimeoutBudget}
+			} else if firstTokenTimeout.Duration > remaining {
+				firstTokenTimeout.Duration = remaining
+				firstTokenTimeout.Source = firstTokenTimeoutBudget
+			}
+		} else if ra.streamFirstEventBudget > 0 {
+			return 0, nil, nil, errStreamFirstEventBudget
+		}
+	}
 	attemptTimeout := firstTokenTimeoutConfig{}
 	if wantStream {
 		if firstTokenTimeout.Duration > 0 {
 			var release func()
 			fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, firstTokenTimeout.Duration)
 			defer release()
+		}
+		if shadowFirstTokenTimeout.Duration > 0 {
+			shadowStop, shadowRelease := newFirstTokenShadowObserver(shadowFirstTokenTimeout.Duration, func() {
+				ra.recordShadowFirstTokenTimeout(shadowFirstTokenTimeout)
+			})
+			previousStop := stopFirstTokenGuard
+			stopFirstTokenGuard = func() {
+				previousStop()
+				shadowStop()
+			}
+			defer shadowRelease()
 		}
 	} else {
 		attemptTimeout = ra.nonStreamAttemptTimeout()
@@ -388,12 +530,15 @@ func (ra *relayAttempt) forwardWithAdapter(
 	if wantStream {
 		activity, touchActivity := newStreamActivitySignal()
 		ra.streamActivity = activity
-		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, false, touchActivity, nil)
+		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, false, touchActivity, recordResponseHeaders)
 	} else {
 		// 非流式在响应头到达时停表：LLM 上游的生成时间几乎全部消耗在
 		// 响应头之前，头到达后读 body 不再受 per-attempt 守卫约束
 		//（仍受字节上限与全局预算约束），避免误杀合法的大响应传输。
-		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, true, nil, stopFirstTokenGuard)
+		limitedHTTPClient = httpClientWithResponseLimit(httpClient, responseLimit, true, nil, func() {
+			recordResponseHeaders()
+			stopFirstTokenGuard()
+		})
 	}
 
 	result, err := pipeline.NewFactory(httpclient.NewHttpClientWithClient(limitedHTTPClient)).

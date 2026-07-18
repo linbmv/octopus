@@ -1,4 +1,4 @@
-import { AutoGroupType, ChannelType, type Channel, useFetchModel } from '@/api/endpoints/channel';
+import { AutoGroupType, ChannelPolicyProfile, ChannelType, type Channel, useFetchModel } from '@/api/endpoints/channel';
 import {
     Select,
     SelectContent,
@@ -46,6 +46,7 @@ export interface ChannelFormData {
     rpm_limit: number;
     max_concurrency: number;
     user_agent: string;
+    policy_profile: ChannelPolicyProfile;
 }
 
 export interface ChannelFormProps {

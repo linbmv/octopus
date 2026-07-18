@@ -20,6 +20,7 @@ func InvalidateChannel(channelID int) {
 	globalSession.invalidateChannel(channelID)
 	globalBreaker.invalidateChannel(channelID)
 	smoothWeightedState.invalidateChannel(channelID)
+	smoothRoundRobinState.invalidateChannel(channelID)
 }
 
 // InvalidateGroups removes state whose current key does not retain a group ID.
@@ -28,4 +29,5 @@ func InvalidateChannel(channelID int) {
 func InvalidateGroups() {
 	globalSession.clear()
 	smoothWeightedState.clear()
+	smoothRoundRobinState.clear()
 }

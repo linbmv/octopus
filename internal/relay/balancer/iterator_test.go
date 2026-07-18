@@ -38,7 +38,7 @@ func TestNewIteratorMovesStickyChannelAndKeepsStickyKeyID(t *testing.T) {
 		Mode:            model.GroupModeFailover,
 		SessionKeepTime: 60,
 		Items: []model.GroupItem{
-			{ChannelID: 1, ModelName: "upstream-a", Priority: 2},
+			{ChannelID: 1, ModelName: "upstream-a", Priority: 1},
 			{ChannelID: 2, ModelName: "upstream-b", Priority: 1},
 		},
 	}
@@ -55,6 +55,49 @@ func TestNewIteratorMovesStickyChannelAndKeepsStickyKeyID(t *testing.T) {
 	}
 	if got := iter.StickyKeyID(); got != channelKeyID {
 		t.Errorf("StickyKeyID() = %d, want %d", got, channelKeyID)
+	}
+}
+
+func TestStickyIsScopedBySessionID(t *testing.T) {
+	clearSessions()
+	defer clearSessions()
+	group := model.Group{Mode: model.GroupModeFailover, SessionKeepTime: 60}
+	candidates := []model.GroupItem{
+		{ID: 1, ChannelID: 1, ModelName: "m", Priority: 1},
+		{ID: 2, ChannelID: 2, ModelName: "m", Priority: 1},
+	}
+	SetStickyForSession(7, "model", "session-a", 2, 202, "m")
+	other := NewIteratorFromCandidatesWithSession(group, 7, "model", "session-b", append([]model.GroupItem(nil), candidates...), nil, nil)
+	if !other.Next() || other.Item().ChannelID != 1 || other.IsSticky() {
+		t.Fatalf("different session reused sticky: item=%+v sticky=%v", other.Item(), other.IsSticky())
+	}
+	same := NewIteratorFromCandidatesWithSession(group, 7, "model", "session-a", append([]model.GroupItem(nil), candidates...), nil, nil)
+	if !same.Next() || same.Item().ChannelID != 2 || !same.IsSticky() || same.StickyKeyID() != 202 {
+		t.Fatalf("same session missed sticky: item=%+v sticky=%v key=%d", same.Item(), same.IsSticky(), same.StickyKeyID())
+	}
+}
+
+func TestStickyDoesNotCrossPriorityOrPolicyProfile(t *testing.T) {
+	clearSessions()
+	defer clearSessions()
+	group := model.Group{Mode: model.GroupModeFailover, SessionKeepTime: 60}
+	SetStickyForSession(8, "model", "session", 2, 202, "m")
+	priorityCandidates := []model.GroupItem{
+		{ID: 1, ChannelID: 1, ModelName: "m", Priority: 1},
+		{ID: 2, ChannelID: 2, ModelName: "m", Priority: 2},
+	}
+	priority := NewIteratorFromCandidatesWithSession(group, 8, "model", "session", priorityCandidates, nil, nil)
+	if !priority.Next() || priority.Item().ChannelID != 1 || priority.IsSticky() {
+		t.Fatalf("sticky crossed priority: item=%+v sticky=%v", priority.Item(), priority.IsSticky())
+	}
+	profileCandidates := []model.GroupItem{
+		{ID: 1, ChannelID: 1, ModelName: "m", Priority: 1},
+		{ID: 2, ChannelID: 2, ModelName: "m", Priority: 1},
+	}
+	profiles := map[int]string{1: "official", 2: "untrusted_proxy"}
+	profile := NewIteratorFromCandidatesWithSession(group, 8, "model", "session", profileCandidates, nil, profiles)
+	if !profile.Next() || profile.Item().ChannelID != 1 || profile.IsSticky() {
+		t.Fatalf("sticky crossed policy profile: item=%+v sticky=%v", profile.Item(), profile.IsSticky())
 	}
 }
 
@@ -205,8 +248,8 @@ func TestNewIteratorMatchesStickyByActualModelAmongMultipleItems(t *testing.T) {
 		SessionKeepTime: 60,
 		Items: []model.GroupItem{
 			{ChannelID: 2, ModelName: "upstream-x", Priority: 1},
-			{ChannelID: 1, ModelName: "upstream-a", Priority: 2},
-			{ChannelID: 1, ModelName: "upstream-b", Priority: 3},
+			{ChannelID: 1, ModelName: "upstream-a", Priority: 1},
+			{ChannelID: 1, ModelName: "upstream-b", Priority: 1},
 		},
 	}
 
@@ -264,6 +307,24 @@ func TestStartAttemptRecordsKeyRemark(t *testing.T) {
 	}
 	if attempts[0].ChannelKeyRemark != "linwolfer" {
 		t.Fatalf("ChannelKeyRemark = %q, want linwolfer", attempts[0].ChannelKeyRemark)
+	}
+}
+
+func TestAttemptSpanRecordsRoutingMetadata(t *testing.T) {
+	iter := NewIterator(model.Group{Items: []model.GroupItem{{ChannelID: 1, ModelName: "m"}}}, 0, "m")
+	if !iter.Next() {
+		t.Fatal("iterator has no candidate")
+	}
+	span := iter.StartAttempt(1, 2, "channel", "key")
+	span.SetRoutingMetadata("https://upstream.example", "retry_base_url", false, "base_url_failover")
+	span.End(model.AttemptFailed, "temporary upstream failure")
+	attempts := iter.Attempts()
+	if len(attempts) != 1 {
+		t.Fatalf("attempt count = %d, want 1", len(attempts))
+	}
+	got := attempts[0]
+	if got.BaseURL != "https://upstream.example" || got.Action != "retry_base_url" || got.HealthPenalty || got.SelectionReason != "base_url_failover" {
+		t.Fatalf("routing metadata = %+v", got)
 	}
 }
 

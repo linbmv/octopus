@@ -67,6 +67,13 @@ func TestRuntimeURLSelectorDeduplicatesAndIgnoresEmptyURLs(t *testing.T) {
 	}
 }
 
+func TestSafeRuntimeURLRemovesCredentialsAndQuery(t *testing.T) {
+	got := safeRuntimeURL("https://user:secret@example.com/v1?token=hidden#fragment")
+	if got != "https://example.com/v1" {
+		t.Fatalf("safeRuntimeURL() = %q, want sanitized endpoint", got)
+	}
+}
+
 func TestRuntimeURLSelectorEnforcesStateLimits(t *testing.T) {
 	selector := newRuntimeURLSelector()
 	selector.maxEntries = 3

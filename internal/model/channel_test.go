@@ -56,6 +56,16 @@ func TestChannelKeyIsAvailable(t *testing.T) {
 			key:  ChannelKey{Enabled: true, ChannelKey: "sk-rate-limited", StatusCode: http.StatusTooManyRequests, LastUseTimeStamp: expired429},
 			want: true,
 		},
+		{
+			name: "429 Retry-After 精确冷却中",
+			key:  ChannelKey{Enabled: true, ChannelKey: "sk-rate-limited", StatusCode: http.StatusTooManyRequests, RetryAfterUntil: nowSec + 5},
+			want: false,
+		},
+		{
+			name: "429 Retry-After 精确冷却结束",
+			key:  ChannelKey{Enabled: true, ChannelKey: "sk-rate-limited", StatusCode: http.StatusTooManyRequests, RetryAfterUntil: nowSec - 1},
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {

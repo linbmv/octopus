@@ -24,12 +24,13 @@ func TestErrorDecisionUsesExplicitActions(t *testing.T) {
 		wantRetryKey bool
 	}{
 		{
-			name:       "upstream client error switches channel",
+			name:       "deterministic upstream client error returns to client",
 			status:     http.StatusBadRequest,
 			body:       `{"error":{"type":"invalid_request_error"}}`,
 			err:        errors.New("invalid request"),
-			wantAction: ErrorActionRetryChannel,
+			wantAction: ErrorActionReturnClient,
 			wantLevel:  "client",
+			wantClient: http.StatusBadRequest,
 		},
 		{
 			name:       "upstream tool call state mismatch switches channel without health penalty",
@@ -38,6 +39,7 @@ func TestErrorDecisionUsesExplicitActions(t *testing.T) {
 			err:        errors.New("bad request"),
 			wantAction: ErrorActionRetryChannel,
 			wantLevel:  "client",
+			wantClient: http.StatusBadRequest,
 		},
 		{
 			name:         "key error rotates key",
@@ -76,6 +78,29 @@ func TestErrorDecisionUsesExplicitActions(t *testing.T) {
 			}
 			if decision.RetryNextKey != test.wantRetryKey {
 				t.Fatalf("RetryNextKey = %v, want %v", decision.RetryNextKey, test.wantRetryKey)
+			}
+		})
+	}
+}
+
+func TestClientErrorRetryPolicyUsesChannelProfile(t *testing.T) {
+	body := []byte(`{"error":{"type":"invalid_request_error"}}`)
+	for _, test := range []struct {
+		name    string
+		profile dbmodel.ChannelPolicyProfile
+		want    ErrorAction
+	}{
+		{name: "standard is conservative", profile: dbmodel.ChannelPolicyStandard, want: ErrorActionReturnClient},
+		{name: "official is authoritative", profile: dbmodel.ChannelPolicyOfficial, want: ErrorActionReturnClient},
+		{name: "trusted proxy may differ", profile: dbmodel.ChannelPolicyTrustedProxy, want: ErrorActionRetryChannel},
+		{name: "untrusted proxy may misclassify", profile: dbmodel.ChannelPolicyUntrustedProxy, want: ErrorActionRetryChannel},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decision := decideRelayErrorWithOptions(http.StatusBadRequest, nil, body, errors.New("bad request"), errorDecisionOptions{
+				PolicyProfile: test.profile,
+			})
+			if decision.Action != test.want || decision.ClientStatusCode != http.StatusBadRequest {
+				t.Fatalf("decision = %+v, want action=%s status=400", decision, test.want)
 			}
 		})
 	}

@@ -77,7 +77,25 @@ func init() {
 		AddRoute(
 			router.NewRoute("/:id/circuit", http.MethodGet).
 				Handle(getChannelCircuit),
+		).
+		AddRoute(
+			router.NewRoute("/:id/runtime-urls", http.MethodGet).
+				Handle(getChannelRuntimeURLs),
 		)
+}
+
+func getChannelRuntimeURLs(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || channelID <= 0 {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	channel, err := op.ChannelGet(channelID, c.Request.Context())
+	if err != nil {
+		resp.Error(c, http.StatusNotFound, "channel not found")
+		return
+	}
+	resp.Success(c, relay.RuntimeURLState(channel))
 }
 
 // getChannelCircuit 返回指定渠道当前被冻结（open/half_open）的熔断条目，
@@ -218,6 +236,7 @@ type channelCreateRequest struct {
 	ChannelProxy     *string                      `json:"channel_proxy,omitempty"`
 	MatchRegex       *string                      `json:"match_regex,omitempty"`
 	UserAgent        string                       `json:"user_agent,omitempty"`
+	PolicyProfile    model.ChannelPolicyProfile   `json:"policy_profile,omitempty"`
 }
 
 func (r channelCreateRequest) channel() model.Channel {
@@ -250,6 +269,7 @@ func (r channelCreateRequest) channel() model.Channel {
 		ChannelProxy:     r.ChannelProxy,
 		MatchRegex:       r.MatchRegex,
 		UserAgent:        r.UserAgent,
+		PolicyProfile:    r.PolicyProfile,
 	}
 }
 

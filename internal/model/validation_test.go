@@ -25,6 +25,9 @@ func TestValidateChannelNormalizesAndAcceptsValidInput(t *testing.T) {
 	if channel.Name != "primary" || channel.BaseUrls[0].URL != "https://example.com/v1" || channel.Keys[0].ChannelKey != "secret" {
 		t.Fatalf("channel was not normalized: %#v", channel)
 	}
+	if channel.PolicyProfile != ChannelPolicyStandard {
+		t.Fatalf("default policy profile = %q, want standard", channel.PolicyProfile)
+	}
 }
 
 func TestValidateChannelRejectsUnsafeShapes(t *testing.T) {
@@ -34,6 +37,7 @@ func TestValidateChannelRejectsUnsafeShapes(t *testing.T) {
 	}{
 		{name: "blank name", mutate: func(c *Channel) { c.Name = " " }},
 		{name: "unknown type", mutate: func(c *Channel) { c.Type = "unknown" }},
+		{name: "unknown policy profile", mutate: func(c *Channel) { c.PolicyProfile = "reckless" }},
 		{name: "missing URL", mutate: func(c *Channel) { c.BaseUrls = nil }},
 		{name: "URL credentials", mutate: func(c *Channel) { c.BaseUrls[0].URL = "https://user:pass@example.com" }},
 		{name: "duplicate URL", mutate: func(c *Channel) { c.BaseUrls = append(c.BaseUrls, BaseUrl{URL: "https://EXAMPLE.com/v1"}) }},

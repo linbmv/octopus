@@ -228,6 +228,7 @@ func applyChannelPatchTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {
 	helper.ApplyField("max_concurrency", req.MaxConcurrency)
 	helper.ApplyField("match_regex", req.MatchRegex)
 	helper.ApplyField("user_agent", req.UserAgent)
+	helper.ApplyField("policy_profile", req.PolicyProfile)
 
 	if !helper.HasUpdates() {
 		return nil
@@ -322,6 +323,7 @@ func channelKeyUpdates(key model.ChannelKeyUpdateRequest) map[string]interface{}
 	if resetRuntimeState {
 		updates["status_code"] = 0
 		updates["last_use_time_stamp"] = 0
+		updates["retry_after_until"] = 0
 	}
 	return updates
 }

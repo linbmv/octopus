@@ -20,8 +20,25 @@ type Iterator struct {
 	modelName   string // 请求模型名（用于熔断检查）
 
 	// 内嵌追踪
-	attempts []model.ChannelAttempt
-	count    int
+	attempts  []model.ChannelAttempt
+	count     int
+	eventSink func(model.ChannelAttempt)
+}
+
+// SetAttemptEventSink mirrors every future iterator decision to a request-level
+// timeline. The iterator keeps its local history for backwards compatibility;
+// the sink is intentionally write-only so callers cannot mutate it.
+func (it *Iterator) SetAttemptEventSink(sink func(model.ChannelAttempt)) {
+	if it != nil {
+		it.eventSink = sink
+	}
+}
+
+func (it *Iterator) recordAttempt(attempt model.ChannelAttempt) {
+	it.attempts = append(it.attempts, attempt)
+	if it.eventSink != nil {
+		it.eventSink(attempt)
+	}
 }
 
 // NewIterator 创建负载均衡迭代器
@@ -39,13 +56,20 @@ func NewIteratorWithCandidateRanks(group model.Group, apiKeyID int, requestModel
 }
 
 func NewIteratorFromCandidates(group model.Group, apiKeyID int, requestModel string, candidates []model.GroupItem, ranks map[int]int) *Iterator {
+	return NewIteratorFromCandidatesWithSession(group, apiKeyID, requestModel, "", candidates, ranks, nil)
+}
+
+// NewIteratorFromCandidatesWithSession adds request-scoped affinity and policy
+// metadata while preserving the original constructor for callers that do not
+// have a stable session identity.
+func NewIteratorFromCandidatesWithSession(group model.Group, apiKeyID int, requestModel, sessionID string, candidates []model.GroupItem, ranks map[int]int, policyProfiles map[int]string) *Iterator {
 	applyCandidateRanks(candidates, ranks)
 
 	stickyIdx := -1
 	stickyKeyID := 0
 	if group.SessionKeepTime > 0 {
 		stickyTTL := time.Duration(group.SessionKeepTime) * time.Second
-		if sticky := GetSticky(apiKeyID, requestModel, stickyTTL); sticky != nil {
+		if sticky := GetStickyForSession(apiKeyID, requestModel, sessionID, stickyTTL); sticky != nil {
 			for i, item := range candidates {
 				// 同渠道可能服务多个实际模型；仅当 actual model 也一致才复用 sticky，
 				// 否则前缀不同会导致上游 prompt cache miss，失去粘性的意义。
@@ -56,6 +80,12 @@ func NewIteratorFromCandidates(group model.Group, apiKeyID int, requestModel str
 					continue
 				}
 				if len(candidates) > 0 && rankOfCandidate(item, ranks) != rankOfCandidate(candidates[0], ranks) {
+					continue
+				}
+				if len(candidates) > 0 && item.Priority != candidates[0].Priority {
+					continue
+				}
+				if len(policyProfiles) > 0 && policyProfiles[item.ID] != policyProfiles[candidates[0].ID] {
 					continue
 				}
 				if i > 0 {
@@ -136,7 +166,7 @@ func (it *Iterator) Index() int {
 // Skip 记录当前通道被跳过（通道禁用、无Key、类型不兼容等）
 func (it *Iterator) Skip(channelID, channelKeyID int, channelName, msg string) {
 	it.count++
-	it.attempts = append(it.attempts, model.ChannelAttempt{
+	it.recordAttempt(model.ChannelAttempt{
 		ChannelID:    channelID,
 		ChannelKeyID: channelKeyID,
 		ChannelName:  channelName,
@@ -160,7 +190,7 @@ func (it *Iterator) SkipCircuitBreak(channelID, channelKeyID int, channelName, c
 		msg = fmt.Sprintf("circuit breaker tripped, remaining cooldown: %ds", int(remaining.Seconds()))
 	}
 	it.count++
-	it.attempts = append(it.attempts, model.ChannelAttempt{
+	it.recordAttempt(model.ChannelAttempt{
 		ChannelID:        channelID,
 		ChannelKeyID:     channelKeyID,
 		ChannelKeyRemark: channelKeyRemark,
@@ -204,6 +234,19 @@ type AttemptSpan struct {
 	iter           *Iterator
 	ended          bool
 	firstTokenTime *time.Time // 首token时间，用于记录到 attempt
+}
+
+// SetRoutingMetadata records the routing decision alongside the attempt result
+// so operators can distinguish endpoint/key failover from channel health
+// penalties without parsing free-form log messages.
+func (s *AttemptSpan) SetRoutingMetadata(baseURL, action string, healthPenalty bool, selectionReason string) {
+	if s == nil || s.ended {
+		return
+	}
+	s.attempt.BaseURL = baseURL
+	s.attempt.Action = action
+	s.attempt.HealthPenalty = healthPenalty
+	s.attempt.SelectionReason = selectionReason
 }
 
 // RecordFirstToken 记录首 token 时间（用于计算首token用时和判断健康粘性）
@@ -263,7 +306,7 @@ func (s *AttemptSpan) end(status model.AttemptStatus, msg string, level model.At
 	if s.firstTokenTime != nil {
 		s.attempt.FirstTokenTime = int(s.firstTokenTime.Sub(s.startTime).Milliseconds())
 	}
-	s.iter.attempts = append(s.iter.attempts, s.attempt)
+	s.iter.recordAttempt(s.attempt)
 }
 
 // Duration 返回从开始到现在的耗时
@@ -282,7 +325,7 @@ func (it *Iterator) SkipFor(
 	msg string,
 ) {
 	it.count++
-	it.attempts = append(it.attempts, model.ChannelAttempt{
+	it.recordAttempt(model.ChannelAttempt{
 		ChannelID:    channelID,
 		ChannelKeyID: channelKeyID,
 		ChannelName:  channelName,
@@ -305,7 +348,7 @@ func (it *Iterator) RedirectFor(
 	msg string,
 ) {
 	it.count++
-	it.attempts = append(it.attempts, model.ChannelAttempt{
+	it.recordAttempt(model.ChannelAttempt{
 		ChannelID:   virtualChannelID,
 		ChannelName: virtualChannelName,
 		ModelName:   item.ModelName,
@@ -335,7 +378,7 @@ func (it *Iterator) SkipCircuitBreakFor(
 	}
 
 	it.count++
-	it.attempts = append(it.attempts, model.ChannelAttempt{
+	it.recordAttempt(model.ChannelAttempt{
 		ChannelID:        channelID,
 		ChannelKeyID:     channelKeyID,
 		ChannelKeyRemark: channelKeyRemark,

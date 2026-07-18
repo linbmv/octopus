@@ -87,6 +87,12 @@ func ValidateChannel(channel *Channel) error {
 	channel.Model = strings.TrimSpace(channel.Model)
 	channel.CustomModel = strings.TrimSpace(channel.CustomModel)
 	channel.UserAgent = strings.TrimSpace(channel.UserAgent)
+	if channel.PolicyProfile == "" {
+		channel.PolicyProfile = ChannelPolicyStandard
+	}
+	if !channel.PolicyProfile.Valid() {
+		return fmt.Errorf("invalid channel policy_profile %q", channel.PolicyProfile)
+	}
 	return validateChannelFields(channel.AutoGroup, channel.CustomHeader, channel.HeaderRules, channel.JSONRewriteRules, channel.ChannelProxy, channel.ParamOverride,
 		channel.RPMLimit, channel.MaxConcurrency, channel.Model, channel.CustomModel, channel.UserAgent)
 }
@@ -106,6 +112,9 @@ func ValidateChannelUpdate(req *ChannelUpdateRequest) error {
 		if err := ValidateChannelType(*req.Type); err != nil {
 			return err
 		}
+	}
+	if req.PolicyProfile != nil && !req.PolicyProfile.Valid() {
+		return fmt.Errorf("invalid channel policy_profile %q", *req.PolicyProfile)
 	}
 	if req.BaseUrls != nil {
 		if err := validateBaseURLs(*req.BaseUrls); err != nil {

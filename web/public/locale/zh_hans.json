@@ -621,6 +621,22 @@
             "retryDetails": "重试详情",
             "attempts": "次尝试",
             "attemptNumber": "第 {number} 次",
+            "healthPenalty": "计入健康惩罚",
+            "noHealthPenalty": "未计入健康惩罚",
+            "attemptActions": {
+                "selected": "已选中",
+                "retry_base_url": "切换 URL",
+                "retry_key": "切换密钥",
+                "retry_channel": "切换渠道",
+                "return_client": "返回客户端",
+                "client_cancel": "客户端取消",
+                "stop": "停止"
+            },
+            "selectionReasons": {
+                "runtime_url_selector": "运行时 URL 选择",
+                "base_url_failover": "URL 故障转移",
+                "key_failover": "密钥故障转移"
+            },
             "attemptStatus": {
                 "success": "成功",
                 "failed": "失败",
@@ -657,6 +673,20 @@
             },
             "noBaseUrls": "暂无 Base URL",
             "noKeys": "暂无密钥",
+            "policyProfile": "可靠性档案",
+            "policyProfiles": {
+                "standard": "标准",
+                "official": "官方渠道",
+                "trusted_proxy": "可信中转",
+                "untrusted_proxy": "非可信中转"
+            },
+            "urlCooldown": "冷却 {seconds} 秒",
+            "urlUnmeasured": "未测量",
+            "urlReasons": {
+                "measured_latency": "实时延迟",
+                "configured_delay": "配置延迟",
+                "unmeasured": "探索中"
+            },
             "metrics": {
                 "totalRequests": "总请求",
                 "totalToken": "总 Token",
@@ -731,6 +761,14 @@
             "baseUrlUrl": "地址",
             "baseUrlDelay": "延迟(ms)",
             "advanced": "高级设置",
+            "policyProfile": "可靠性档案",
+            "policyProfileHint": "控制模糊上游 4xx 是否参与故障转移。明确的模型映射和工具调用状态错误在所有档案下仍可切换渠道。",
+            "policyProfiles": {
+                "standard": "标准",
+                "official": "官方渠道",
+                "trusted_proxy": "可信中转",
+                "untrusted_proxy": "非可信中转"
+            },
             "apiKey": "API Key",
             "customHeader": "自定义 Header",
             "customHeaderKey": "Header Key",
