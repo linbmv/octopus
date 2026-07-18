@@ -146,11 +146,12 @@ func decisionForClassification(statusCode int, classification errorclass.Classif
 	}
 	switch classification.Level {
 	case errorclass.ErrorLevelClient:
-		decision.Action = ErrorActionReturnClient
-		decision.ClientStatusCode = statusCode
-		if decision.ClientStatusCode < 400 || decision.ClientStatusCode > 499 {
-			decision.ClientStatusCode = http.StatusBadRequest
-		}
+		// Upstream 4xx/validation-style errors are not trusted as request-terminal in
+		// relay routing. Different providers disagree on tool-call state, endpoint
+		// compatibility, model aliases and request validation details, so keep
+		// failover moving across the configured group and only return an error after
+		// all candidates are exhausted.
+		decision.Action = ErrorActionRetryChannel
 	case errorclass.ErrorLevelKey:
 		decision.Action = ErrorActionRetryKey
 		decision.RetryNextKey = true

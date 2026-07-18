@@ -184,31 +184,16 @@ func selectedBaseURLForChannel(channel *dbmodel.Channel, selected map[int]string
 	return endpoint
 }
 
-// nestedFallbackCandidates returns group items ordered with direct channels before nested groups.
-// This ensures nested groups act as fallback pools: parent group's direct channels are exhausted
-// before entering any nested group, regardless of priority values.
-//
-// Example: if group has [DirectA(priority=100), NestedB(priority=50), DirectC(priority=30)],
-// the result is [DirectA, DirectC, NestedB], NOT [NestedB, DirectC, DirectA].
+// nestedFallbackCandidates returns group items ordered by the parent group's
+// balancer without treating nested groups as a separate fallback partition.
+// Nested group items therefore participate in the same priority/weight/random
+// ordering as direct channel items; once selected, the nested group is expanded
+// into its own iterator and applies its own balancing policy.
 func nestedFallbackCandidates(group dbmodel.Group) []dbmodel.GroupItem {
-	if len(group.Items) <= 1 {
-		return group.Items
+	if len(group.Items) == 0 {
+		return nil
 	}
-	directItems := make([]dbmodel.GroupItem, 0, len(group.Items))
-	nestedItems := make([]dbmodel.GroupItem, 0)
-	for _, item := range group.Items {
-		if item.Type != dbmodel.GroupItemTypeGroup {
-			directItems = append(directItems, item)
-		} else {
-			nestedItems = append(nestedItems, item)
-		}
-	}
-	if len(nestedItems) == 0 || len(directItems) == 0 {
-		return balancer.GetBalancer(group.Mode).Candidates(group.Items)
-	}
-	ordered := balancer.GetBalancer(group.Mode).Candidates(directItems)
-	ordered = append(ordered, balancer.GetBalancer(group.Mode).Candidates(nestedItems)...)
-	return ordered
+	return balancer.GetBalancer(group.Mode).Candidates(group.Items)
 }
 
 func compactCandidateRanks(group dbmodel.Group, ctx context.Context) map[int]int {

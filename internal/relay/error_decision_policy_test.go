@@ -24,13 +24,20 @@ func TestErrorDecisionUsesExplicitActions(t *testing.T) {
 		wantRetryKey bool
 	}{
 		{
-			name:       "client error terminates",
+			name:       "upstream client error switches channel",
 			status:     http.StatusBadRequest,
 			body:       `{"error":{"type":"invalid_request_error"}}`,
 			err:        errors.New("invalid request"),
-			wantAction: ErrorActionReturnClient,
+			wantAction: ErrorActionRetryChannel,
 			wantLevel:  "client",
-			wantClient: http.StatusBadRequest,
+		},
+		{
+			name:       "upstream tool call state mismatch switches channel without health penalty",
+			status:     http.StatusBadRequest,
+			body:       `{"error":{"type":"invalid_request_error","message":"No tool call found for function call output with call_id call_IqfZxSEUdLKWipnlRTX4w5xm."}}`,
+			err:        errors.New("bad request"),
+			wantAction: ErrorActionRetryChannel,
+			wantLevel:  "client",
 		},
 		{
 			name:         "key error rotates key",
@@ -88,7 +95,7 @@ func TestCompactEndpointCompatibilityDecisionIsConservative(t *testing.T) {
 		{name: "method unsupported", status: 405, err: errors.New("method not allowed"), official: true, wantAction: ErrorActionRetryChannel, wantCompact: CompactCompatibilityMarkIncompatible},
 		{name: "not implemented", status: 501, err: errors.New("not implemented"), official: true, wantAction: ErrorActionRetryChannel, wantCompact: CompactCompatibilityMarkIncompatible},
 		{name: "explicit endpoint marker", status: 400, body: `{"error":"unsupported endpoint"}`, err: errors.New("bad request"), official: true, wantAction: ErrorActionRetryChannel, wantCompact: CompactCompatibilityMarkIncompatible},
-		{name: "model not found is client error", status: 404, body: `{"error":{"code":"model_not_found","message":"model not found"}}`, err: errors.New("not found"), official: true, wantAction: ErrorActionReturnClient, wantCompact: CompactCompatibilityNone},
+		{name: "model not found switches channel", status: 404, body: `{"error":{"code":"model_not_found","message":"model not found"}}`, err: errors.New("not found"), official: true, wantAction: ErrorActionRetryChannel, wantCompact: CompactCompatibilityNone},
 		{name: "rate limit is not incompatibility", status: 429, body: `{"error":"rate limit on /responses/compact"}`, err: errors.New("rate limited"), official: true, wantAction: ErrorActionRetryKey, wantCompact: CompactCompatibilityNone},
 		{name: "generic server error is not incompatibility", status: 500, body: `{"error":"temporary failure"}`, err: errors.New("server error"), official: true, wantAction: ErrorActionRetryChannel, wantCompact: CompactCompatibilityNone},
 		{name: "ordinary 404 has no compact side effect", status: 404, body: `{"error":"route not found"}`, err: errors.New("not found"), official: false, wantAction: ErrorActionRetryChannel, wantCompact: CompactCompatibilityNone},

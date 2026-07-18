@@ -225,6 +225,10 @@ func classifyEmbeddedError(statusCode int, responseBody []byte, allowPlainTextMa
 		return Classification{Level: ErrorLevelKey, Reason: "Gemini RESOURCE_EXHAUSTED quota"}, true
 	}
 
+	if isProviderToolCallStateError(body) {
+		return Classification{Level: ErrorLevelClient, Reason: "upstream tool call state mismatch"}, true
+	}
+
 	switch errorType {
 	case "api_error", "overloaded_error", "service_unavailable_error", "server_is_overloaded", "1305":
 		return Classification{Level: ErrorLevelChannel, Reason: "upstream " + errorType}, true
@@ -257,6 +261,10 @@ func classifyEmbeddedError(statusCode int, responseBody []byte, allowPlainTextMa
 	return Classification{}, false
 }
 
+func isProviderToolCallStateError(body string) bool {
+	return strings.Contains(body, "no tool call found for function call output") ||
+		(strings.Contains(body, "call_id") && strings.Contains(body, "function call output"))
+}
 func parseEmbeddedError(responseBody []byte) (embeddedError, bool) {
 	scanBody := responseBody
 	if len(scanBody) > maxErrorBodyScanBytes {

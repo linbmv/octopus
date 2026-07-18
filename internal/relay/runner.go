@@ -51,7 +51,7 @@ func (r *relayRun) run() {
 			break
 		}
 
-		written, err := attempt.run()
+		written, err := r.runAttempt(attempt)
 		if err == nil {
 			r.metrics.Save(ctx, true, nil, r.attempts())
 			return
@@ -121,6 +121,13 @@ func (r *relayRun) attempts() []dbmodel.ChannelAttempt {
 	return attempts
 }
 
+func (r *relayRun) runAttempt(attempt *relayAttempt) (bool, error) {
+	if r.runAttemptFunc != nil {
+		return r.runAttemptFunc(attempt)
+	}
+	return attempt.run()
+}
+
 func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 	for {
 		if err := r.c.Request.Context().Err(); err != nil {
@@ -134,6 +141,9 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 		if item.Type != dbmodel.GroupItemTypeGroup {
 			r.iter = frame.iter
 			attempt, err := r.resolveCandidate(item, frame.iter.IsSticky(), frame.iter.StickyKeyID())
+			if attempt != nil {
+				attempt.firstTokenPolicyGroup = &frame.group
+			}
 			if err != nil || attempt != nil {
 				return attempt, err
 			}

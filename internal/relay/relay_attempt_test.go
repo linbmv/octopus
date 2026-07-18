@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/db"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
@@ -145,6 +147,129 @@ func TestRelayRunAttemptsRenumbersNestedIteratorAttempts(t *testing.T) {
 	}
 	if attempts[0].ChannelID != 1 || attempts[1].ChannelID != 2 {
 		t.Fatalf("attempt 顺序被改变: %+v", attempts)
+	}
+}
+
+func TestPrepareAttemptUsesNestedGroupFirstTokenPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := testGinContext()
+	root := dbmodel.Group{
+		ID:                1,
+		Name:              "root",
+		FirstTokenTimeOut: 60,
+	}
+	child := dbmodel.Group{
+		ID:                2,
+		Name:              "child",
+		FirstTokenTimeOut: 2,
+		Items: []dbmodel.GroupItem{{
+			ID:        1,
+			Type:      dbmodel.GroupItemTypeChannel,
+			ChannelID: 10,
+			ModelName: "m",
+		}},
+	}
+	childIter := balancer.NewIterator(child, 1, "m")
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: "m"},
+		metrics:         &RelayMetrics{},
+		group:           root,
+		iter:            childIter,
+		iterStack:       []*relayIteratorFrame{{group: child, iter: childIter, depth: 1}},
+		iterHistory:     []*balancer.Iterator{childIter},
+	}
+	r.resolveGroupItemFunc = func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error) {
+		return &relayAttempt{relayRun: r, channel: &dbmodel.Channel{ID: item.ChannelID}}, nil
+	}
+
+	attempt, err := r.prepareAttempt()
+	if err != nil {
+		t.Fatalf("prepareAttempt error = %v", err)
+	}
+	if attempt == nil {
+		t.Fatal("prepareAttempt returned nil attempt")
+	}
+	timeout := attempt.firstTokenTimeout()
+	if timeout.Source != firstTokenTimeoutManual || timeout.Duration != 2*time.Second {
+		t.Fatalf("child timeout = %+v, want child manual timeout of 2s", timeout)
+	}
+}
+
+func TestRelayRunContinuesFromParentClientStyleErrorIntoNestedGroup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	if err := db.InitDB("sqlite", filepath.Join(t.TempDir(), "nested-runner.db"), false); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	parent := dbmodel.Group{
+		ID:   1,
+		Name: "parent",
+		Mode: dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{
+			{ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: 10, ModelName: "m", Priority: 1},
+			{ID: 2, Type: dbmodel.GroupItemTypeGroup, TargetGroupID: 2, Priority: 2},
+		},
+	}
+	childChannel := dbmodel.Channel{
+		Name:     "child-channel",
+		Type:     llm.APIFormatOpenAIChatCompletion,
+		Enabled:  true,
+		BaseUrls: []dbmodel.BaseUrl{{URL: "https://child.example"}},
+		Keys:     []dbmodel.ChannelKey{{Enabled: true, ChannelKey: "child-key"}},
+	}
+	if err := op.ChannelCreate(&childChannel, context.Background()); err != nil {
+		t.Fatalf("create child channel: %v", err)
+	}
+	child := dbmodel.Group{
+		ID:      2,
+		Name:    "child",
+		Enabled: true,
+		Mode:    dbmodel.GroupModeFailover,
+		Items: []dbmodel.GroupItem{{
+			Type:      dbmodel.GroupItemTypeChannel,
+			ChannelID: childChannel.ID,
+			ModelName: "m",
+			Priority:  1,
+		}},
+	}
+	if err := op.GroupCreate(&child, context.Background()); err != nil {
+		t.Fatalf("create child group: %v", err)
+	}
+
+	iter := newRelayIterator(parent, 1, &llm.Request{Model: "m"}, context.Background())
+	r := &relayRun{
+		c:               ctx,
+		internalRequest: &llm.Request{Model: "m"},
+		metrics:         &RelayMetrics{},
+		group:           parent,
+		iter:            iter,
+		iterStack:       []*relayIteratorFrame{{group: parent, iter: iter, depth: 0}},
+		iterHistory:     []*balancer.Iterator{iter},
+	}
+
+	visited := []int{}
+	r.resolveGroupItemFunc = func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error) {
+		visited = append(visited, item.ChannelID)
+		return &relayAttempt{relayRun: r, channel: &dbmodel.Channel{ID: item.ChannelID, Name: "channel"}}, nil
+	}
+	r.runAttemptFunc = func(attempt *relayAttempt) (bool, error) {
+		if attempt.channel.ID == 10 {
+			return false, errors.New("channel parent failed: upstream invalid_request_error")
+		}
+		return false, nil
+	}
+
+	r.run()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("response status = %d, want success after nested fallback", recorder.Code)
+	}
+	if len(visited) != 2 || visited[0] != 10 || visited[1] != childChannel.ID {
+		t.Fatalf("visited channels = %+v, want parent channel then nested child channel %d", visited, childChannel.ID)
 	}
 }
 

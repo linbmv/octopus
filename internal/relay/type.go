@@ -20,6 +20,7 @@ type relayRun struct {
 	group                dbmodel.Group
 	selectedBaseURLs     map[int]string
 	resolveGroupItemFunc func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error)
+	runAttemptFunc       func(attempt *relayAttempt) (bool, error)
 }
 
 type relayIteratorFrame struct {
@@ -35,6 +36,7 @@ type relayAttempt struct {
 	outAdapter             transformer.Outbound
 	channel                *dbmodel.Channel
 	groupItem              dbmodel.GroupItem
+	firstTokenPolicyGroup  *dbmodel.Group
 	usedKey                dbmodel.ChannelKey
 	keyOptions             []dbmodel.ChannelKey
 	keyIndex               int

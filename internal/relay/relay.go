@@ -12,6 +12,7 @@ import (
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/relay/errorclass"
 	"github.com/bestruirui/octopus/internal/tracing"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
@@ -204,7 +205,11 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		dbmodel.AttemptErrorLevel(decision.Classification.Level.String()),
 		decision.Classification.Reason,
 	)
-	if decision.Action != ErrorActionReturnClient {
+	// Client-scoped upstream errors may still be incompatible with this specific
+	// provider, so the runner continues to another candidate. They are not,
+	// however, evidence that this channel/key is unhealthy and must not trip the
+	// circuit breaker or degrade channel failure statistics.
+	if decision.Classification.Level != errorclass.ErrorLevelClient {
 		if statsErr := op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
 			WaitTime:      span.Duration().Milliseconds(),
 			RequestFailed: 1,
@@ -220,8 +225,9 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 			balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		}
 	} else {
-		// client 级错误证明请求本身不可重试，不给通道记失败；
-		// 同样必须归还可能持有的半开试探名额。
+		// Client-scoped upstream errors can require a different provider, but do
+		// not prove the current channel/key unhealthy. Release any half-open probe
+		// slot without recording a circuit-breaker failure.
 		balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 	}
 

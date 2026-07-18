@@ -132,8 +132,12 @@ func (ra *relayAttempt) firstTokenTimeout() firstTokenTimeoutConfig {
 		hasAdaptiveTimeout = adaptiveTimeout > 0
 	}
 	relayConf := conf.Current().Relay
+	manualTimeout := ra.group.FirstTokenTimeOut
+	if ra.firstTokenPolicyGroup != nil {
+		manualTimeout = ra.firstTokenPolicyGroup.FirstTokenTimeOut
+	}
 	return selectFirstTokenTimeout(
-		ra.group.FirstTokenTimeOut,
+		manualTimeout,
 		adaptiveTimeout,
 		hasAdaptiveTimeout,
 		relayConf.StreamFirstEventTimeoutSeconds,
