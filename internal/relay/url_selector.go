@@ -466,22 +466,6 @@ func earliestCooldownCandidates(candidates []runtimeURLCandidate) []runtimeURLCa
 	return result
 }
 
-func weightedLatencyPick(candidates []runtimeURLCandidate) string {
-	if len(candidates) == 0 {
-		return ""
-	}
-	best := candidates[0]
-	bestLatency := normalizedCandidateLatency(best)
-	for _, candidate := range candidates[1:] {
-		latency := normalizedCandidateLatency(candidate)
-		if latency < bestLatency {
-			best = candidate
-			bestLatency = latency
-		}
-	}
-	return best.URL
-}
-
 func normalizedCandidateLatency(candidate runtimeURLCandidate) float64 {
 	latency := candidate.Latency
 	if latency <= 0 || math.IsNaN(latency) || math.IsInf(latency, 0) {

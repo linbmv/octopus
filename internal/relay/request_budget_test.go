@@ -11,8 +11,11 @@ import (
 
 func TestRelayRunUpstreamAttemptBudgetIsExact(t *testing.T) {
 	run := &relayRun{maxUpstreamAttempts: 2}
-	if !run.reserveUpstreamAttempt() || !run.reserveUpstreamAttempt() {
-		t.Fatal("first two upstream attempts should be allowed")
+	if !run.reserveUpstreamAttempt() {
+		t.Fatal("first upstream attempt should be allowed")
+	}
+	if !run.reserveUpstreamAttempt() {
+		t.Fatal("second upstream attempt should be allowed")
 	}
 	if run.reserveUpstreamAttempt() {
 		t.Fatal("third upstream attempt should be rejected")
