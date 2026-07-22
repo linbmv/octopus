@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Trash2, X, Pencil, Power } from 'lucide-react';
+import { Trash2, X, Pencil, Power, Pin, PinOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { type Group, useDeleteGroup, useUpdateGroup, useGroupList } from '@/api/endpoints/group';
 import { useModelChannelList } from '@/api/endpoints/model';
@@ -24,7 +24,15 @@ import {
     MorphingDialogTrigger,
 } from '@/components/ui/morphing-dialog';
 
-export function GroupCard({ group }: { group: Group }) {
+export function GroupCard({
+    group,
+    pinned = false,
+    onTogglePinned,
+}: {
+    group: Group;
+    pinned?: boolean;
+    onTogglePinned?: (groupId: number) => void;
+}) {
     const t = useTranslations('group');
     const updateGroup = useUpdateGroup();
     const deleteGroup = useDeleteGroup();
@@ -204,6 +212,22 @@ export function GroupCard({ group }: { group: Group }) {
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
+                    {onTogglePinned && group.id && (
+                        <Tooltip side="top" sideOffset={10} align="center">
+                            <TooltipTrigger asChild>
+                                <button
+                                    type="button"
+                                    aria-pressed={pinned}
+                                    aria-label={pinned ? t('detail.actions.unpin') : t('detail.actions.pin')}
+                                    onClick={() => onTogglePinned(group.id!)}
+                                    className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                                >
+                                    {pinned ? <Pin className="size-4 text-primary" /> : <PinOff className="size-4" />}
+                                </button>
+                            </TooltipTrigger>
+                            <TooltipContent>{pinned ? t('detail.actions.unpin') : t('detail.actions.pin')}</TooltipContent>
+                        </Tooltip>
+                    )}
                     <MorphingDialog>
                         <MorphingDialogTrigger className="p-1.5 rounded-lg transition-colors hover:bg-muted text-muted-foreground hover:text-foreground">
                             <Tooltip side="top" sideOffset={10} align="center">

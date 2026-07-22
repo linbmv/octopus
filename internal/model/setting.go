@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
@@ -35,6 +36,8 @@ const (
 	SettingKeyHealthShadowMode               SettingKey = "health_shadow_mode"                 // 自动超时 shadow 模式（只记录不执行）
 	SettingKeyHealthMaxMultiplierStack       SettingKey = "health_max_multiplier_stack"        // multiplier 叠加上限（浮点数，0=无限制）
 	SettingKeyStickyHealthyFirstTokenTimeout SettingKey = "sticky_healthy_first_token_timeout" // 粘性健康首token阈值（秒），0=关闭健康粘性检查
+	SettingKeyChannelCardPinnedIDs           SettingKey = "channel_card_pinned_ids"            // 全局渠道卡片置顶 ID 列表（JSON 数组）
+	SettingKeyGroupCardPinnedIDs             SettingKey = "group_card_pinned_ids"              // 全局分组卡片置顶 ID 列表（JSON 数组）
 )
 
 type RelayLogContentMode string
@@ -81,6 +84,8 @@ var settingSchemas = map[SettingKey]settingSchema{
 	SettingKeyHealthShadowMode:               {validate: validateBoolean},
 	SettingKeyHealthMaxMultiplierStack:       {validate: validateNonNegativeFloat},
 	SettingKeyStickyHealthyFirstTokenTimeout: {validate: validateIntegerRange(0, maxDurationValue/int64(time.Second), "seconds")},
+	SettingKeyChannelCardPinnedIDs:           {validate: validatePinnedIDs},
+	SettingKeyGroupCardPinnedIDs:             {validate: validatePinnedIDs},
 }
 
 func DefaultSettings() []Setting {
@@ -109,6 +114,8 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyHealthShadowMode, Value: "false"},           // shadow mode 默认关闭
 		{Key: SettingKeyHealthMaxMultiplierStack, Value: "3.0"},     // multiplier 叠加上限 3.0x
 		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"}, // 默认不启用粘性健康检查
+		{Key: SettingKeyChannelCardPinnedIDs, Value: "[]"},          // 默认没有全局置顶渠道卡片
+		{Key: SettingKeyGroupCardPinnedIDs, Value: "[]"},            // 默认没有全局置顶分组卡片
 	}
 }
 
@@ -159,6 +166,24 @@ func validateRelayLogContentMode(value string) error {
 }
 
 func validateString(string) error {
+	return nil
+}
+
+func validatePinnedIDs(value string) error {
+	var ids []int
+	if err := json.Unmarshal([]byte(value), &ids); err != nil {
+		return fmt.Errorf("must be a JSON array of positive IDs")
+	}
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return fmt.Errorf("IDs must be positive")
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("IDs must be unique")
+		}
+		seen[id] = struct{}{}
+	}
 	return nil
 }
 

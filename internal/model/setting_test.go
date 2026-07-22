@@ -25,6 +25,8 @@ func TestDefaultSettingsIncludeHealthWeightedBalancerEnabled(t *testing.T) {
 		SettingKeyHealthRecoveryProbeInterval:   "300",
 		SettingKeyHealthTimeoutRateThreshold:    "20",
 		SettingKeyHealthSlowModelKeywords:       "thinking,opus,reasoning,long-context,long_context,200k,1m",
+		SettingKeyChannelCardPinnedIDs:          "[]",
+		SettingKeyGroupCardPinnedIDs:            "[]",
 	}
 	for _, setting := range DefaultSettings() {
 		if value, ok := want[setting.Key]; ok {
@@ -55,6 +57,46 @@ func TestSettingValidateRelayLogContentMode(t *testing.T) {
 		setting := Setting{Key: SettingKeyRelayLogContentMode, Value: value}
 		if err := setting.Validate(); err == nil {
 			t.Fatalf("Validate(%q) error = nil, want enum validation error", value)
+		}
+	}
+}
+
+func TestSettingValidateChannelCardPinnedIDs(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "empty", value: "[]"},
+		{name: "multiple", value: "[21,2]"},
+		{name: "duplicate", value: "[21,21]", wantErr: true},
+		{name: "zero", value: "[0]", wantErr: true},
+		{name: "negative", value: "[-1]", wantErr: true},
+		{name: "not JSON", value: "21", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (&Setting{Key: SettingKeyChannelCardPinnedIDs, Value: tt.value}).Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestSettingValidateGroupCardPinnedIDs(t *testing.T) {
+	for _, value := range []string{"[]", "[7,3]"} {
+		if err := (&Setting{Key: SettingKeyGroupCardPinnedIDs, Value: value}).Validate(); err != nil {
+			t.Fatalf("Validate(%q) error = %v", value, err)
+		}
+	}
+	for _, value := range []string{"[7,7]", "[0]", "not-json"} {
+		if err := (&Setting{Key: SettingKeyGroupCardPinnedIDs, Value: value}).Validate(); err == nil {
+			t.Fatalf("Validate(%q) error = nil, want error", value)
 		}
 	}
 }

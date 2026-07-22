@@ -30,6 +30,8 @@ export const SettingKey = {
     HealthShadowMode: 'health_shadow_mode',
     HealthMaxMultiplierStack: 'health_max_multiplier_stack',
     StickyHealthyFirstTokenTimeout: 'sticky_healthy_first_token_timeout',
+    ChannelCardPinnedIDs: 'channel_card_pinned_ids',
+    GroupCardPinnedIDs: 'group_card_pinned_ids',
 } as const;
 
 export const RelayLogContentMode = {
@@ -82,6 +84,11 @@ export function useSetSetting() {
         },
         onSuccess: (data) => {
             logger.log('Setting 设置成功:', data);
+            queryClient.setQueryData<Setting[]>(['settings', 'list'], (current = []) => {
+                const existingIndex = current.findIndex((setting) => setting.key === data.key);
+                if (existingIndex === -1) return [...current, data];
+                return current.map((setting, index) => index === existingIndex ? data : setting);
+            });
             queryClient.invalidateQueries({ queryKey: ['settings', 'list'] });
         },
         onError: (error) => {

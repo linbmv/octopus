@@ -528,7 +528,9 @@
                 "delete": "Delete",
                 "confirmDelete": "Confirm Delete",
                 "enableGroup": "Enable group",
-                "disableGroup": "Temporarily disable group"
+                "disableGroup": "Temporarily disable group",
+                "pin": "Pin group",
+                "unpin": "Unpin group"
             }
         },
         "form": {
@@ -653,6 +655,10 @@
         "card": {
             "requestCount": "Requests",
             "totalCost": "Total Cost",
+            "actions": {
+                "pin": "Pin channel",
+                "unpin": "Unpin channel"
+            },
             "toast": {
                 "enabled": "Channel enabled",
                 "disabled": "Channel disabled"

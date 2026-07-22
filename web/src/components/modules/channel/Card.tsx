@@ -4,7 +4,7 @@ import {
     MorphingDialogContainer,
     MorphingDialogContent,
 } from '@/components/ui/morphing-dialog';
-import { CheckCircle2, DollarSign, Key, Layers, MessageSquare, XCircle } from 'lucide-react';
+import { CheckCircle2, DollarSign, Key, Layers, MessageSquare, Pin, PinOff, XCircle } from 'lucide-react';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { type Channel, useEnableChannel } from '@/api/endpoints/channel';
 import { CardContent } from './CardContent';
@@ -13,7 +13,19 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/animate-ui
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/common/Toast';
 
-export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; stats: StatsMetricsFormatted; layout?: 'grid' | 'list' }) {
+export function Card({
+    channel,
+    stats,
+    layout = 'grid',
+    pinned = false,
+    onTogglePinned,
+}: {
+    channel: Channel;
+    stats: StatsMetricsFormatted;
+    layout?: 'grid' | 'list';
+    pinned?: boolean;
+    onTogglePinned?: (channelId: number) => void;
+}) {
     const t = useTranslations('channel.card');
     const tForm = useTranslations('channel.form');
     const tSections = useTranslations('channel.detail.sections');
@@ -58,12 +70,34 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
                             </TooltipTrigger>
                             <TooltipContent key={channel.name}>{channel.name}</TooltipContent>
                         </Tooltip>
-                        <Switch
-                            checked={channel.enabled}
-                            onCheckedChange={handleEnableChange}
-                            disabled={enableChannel.isPending}
-                            onClick={(e) => e.stopPropagation()}
-                        />
+                        <div className="flex items-center gap-2 shrink-0">
+                            {onTogglePinned && (
+                                <Tooltip side="top" sideOffset={10} align="center">
+                                    <TooltipTrigger asChild>
+                                        <button
+                                            type="button"
+                                            aria-pressed={pinned}
+                                            aria-label={pinned ? t('actions.unpin') : t('actions.pin')}
+                                            onPointerDown={(e) => e.stopPropagation()}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onTogglePinned(channel.id);
+                                            }}
+                                            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                                        >
+                                            {pinned ? <Pin className="size-4 text-primary" /> : <PinOff className="size-4" />}
+                                        </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>{pinned ? t('actions.unpin') : t('actions.pin')}</TooltipContent>
+                                </Tooltip>
+                            )}
+                            <Switch
+                                checked={channel.enabled}
+                                onCheckedChange={handleEnableChange}
+                                disabled={enableChannel.isPending}
+                                onClick={(e) => e.stopPropagation()}
+                            />
+                        </div>
                     </header>
 
                     {isListLayout ? (

@@ -528,7 +528,9 @@
                 "delete": "刪除",
                 "confirmDelete": "確認刪除",
                 "enableGroup": "啟用分組",
-                "disableGroup": "臨時停用分組"
+                "disableGroup": "臨時停用分組",
+                "pin": "置頂分組",
+                "unpin": "取消置頂分組"
             }
         },
         "form": {
@@ -653,6 +655,10 @@
         "card": {
             "requestCount": "請求次數",
             "totalCost": "總成本",
+            "actions": {
+                "pin": "置頂供應源",
+                "unpin": "取消置頂"
+            },
             "toast": {
                 "enabled": "供應源已啟用",
                 "disabled": "供應源已停用"
