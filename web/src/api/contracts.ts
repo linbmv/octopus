@@ -266,6 +266,7 @@ export interface RelayLog {
   actual_model_name: string;
   input_tokens: number;
   output_tokens: number;
+  reasoning_tokens: number;
   ftut: number;
   use_time: number;
   cost: number;
@@ -323,6 +324,7 @@ export interface StatsHourly extends StatsMetrics {
 export interface StatsMetrics {
   input_token: number;
   output_token: number;
+  reasoning_token: number;
   input_cost: number;
   output_cost: number;
   wait_time: number;

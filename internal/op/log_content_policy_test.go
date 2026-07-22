@@ -17,6 +17,8 @@ func TestRelayLogMetadataPolicyDropsBodiesButKeepsDiagnostics(t *testing.T) {
 	relayLog := model.RelayLog{
 		RequestContent:  `{"messages":[{"content":"private prompt"}]}`,
 		ResponseContent: `{"content":"private response"}`,
+		OutputTokens:    10,
+		ReasoningTokens: 6,
 		Error:           "upstream timeout",
 		Attempts: []model.ChannelAttempt{{
 			Status: model.AttemptFailed,
@@ -30,6 +32,9 @@ func TestRelayLogMetadataPolicyDropsBodiesButKeepsDiagnostics(t *testing.T) {
 	}
 	if got.Error != relayLog.Error || len(got.Attempts) != 1 || got.Attempts[0].Msg != relayLog.Attempts[0].Msg {
 		t.Fatalf("metadata mode lost diagnostics: %#v", got)
+	}
+	if got.OutputTokens != 10 || got.ReasoningTokens != 6 {
+		t.Fatalf("metadata mode lost token metadata: %#v", got)
 	}
 }
 
@@ -179,6 +184,8 @@ func TestRelayLogFullModePersistsOnlyRedactedCredentials(t *testing.T) {
 	if err := service.Add(context.Background(), model.RelayLog{
 		Time:             1,
 		RequestModelName: "test-model",
+		OutputTokens:     10,
+		ReasoningTokens:  6,
 		RequestContent:   `{"messages":[{"content":"keep prompt"}],"headers":{"X-Goog-Api-Key":"db-request-secret"}}`,
 		ResponseContent:  "X-Api-Key: db-response-secret\nresult: keep response",
 		Error:            "GET https://user:db-password@example.com/v1?key=db-query-secret failed",
@@ -192,6 +199,9 @@ func TestRelayLogFullModePersistsOnlyRedactedCredentials(t *testing.T) {
 	var persisted model.RelayLog
 	if err := db.GetDB().First(&persisted).Error; err != nil {
 		t.Fatalf("read persisted relay log: %v", err)
+	}
+	if persisted.OutputTokens != 10 || persisted.ReasoningTokens != 6 {
+		t.Fatalf("database lost token metadata: %#v", persisted)
 	}
 	combined := persisted.RequestContent + persisted.ResponseContent + persisted.Error
 	for _, secret := range []string{"db-request-secret", "db-response-secret", "db-password", "db-query-secret"} {

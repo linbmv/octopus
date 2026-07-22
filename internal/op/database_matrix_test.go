@@ -147,6 +147,14 @@ func TestDatabaseMatrix(t *testing.T) {
 	if restoredChannel.Name != "source-channel" || len(restoredChannel.Keys) != 1 || restoredChannel.Keys[0].ChannelKey != "sk-upstream" {
 		t.Fatalf("restored channel relation mismatch: %#v", restoredChannel)
 	}
+	var restoredStats model.StatsTotal
+	if err := db.GetDB().First(&restoredStats, 1).Error; err != nil || restoredStats.ReasoningToken != 5 {
+		t.Fatalf("restored total reasoning tokens = %d, err=%v", restoredStats.ReasoningToken, err)
+	}
+	var restoredLog model.RelayLog
+	if err := db.GetDB().First(&restoredLog, 50).Error; err != nil || restoredLog.ReasoningTokens != 5 {
+		t.Fatalf("restored log reasoning tokens = %d, err=%v", restoredLog.ReasoningTokens, err)
+	}
 
 	dryRun, err := DBImportV2(ctx, &dump, model.DBImportOptions{DryRun: true, ConflictPolicy: model.DBImportConflictReplace})
 	if err != nil {
@@ -244,7 +252,7 @@ func assertDatabaseMatrixSchemaAndMigrations(t *testing.T, dbType string) {
 	if err := conn.Order("version ASC").Find(&records).Error; err != nil {
 		t.Fatalf("read migration records: %v", err)
 	}
-	wantVersions := []int{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+	wantVersions := []int{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 	gotVersions := make([]int, len(records))
 	for i, record := range records {
 		gotVersions[i] = record.Version
@@ -254,6 +262,21 @@ func assertDatabaseMatrixSchemaAndMigrations(t *testing.T, dbType string) {
 	}
 	if !slices.Equal(gotVersions, wantVersions) {
 		t.Fatalf("recorded migration versions = %v, want %v", gotVersions, wantVersions)
+	}
+	for _, column := range []struct {
+		model any
+		field string
+	}{
+		{model: &model.StatsTotal{}, field: "ReasoningToken"},
+		{model: &model.StatsDaily{}, field: "ReasoningToken"},
+		{model: &model.StatsHourly{}, field: "ReasoningToken"},
+		{model: &model.StatsChannel{}, field: "ReasoningToken"},
+		{model: &model.StatsAPIKey{}, field: "ReasoningToken"},
+		{model: &model.RelayLog{}, field: "ReasoningTokens"},
+	} {
+		if !conn.Migrator().HasColumn(column.model, column.field) {
+			t.Errorf("reasoning token column %T.%s is missing", column.model, column.field)
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ import type { JSX } from 'react';
 import {
     ArrowDownToLine,
     ArrowUpFromLine,
+    BrainCircuit,
     DollarSign,
     CheckCircle,
     XCircle,
@@ -240,7 +241,7 @@ export function APIKeyDashboard() {
                                 <span className="font-semibold">{t('totalToken')}</span>
                                 <span className="ml-auto text-2xl font-bold"><AnimatedNumber value={stats.total_token.formatted.value} /><span className="text-sm font-normal text-muted-foreground ml-1">{stats.total_token.formatted.unit}</span></span>
                             </div>
-                            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border/50">
+                            <div className="grid grid-cols-1 gap-4 border-t border-border/50 pt-4 sm:grid-cols-3">
                                 <div>
                                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><ArrowDownToLine className="w-3.5 h-3.5" />{t('inputTokens')}</div>
                                     <div className="text-lg font-semibold"><AnimatedNumber value={stats.input_token.formatted.value} /><span className="text-xs font-normal text-muted-foreground ml-1">{stats.input_token.formatted.unit}</span></div>
@@ -248,6 +249,10 @@ export function APIKeyDashboard() {
                                 <div>
                                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><ArrowUpFromLine className="w-3.5 h-3.5" />{t('outputTokens')}</div>
                                     <div className="text-lg font-semibold"><AnimatedNumber value={stats.output_token.formatted.value} /><span className="text-xs font-normal text-muted-foreground ml-1">{stats.output_token.formatted.unit}</span></div>
+                                </div>
+                                <div>
+                                    <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground"><BrainCircuit className="size-3.5" />{t('reasoningTokens')}</div>
+                                    <div className="text-lg font-semibold"><AnimatedNumber value={stats.reasoning_token.formatted.value} /><span className="ml-1 text-xs font-normal text-muted-foreground">{stats.reasoning_token.formatted.unit}</span></div>
                                 </div>
                             </div>
                         </div>

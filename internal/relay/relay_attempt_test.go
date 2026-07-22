@@ -27,7 +27,7 @@ import (
 func TestRecordUsageNilNoop(t *testing.T) {
 	m := &RelayMetrics{ActualModel: "x"}
 	m.RecordUsage(nil)
-	if m.Stats.InputToken != 0 || m.Stats.OutputToken != 0 {
+	if m.Stats.InputToken != 0 || m.Stats.OutputToken != 0 || m.Stats.ReasoningToken != 0 {
 		t.Fatal("nil usage 必须是空操作")
 	}
 }
@@ -61,12 +61,37 @@ func TestRelaySessionIDFallsBackToControlledHeader(t *testing.T) {
 func TestRecordUsageRecordsTokensWithoutPrice(t *testing.T) {
 	// 价格缓存未命中（无 DB 环境）时，仍应记录 token 用量，成本保持 0。
 	m := &RelayMetrics{ActualModel: "model-without-price"}
-	m.RecordUsage(&llm.Usage{PromptTokens: 100, CompletionTokens: 40})
-	if m.Stats.InputToken != 100 || m.Stats.OutputToken != 40 {
-		t.Fatalf("token 未记录: input=%d output=%d", m.Stats.InputToken, m.Stats.OutputToken)
+	m.RecordUsage(&llm.Usage{
+		PromptTokens:            100,
+		CompletionTokens:        40,
+		CompletionTokensDetails: &llm.CompletionTokensDetails{ReasoningTokens: 30},
+	})
+	if m.Stats.InputToken != 100 || m.Stats.OutputToken != 40 || m.Stats.ReasoningToken != 30 {
+		t.Fatalf("token 未记录: input=%d output=%d reasoning=%d", m.Stats.InputToken, m.Stats.OutputToken, m.Stats.ReasoningToken)
 	}
 	if m.Stats.InputCost != 0 || m.Stats.OutputCost != 0 {
 		t.Fatalf("无价格时成本应为 0: input=%f output=%f", m.Stats.InputCost, m.Stats.OutputCost)
+	}
+}
+
+func TestNormalizedReasoningTokens(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage *llm.Usage
+		want  int64
+	}{
+		{name: "nil usage", usage: nil, want: 0},
+		{name: "nil details", usage: &llm.Usage{CompletionTokens: 20}, want: 0},
+		{name: "negative reasoning", usage: &llm.Usage{CompletionTokens: 20, CompletionTokensDetails: &llm.CompletionTokensDetails{ReasoningTokens: -1}}, want: 0},
+		{name: "normal reasoning", usage: &llm.Usage{CompletionTokens: 20, CompletionTokensDetails: &llm.CompletionTokensDetails{ReasoningTokens: 12}}, want: 12},
+		{name: "clamped to output", usage: &llm.Usage{CompletionTokens: 20, CompletionTokensDetails: &llm.CompletionTokensDetails{ReasoningTokens: 25}}, want: 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizedReasoningTokens(tt.usage); got != tt.want {
+				t.Fatalf("normalizedReasoningTokens() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 

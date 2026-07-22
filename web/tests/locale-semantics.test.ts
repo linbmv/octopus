@@ -84,6 +84,18 @@ describe('locale semantics', () => {
         });
     });
 
+    it('keeps reasoning token terminology available in every locale', () => {
+        expect({
+            en: [en.log.card.reasoning, en.channel.detail.metrics.reasoningToken, en.setting.apiKey.stats.reasoningToken],
+            zhHans: [zhHans.log.card.reasoning, zhHans.channel.detail.metrics.reasoningToken, zhHans.setting.apiKey.stats.reasoningToken],
+            zhHant: [zhHant.log.card.reasoning, zhHant.channel.detail.metrics.reasoningToken, zhHant.setting.apiKey.stats.reasoningToken],
+        }).toEqual({
+            en: ['Reasoning', 'Reasoning Tokens', 'Reasoning Token'],
+            zhHans: ['推理', '推理 Token', '推理 Token'],
+            zhHant: ['推理', '推理 Token', '推理 Token'],
+        });
+    });
+
     it('does not embed user-visible Han text directly in JSX children', () => {
         const offenders = sourceFiles(join(process.cwd(), 'src'))
             .flatMap((path) => readFileSync(path, 'utf8').split('\n').map((line, index) => ({ path, line, number: index + 1 })))

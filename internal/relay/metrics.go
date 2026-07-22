@@ -62,6 +62,7 @@ func (m *RelayMetrics) RecordUsage(usage *llm.Usage) {
 	// usage 已由 axonhub/llm 标准化；octopus 仍使用本地模型价格表计算成本，所以这里只做用量落点和价格换算。
 	m.Stats.InputToken = usage.PromptTokens
 	m.Stats.OutputToken = usage.CompletionTokens
+	m.Stats.ReasoningToken = normalizedReasoningTokens(usage)
 
 	modelPrice := price.GetLLMPrice(m.ActualModel)
 	if modelPrice == nil {
@@ -80,6 +81,20 @@ func (m *RelayMetrics) RecordUsage(usage *llm.Usage) {
 		float64(tokenDetails.WriteCachedTokens)*modelPrice.CacheWrite +
 		float64(nonCachedTokens)*modelPrice.Input) * 1e-6
 	m.Stats.OutputCost = float64(usage.CompletionTokens) * modelPrice.Output * 1e-6
+}
+
+func normalizedReasoningTokens(usage *llm.Usage) int64 {
+	if usage == nil || usage.CompletionTokensDetails == nil {
+		return 0
+	}
+	reasoning := usage.CompletionTokensDetails.ReasoningTokens
+	if reasoning < 0 {
+		return 0
+	}
+	if usage.CompletionTokens >= 0 && reasoning > usage.CompletionTokens {
+		return usage.CompletionTokens
+	}
+	return reasoning
 }
 
 func (m *RelayMetrics) RecordOutboundRequestSummary(
@@ -124,11 +139,12 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 	duration := time.Since(m.StartTime)
 
 	globalStats := model.StatsMetrics{
-		WaitTime:    duration.Milliseconds(),
-		InputToken:  m.Stats.InputToken,
-		OutputToken: m.Stats.OutputToken,
-		InputCost:   m.Stats.InputCost,
-		OutputCost:  m.Stats.OutputCost,
+		WaitTime:       duration.Milliseconds(),
+		InputToken:     m.Stats.InputToken,
+		OutputToken:    m.Stats.OutputToken,
+		ReasoningToken: m.Stats.ReasoningToken,
+		InputCost:      m.Stats.InputCost,
+		OutputCost:     m.Stats.OutputCost,
 	}
 	if success {
 		globalStats.RequestSuccess = 1
@@ -154,10 +170,11 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 	if channelID > 0 {
 		// 通道成功/失败和等待时间在每次 attempt 结束时已记录；这里仅把最终响应的用量成本归到实际通道，避免重复计数。
 		if statsErr := op.StatsChannelUpdate(channelID, model.StatsMetrics{
-			InputToken:  m.Stats.InputToken,
-			OutputToken: m.Stats.OutputToken,
-			InputCost:   m.Stats.InputCost,
-			OutputCost:  m.Stats.OutputCost,
+			InputToken:     m.Stats.InputToken,
+			OutputToken:    m.Stats.OutputToken,
+			ReasoningToken: m.Stats.ReasoningToken,
+			InputCost:      m.Stats.InputCost,
+			OutputCost:     m.Stats.OutputCost,
 		}); statsErr != nil {
 			statsLogger.Warnw("failed to update channel relay statistics", "channel_id", channelID, "error", statsErr)
 		}
@@ -173,6 +190,7 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 		"duration_ms", duration.Milliseconds(),
 		"input_token", m.Stats.InputToken,
 		"output_token", m.Stats.OutputToken,
+		"reasoning_token", m.Stats.ReasoningToken,
 		"input_cost", m.Stats.InputCost,
 		"output_cost", m.Stats.OutputCost,
 		"total_cost", m.Stats.InputCost+m.Stats.OutputCost,
@@ -253,6 +271,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, err error, duration time.Dur
 	if m.Stats.InputToken > 0 || m.Stats.OutputToken > 0 {
 		relayLog.InputTokens = int(m.Stats.InputToken)
 		relayLog.OutputTokens = int(m.Stats.OutputToken)
+		relayLog.ReasoningTokens = int(m.Stats.ReasoningToken)
 		relayLog.Cost = m.Stats.InputCost + m.Stats.OutputCost
 	}
 

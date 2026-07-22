@@ -3,6 +3,7 @@ package model
 type StatsMetrics struct {
 	InputToken     int64   `json:"input_token" gorm:"bigint"`
 	OutputToken    int64   `json:"output_token" gorm:"bigint"`
+	ReasoningToken int64   `json:"reasoning_token" gorm:"type:bigint;not null;default:0"`
 	InputCost      float64 `json:"input_cost" gorm:"type:real"`
 	OutputCost     float64 `json:"output_cost" gorm:"type:real"`
 	WaitTime       int64   `json:"wait_time" gorm:"bigint"`
@@ -69,6 +70,7 @@ type StatsErrorLevels struct {
 func (s *StatsMetrics) Add(delta StatsMetrics) {
 	s.InputToken += delta.InputToken
 	s.OutputToken += delta.OutputToken
+	s.ReasoningToken += delta.ReasoningToken
 	s.InputCost += delta.InputCost
 	s.OutputCost += delta.OutputCost
 	s.WaitTime += delta.WaitTime

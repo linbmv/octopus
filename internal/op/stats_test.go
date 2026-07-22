@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 )
 
@@ -13,12 +14,14 @@ func TestStatsServiceMetricUpdates(t *testing.T) {
 	metrics := model.StatsMetrics{
 		RequestSuccess: 2,
 		InputToken:     10,
+		OutputToken:    8,
+		ReasoningToken: 5,
 	}
 
 	if err := service.TotalUpdate(metrics); err != nil {
 		t.Fatalf("total update: %v", err)
 	}
-	if got := service.TotalGet(); got.ID != 1 || got.RequestSuccess != 2 || got.InputToken != 10 {
+	if got := service.TotalGet(); got.ID != 1 || got.RequestSuccess != 2 || got.InputToken != 10 || got.OutputToken != 8 || got.ReasoningToken != 5 {
 		t.Fatalf("unexpected total stats: %#v", got)
 	}
 
@@ -52,7 +55,7 @@ func TestStatsServiceChannelUpdateConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < updatesPerGoroutine; j++ {
-				if err := service.ChannelUpdate(7, model.StatsMetrics{InputToken: 1, RequestSuccess: 1}); err != nil {
+				if err := service.ChannelUpdate(7, model.StatsMetrics{InputToken: 1, OutputToken: 1, ReasoningToken: 1, RequestSuccess: 1}); err != nil {
 					t.Errorf("channel update: %v", err)
 				}
 			}
@@ -62,8 +65,67 @@ func TestStatsServiceChannelUpdateConcurrent(t *testing.T) {
 
 	got := service.ChannelGet(7)
 	want := int64(goroutines * updatesPerGoroutine)
-	if got.InputToken != want || got.RequestSuccess != want {
+	if got.InputToken != want || got.OutputToken != want || got.ReasoningToken != want || got.RequestSuccess != want {
 		t.Fatalf("concurrent channel updates lost metrics: got=%#v want=%d", got, want)
+	}
+}
+
+func TestStatsServicePersistsReasoningTokensAcrossAllAggregates(t *testing.T) {
+	initTestDB(t)
+	service := NewStatsService()
+	ctx := context.Background()
+	metrics := model.StatsMetrics{
+		InputToken:     20,
+		OutputToken:    12,
+		ReasoningToken: 7,
+		RequestSuccess: 1,
+	}
+
+	if err := service.TotalUpdate(metrics); err != nil {
+		t.Fatalf("total update: %v", err)
+	}
+	if err := service.DailyUpdate(ctx, metrics); err != nil {
+		t.Fatalf("daily update: %v", err)
+	}
+	if err := service.HourlyUpdate(metrics); err != nil {
+		t.Fatalf("hourly update: %v", err)
+	}
+	if err := service.ChannelUpdate(7, metrics); err != nil {
+		t.Fatalf("channel update: %v", err)
+	}
+	if err := service.APIKeyUpdate(9, metrics); err != nil {
+		t.Fatalf("API key update: %v", err)
+	}
+	if err := service.SaveDB(ctx); err != nil {
+		t.Fatalf("save stats: %v", err)
+	}
+
+	for name, destination := range map[string]any{
+		"total":   &model.StatsTotal{},
+		"daily":   &model.StatsDaily{},
+		"hourly":  &model.StatsHourly{},
+		"channel": &model.StatsChannel{},
+		"api key": &model.StatsAPIKey{},
+	} {
+		if err := db.GetDB().First(destination).Error; err != nil {
+			t.Fatalf("load %s stats: %v", name, err)
+		}
+		var got int64
+		switch row := destination.(type) {
+		case *model.StatsTotal:
+			got = row.ReasoningToken
+		case *model.StatsDaily:
+			got = row.ReasoningToken
+		case *model.StatsHourly:
+			got = row.ReasoningToken
+		case *model.StatsChannel:
+			got = row.ReasoningToken
+		case *model.StatsAPIKey:
+			got = row.ReasoningToken
+		}
+		if got != metrics.ReasoningToken {
+			t.Errorf("%s reasoning tokens = %d, want %d", name, got, metrics.ReasoningToken)
+		}
 	}
 }
 

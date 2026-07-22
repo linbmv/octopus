@@ -9,6 +9,7 @@ import {
     ChartColumnBig,
     Bot,
     ArrowUpFromLine,
+    BrainCircuit,
     Rewind,
     DollarSign,
     FastForward
@@ -101,6 +102,14 @@ export function Total() {
                     color: 'text-primary',
                     bgColor: 'bg-chart-4/10',
                     unit: statsTotalFormatted?.output_token.formatted.unit
+                },
+                {
+                    label: t('reasoningTokens'),
+                    value: statsTotalFormatted?.reasoning_token.formatted.value,
+                    icon: BrainCircuit,
+                    color: 'text-primary',
+                    bgColor: 'bg-chart-5/10',
+                    unit: statsTotalFormatted?.reasoning_token.formatted.unit
                 },
                 {
                     label: t('outputCost'),

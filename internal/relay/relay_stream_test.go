@@ -159,7 +159,7 @@ func TestStreamAggregationProducesBodyAndUsage(t *testing.T) {
 func TestStreamAggregationFeedsMetricsUsage(t *testing.T) {
 	inbound := newInbound(llm.APIFormatOpenAIChatCompletion)
 	events := []*httpclient.StreamEvent{
-		{Data: []byte(`{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hi"}}],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}}`)},
+		{Data: []byte(`{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hi"}}],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12,"completion_tokens_details":{"reasoning_tokens":2}}}`)},
 	}
 	body, meta, err := inbound.AggregateStreamChunks(context.Background(), events)
 	if err != nil {
@@ -170,8 +170,8 @@ func TestStreamAggregationFeedsMetricsUsage(t *testing.T) {
 	m.InternalResponse = body
 	m.RecordUsage(meta.Usage)
 
-	if m.Stats.InputToken != 9 || m.Stats.OutputToken != 3 {
-		t.Fatalf("metrics usage = in:%d out:%d, 期望 9/3", m.Stats.InputToken, m.Stats.OutputToken)
+	if m.Stats.InputToken != 9 || m.Stats.OutputToken != 3 || m.Stats.ReasoningToken != 2 {
+		t.Fatalf("metrics usage = in:%d out:%d reasoning:%d, 期望 9/3/2", m.Stats.InputToken, m.Stats.OutputToken, m.Stats.ReasoningToken)
 	}
 	if len(m.InternalResponse) == 0 {
 		t.Fatal("InternalResponse 应保存聚合后的响应体")
@@ -304,7 +304,7 @@ func TestWriteStreamTreatsDisconnectAfterResponsesCompletedAsSuccess(t *testing.
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
 
-	completed := []byte(`{"type":"response.completed","sequence_number":1,"response":{"id":"resp_test","object":"response","created_at":1700000000,"model":"gpt-test","status":"completed","output":[],"usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15}}}`)
+	completed := []byte(`{"type":"response.completed","sequence_number":1,"response":{"id":"resp_test","object":"response","created_at":1700000000,"model":"gpt-test","status":"completed","output":[],"usage":{"input_tokens":12,"output_tokens":3,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":15}}}`)
 	stream := &blockingAfterEventsStream{
 		events:  []*httpclient.StreamEvent{{Type: "response.completed", Data: completed}},
 		release: make(chan struct{}),
@@ -325,8 +325,8 @@ func TestWriteStreamTreatsDisconnectAfterResponsesCompletedAsSuccess(t *testing.
 	if ctx.Err() == nil {
 		t.Fatal("test did not cancel the request after writing response.completed")
 	}
-	if metrics.Stats.InputToken != 12 || metrics.Stats.OutputToken != 3 {
-		t.Fatalf("usage = %d/%d, want 12/3", metrics.Stats.InputToken, metrics.Stats.OutputToken)
+	if metrics.Stats.InputToken != 12 || metrics.Stats.OutputToken != 3 || metrics.Stats.ReasoningToken != 2 {
+		t.Fatalf("usage = %d/%d/%d, want 12/3/2", metrics.Stats.InputToken, metrics.Stats.OutputToken, metrics.Stats.ReasoningToken)
 	}
 	if len(metrics.InternalResponse) == 0 {
 		t.Fatal("completed stream response was not aggregated")

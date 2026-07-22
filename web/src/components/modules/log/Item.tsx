@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { ArrowDownToLine, ArrowRight, ArrowUpFromLine, Clock, Cpu, DatabaseZap, DollarSign, KeyRound, Pin, Zap } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, ArrowUpFromLine, BrainCircuit, Clock, Cpu, DatabaseZap, DollarSign, KeyRound, Pin, Zap } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { type RelayLog } from '@/api/endpoints/log';
 import { TooltipProvider } from '@/components/animate-ui/components/animate/tooltip';
@@ -11,7 +11,7 @@ import { getModelIcon } from '@/lib/model-icons';
 import { parseUsageCacheTokens } from '@/lib/usage-cache-tokens';
 import { cn } from '@/lib/utils';
 import { RetryBadgeWithTooltip } from './AttemptHistory';
-import { formatLogDuration, formatLogTime } from './format';
+import { formatLogDuration, formatLogTime, shouldShowReasoningTokens } from './format';
 import { LogDetails } from './LogDetails';
 
 export function LogCard({ log }: { log: RelayLog }) {
@@ -48,6 +48,7 @@ export function LogCard({ log }: { log: RelayLog }) {
                                 <Metric icon={Cpu}>{t('totalTime')} {formatLogDuration(log.use_time)}</Metric>
                                 <Metric icon={ArrowDownToLine}>{t('input')} {log.input_tokens.toLocaleString()}</Metric>
                                 <Metric icon={ArrowUpFromLine}>{t('output')} {log.output_tokens.toLocaleString()}</Metric>
+                                {shouldShowReasoningTokens(log.reasoning_tokens) && <Metric icon={BrainCircuit}>{t('reasoning')} {log.reasoning_tokens.toLocaleString()}</Metric>}
                                 {usage?.cachedReadTokens ? <Metric icon={DatabaseZap}>{t('cacheRead')} {usage.cachedReadTokens.toLocaleString()}</Metric> : null}
                                 {usage?.cachedWriteTokens ? <Metric icon={DatabaseZap}>{t('cacheWrite')} {usage.cachedWriteTokens.toLocaleString()}</Metric> : null}
                                 <Metric icon={DollarSign}>{t('cost')} {Number(log.cost).toFixed(6)}</Metric>

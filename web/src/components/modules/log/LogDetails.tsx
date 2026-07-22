@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, ArrowRight, ChevronDown, ChevronUp, Clock, Cpu, DatabaseZap, DollarSign, KeyRound, Loader2, MessageSquare, Pin, RotateCw, Send, Zap } from 'lucide-react';
+import { AlertCircle, ArrowRight, BrainCircuit, ChevronDown, ChevronUp, Clock, Cpu, DatabaseZap, DollarSign, KeyRound, Loader2, MessageSquare, Pin, RotateCw, Send, Zap } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useTheme } from 'next-themes';
@@ -16,7 +16,7 @@ import { getModelIcon } from '@/lib/model-icons';
 import { parseUsageCacheTokens } from '@/lib/usage-cache-tokens';
 import { cn } from '@/lib/utils';
 import { AttemptList, RetryBadgeWithTooltip } from './AttemptHistory';
-import { formatLogDuration, formatLogTime } from './format';
+import { formatLogDuration, formatLogTime, shouldShowReasoningTokens } from './format';
 
 export function LogDetails({ log }: { log: RelayLog }) {
     const t = useTranslations('log.card');
@@ -49,7 +49,7 @@ export function LogDetails({ log }: { log: RelayLog }) {
                         )}
                         <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-2">
                             <ContentPanel icon={Send} title={t('requestContent')} tokens={log.input_tokens} content={log.request_content} fallback={t('noRequestContent')} />
-                            <ContentPanel icon={MessageSquare} title={t('responseContent')} tokens={log.output_tokens} content={log.response_content} fallback={t('noResponseContent')} cacheRead={usage?.cachedReadTokens} cacheWrite={usage?.cachedWriteTokens} />
+                            <ContentPanel icon={MessageSquare} title={t('responseContent')} tokens={log.output_tokens} reasoningTokens={log.reasoning_tokens} content={log.response_content} fallback={t('noResponseContent')} cacheRead={usage?.cachedReadTokens} cacheWrite={usage?.cachedWriteTokens} />
                         </div>
                     </div>
                 </MorphingDialogDescription>
@@ -78,9 +78,9 @@ function DeferredJsonContent({ content, fallback }: { content?: string; fallback
     return <AnimatePresence><motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4"><JsonView value={parsed as object} style={{ ...(resolvedTheme === 'dark' ? githubDarkTheme : githubLightTheme), fontSize: '12px', backgroundColor: 'transparent' }} displayDataTypes={false} displayObjectSize={false} collapsed={false} /></motion.div></AnimatePresence>;
 }
 
-function ContentPanel({ icon: Icon, title, tokens, content, fallback, cacheRead, cacheWrite }: { icon: React.ComponentType<{ className?: string }>; title: string; tokens: number; content: string; fallback: string; cacheRead?: number; cacheWrite?: number }) {
+function ContentPanel({ icon: Icon, title, tokens, reasoningTokens, content, fallback, cacheRead, cacheWrite }: { icon: React.ComponentType<{ className?: string }>; title: string; tokens: number; reasoningTokens?: number; content: string; fallback: string; cacheRead?: number; cacheWrite?: number }) {
     const t = useTranslations('log.card');
-    return <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-muted/30"><header className="flex shrink-0 items-center gap-2 border-b bg-muted/50 px-3 py-2.5"><Icon className="size-4" /><span className="text-sm font-medium">{title}</span><div className="ml-auto flex gap-1.5">{Boolean(cacheRead) && <Badge variant="secondary" className="text-xs text-emerald-600"><DatabaseZap className="mr-1 size-3" />{cacheRead}</Badge>}{Boolean(cacheWrite) && <Badge variant="secondary" className="text-xs text-amber-600"><DatabaseZap className="mr-1 size-3" />{cacheWrite}</Badge>}<Badge variant="secondary" className="text-xs">{tokens.toLocaleString()} {t('tokens')}</Badge></div></header><div className="min-h-0 flex-1 overflow-auto"><DeferredJsonContent content={content} fallback={fallback} /></div></section>;
+    return <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-muted/30"><header className="flex shrink-0 items-center gap-2 border-b bg-muted/50 px-3 py-2.5"><Icon className="size-4" /><span className="text-sm font-medium">{title}</span><div className="ml-auto flex flex-wrap justify-end gap-1.5">{Boolean(cacheRead) && <Badge variant="secondary" className="text-xs text-emerald-600"><DatabaseZap className="mr-1 size-3" />{cacheRead}</Badge>}{Boolean(cacheWrite) && <Badge variant="secondary" className="text-xs text-amber-600"><DatabaseZap className="mr-1 size-3" />{cacheWrite}</Badge>}{shouldShowReasoningTokens(reasoningTokens ?? 0) && <Badge variant="secondary" className="text-xs text-sky-600"><BrainCircuit className="mr-1 size-3" />{reasoningTokens?.toLocaleString()} {t('reasoning')}</Badge>}<Badge variant="secondary" className="text-xs">{tokens.toLocaleString()} {t('tokens')}</Badge></div></header><div className="min-h-0 flex-1 overflow-auto"><DeferredJsonContent content={content} fallback={fallback} /></div></section>;
 }
 
 function FooterMetric({ icon: Icon, children }: { icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {

@@ -32,10 +32,10 @@ func TestDBExportAllStreamProducesImportCompatibleDump(t *testing.T) {
 	if err := db.GetDB().WithContext(ctx).Create(&model.Setting{Key: model.SettingKeyRelayLogKeepEnabled, Value: "true"}).Error; err != nil {
 		t.Fatalf("create setting: %v", err)
 	}
-	if err := db.GetDB().WithContext(ctx).Create(&model.StatsDaily{Date: "20260705", StatsMetrics: model.StatsMetrics{RequestSuccess: 1}}).Error; err != nil {
+	if err := db.GetDB().WithContext(ctx).Create(&model.StatsDaily{Date: "20260705", StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}).Error; err != nil {
 		t.Fatalf("create stats daily: %v", err)
 	}
-	if err := db.GetDB().WithContext(ctx).Create(&model.RelayLog{ID: 1, Time: 1, RequestModelName: "gpt-test"}).Error; err != nil {
+	if err := db.GetDB().WithContext(ctx).Create(&model.RelayLog{ID: 1, Time: 1, RequestModelName: "gpt-test", OutputTokens: 8, ReasoningTokens: 5}).Error; err != nil {
 		t.Fatalf("create relay log: %v", err)
 	}
 
@@ -61,10 +61,10 @@ func TestDBExportAllStreamProducesImportCompatibleDump(t *testing.T) {
 	if len(dump.Settings) != 1 || dump.Settings[0].Key != model.SettingKeyRelayLogKeepEnabled {
 		t.Fatalf("settings not exported: %#v", dump.Settings)
 	}
-	if len(dump.StatsDaily) != 1 || dump.StatsDaily[0].Date != "20260705" {
+	if len(dump.StatsDaily) != 1 || dump.StatsDaily[0].Date != "20260705" || dump.StatsDaily[0].ReasoningToken != 5 {
 		t.Fatalf("stats not exported: %#v", dump.StatsDaily)
 	}
-	if len(dump.RelayLogs) != 1 || dump.RelayLogs[0].RequestModelName != "gpt-test" {
+	if len(dump.RelayLogs) != 1 || dump.RelayLogs[0].RequestModelName != "gpt-test" || dump.RelayLogs[0].ReasoningTokens != 5 {
 		t.Fatalf("relay logs not exported: %#v", dump.RelayLogs)
 	}
 }
@@ -118,6 +118,10 @@ func TestValidateDBDumpRejectsUnsafeInputs(t *testing.T) {
 		{name: "non-finite LLM price", mutate: func(d *model.DBDump) { d.LLMInfos[0].Input = math.NaN() }, field: "llm_infos[0]"},
 		{name: "unknown supported model", mutate: func(d *model.DBDump) { d.APIKeys[0].SupportedModels = "missing-group" }, field: "api_keys[0].supported_models"},
 		{name: "dangling channel stats", mutate: func(d *model.DBDump) { d.StatsChannel[0].ChannelID = 999 }, field: "stats_channel[0].channel_id"},
+		{name: "negative reasoning stats", mutate: func(d *model.DBDump) { d.StatsTotal[0].ReasoningToken = -1 }, field: "stats_total[0]"},
+		{name: "reasoning stats exceed output", mutate: func(d *model.DBDump) { d.StatsTotal[0].ReasoningToken = d.StatsTotal[0].OutputToken + 1 }, field: "stats_total[0].reasoning_token"},
+		{name: "negative reasoning log", mutate: func(d *model.DBDump) { d.RelayLogs[0].ReasoningTokens = -1 }, field: "relay_logs[0]"},
+		{name: "reasoning log exceeds output", mutate: func(d *model.DBDump) { d.RelayLogs[0].ReasoningTokens = d.RelayLogs[0].OutputTokens + 1 }, field: "relay_logs[0].reasoning_tokens"},
 		{
 			name: "cyclic group graph",
 			mutate: func(d *model.DBDump) {
@@ -248,6 +252,74 @@ func TestDBImportRestoreRestoresValidatedDump(t *testing.T) {
 	if groupItem.ChannelID != channel.ID || groupItem.ModelName != "upstream-model" {
 		t.Fatalf("restored group item = %#v", groupItem)
 	}
+	var total model.StatsTotal
+	if err := db.GetDB().First(&total, 1).Error; err != nil || total.ReasoningToken != 5 {
+		t.Fatalf("restored total reasoning tokens = %d, err=%v", total.ReasoningToken, err)
+	}
+	var relayLog model.RelayLog
+	if err := db.GetDB().First(&relayLog, 50).Error; err != nil || relayLog.ReasoningTokens != 5 {
+		t.Fatalf("restored log reasoning tokens = %d, err=%v", relayLog.ReasoningTokens, err)
+	}
+}
+
+func TestLegacyBackupWithoutReasoningFieldsImportsAsZero(t *testing.T) {
+	dump := validDBDump()
+	payload, err := json.Marshal(dump)
+	if err != nil {
+		t.Fatalf("marshal current dump: %v", err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatalf("decode current dump document: %v", err)
+	}
+	for _, table := range []string{"stats_total", "stats_daily", "stats_hourly", "stats_channel", "stats_api_key"} {
+		var rows []map[string]json.RawMessage
+		if err := json.Unmarshal(document[table], &rows); err != nil {
+			t.Fatalf("decode %s: %v", table, err)
+		}
+		for _, row := range rows {
+			delete(row, "reasoning_token")
+		}
+		document[table], err = json.Marshal(rows)
+		if err != nil {
+			t.Fatalf("encode legacy %s: %v", table, err)
+		}
+	}
+	var logs []map[string]json.RawMessage
+	if err := json.Unmarshal(document["relay_logs"], &logs); err != nil {
+		t.Fatalf("decode relay logs: %v", err)
+	}
+	for _, row := range logs {
+		delete(row, "reasoning_tokens")
+	}
+	document["relay_logs"], err = json.Marshal(logs)
+	if err != nil {
+		t.Fatalf("encode legacy relay logs: %v", err)
+	}
+	legacyPayload, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("encode legacy dump: %v", err)
+	}
+	var legacy model.DBDump
+	if err := json.Unmarshal(legacyPayload, &legacy); err != nil {
+		t.Fatalf("decode legacy dump: %v", err)
+	}
+	if legacy.StatsTotal[0].ReasoningToken != 0 || legacy.RelayLogs[0].ReasoningTokens != 0 {
+		t.Fatalf("missing legacy fields did not decode to zero: stats=%d log=%d", legacy.StatsTotal[0].ReasoningToken, legacy.RelayLogs[0].ReasoningTokens)
+	}
+
+	initTestDB(t)
+	if _, err := DBImportRestore(context.Background(), &legacy); err != nil {
+		t.Fatalf("restore legacy dump: %v", err)
+	}
+	var stats model.StatsTotal
+	if err := db.GetDB().First(&stats, 1).Error; err != nil || stats.ReasoningToken != 0 {
+		t.Fatalf("legacy total reasoning tokens = %d, err=%v", stats.ReasoningToken, err)
+	}
+	var relayLog model.RelayLog
+	if err := db.GetDB().First(&relayLog, 50).Error; err != nil || relayLog.ReasoningTokens != 0 {
+		t.Fatalf("legacy log reasoning tokens = %d, err=%v", relayLog.ReasoningTokens, err)
+	}
 }
 
 func TestDBExportThenRestoreIntoNewDatabaseRoundTrip(t *testing.T) {
@@ -365,12 +437,18 @@ func TestDBImportV2DryRunAndNumericIDRemapping(t *testing.T) {
 	if err := db.GetDB().Where("channel_id = ?", importedChannel.ID).First(&channelStats).Error; err != nil {
 		t.Fatalf("load remapped channel stats: %v", err)
 	}
+	if channelStats.ReasoningToken != 5 {
+		t.Fatalf("remapped channel reasoning tokens = %d, want 5", channelStats.ReasoningToken)
+	}
 	var relayLog model.RelayLog
 	if err := db.GetDB().First(&relayLog, 50).Error; err != nil {
 		t.Fatalf("load remapped relay log: %v", err)
 	}
 	if relayLog.ChannelId != importedChannel.ID || len(relayLog.Attempts) != 1 || relayLog.Attempts[0].ChannelKeyID != importedKey.ID {
 		t.Fatalf("relay log relations were not remapped: %#v", relayLog)
+	}
+	if relayLog.ReasoningTokens != 5 {
+		t.Fatalf("remapped log reasoning tokens = %d, want 5", relayLog.ReasoningTokens)
 	}
 }
 
@@ -416,6 +494,10 @@ func TestDBImportV2ConflictPoliciesAreRepeatable(t *testing.T) {
 
 	mergedDump := cloneDBDump(t, dump)
 	mergedDump.Channels[0].Name = "source-channel-merged"
+	mergedDump.StatsTotal[0].OutputToken = 9
+	mergedDump.StatsTotal[0].ReasoningToken = 6
+	mergedDump.RelayLogs[0].OutputTokens = 9
+	mergedDump.RelayLogs[0].ReasoningTokens = 6
 	merged, err := DBImportV2(ctx, mergedDump, model.DBImportOptions{ConflictPolicy: model.DBImportConflictMerge})
 	if err != nil {
 		t.Fatalf("merge repeat: %v", err)
@@ -428,6 +510,14 @@ func TestDBImportV2ConflictPoliciesAreRepeatable(t *testing.T) {
 		if err := db.GetDB().Table(table).Where("id = ?", id).Count(&count).Error; err != nil || count != 1 {
 			t.Fatalf("merge did not preserve %s row %d: count=%d err=%v", table, id, count, err)
 		}
+	}
+	var mergedStats model.StatsTotal
+	if err := db.GetDB().First(&mergedStats, 1).Error; err != nil || mergedStats.ReasoningToken != 6 {
+		t.Fatalf("merge total reasoning tokens = %d, err=%v", mergedStats.ReasoningToken, err)
+	}
+	var mergedLog model.RelayLog
+	if err := db.GetDB().First(&mergedLog, 50).Error; err != nil || mergedLog.ReasoningTokens != 5 {
+		t.Fatalf("merge should preserve conflicting log reasoning tokens = %d, err=%v", mergedLog.ReasoningTokens, err)
 	}
 
 	replaced, err := DBImportV2(ctx, mergedDump, model.DBImportOptions{ConflictPolicy: model.DBImportConflictReplace})
@@ -442,6 +532,10 @@ func TestDBImportV2ConflictPoliciesAreRepeatable(t *testing.T) {
 		if err := db.GetDB().Table(table).Where("id = ?", id).Count(&count).Error; err != nil || count != 0 {
 			t.Fatalf("replace retained %s row %d: count=%d err=%v", table, id, count, err)
 		}
+	}
+	var replacedLog model.RelayLog
+	if err := db.GetDB().First(&replacedLog, 50).Error; err != nil || replacedLog.ReasoningTokens != 6 {
+		t.Fatalf("replace log reasoning tokens = %d, err=%v", replacedLog.ReasoningTokens, err)
 	}
 }
 
@@ -624,14 +718,14 @@ func validDBDump() *model.DBDump {
 			},
 		},
 		Settings:     []model.Setting{{Key: model.SettingKeyRelayLogKeepEnabled, Value: "true"}},
-		StatsTotal:   []model.StatsTotal{{ID: 1, StatsMetrics: model.StatsMetrics{RequestSuccess: 1}}},
-		StatsDaily:   []model.StatsDaily{{Date: "20260715", StatsMetrics: model.StatsMetrics{RequestSuccess: 1}}},
-		StatsHourly:  []model.StatsHourly{{Hour: 12, Date: "20260715", StatsMetrics: model.StatsMetrics{RequestSuccess: 1}}},
-		StatsChannel: []model.StatsChannel{{ChannelID: 10, StatsMetrics: model.StatsMetrics{RequestSuccess: 1}}},
-		StatsAPIKey:  []model.StatsAPIKey{{APIKeyID: 40, StatsMetrics: model.StatsMetrics{RequestSuccess: 1}}},
+		StatsTotal:   []model.StatsTotal{{ID: 1, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsDaily:   []model.StatsDaily{{Date: "20260715", StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsHourly:  []model.StatsHourly{{Hour: 12, Date: "20260715", StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsChannel: []model.StatsChannel{{ChannelID: 10, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsAPIKey:  []model.StatsAPIKey{{APIKeyID: 40, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
 		RelayLogs: []model.RelayLog{{
 			ID: 50, Time: 1, RequestModelName: "client-model", RequestAPIKeyName: "client", ChannelId: 10,
-			ChannelName: "source-channel", ActualModelName: "upstream-model", TotalAttempts: 1,
+			ChannelName: "source-channel", ActualModelName: "upstream-model", OutputTokens: 8, ReasoningTokens: 5, TotalAttempts: 1,
 			Attempts: []model.ChannelAttempt{{
 				ChannelID: 10, ChannelKeyID: 11, ChannelName: "source-channel", ModelName: "upstream-model",
 				AttemptNum: 1, Status: model.AttemptSuccess,

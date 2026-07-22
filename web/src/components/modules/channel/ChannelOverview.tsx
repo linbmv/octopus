@@ -50,6 +50,7 @@ export function ChannelOverview({
                 <MetricSection title={t('sections.tokens')} icon={FileText}>
                     <DetailMetric label={t('metrics.inputToken')} value={stats.input_token.formatted.value} unit={stats.input_token.formatted.unit} />
                     <DetailMetric label={t('metrics.outputToken')} value={stats.output_token.formatted.value} unit={stats.output_token.formatted.unit} />
+                    <DetailMetric label={t('metrics.reasoningToken')} value={stats.reasoning_token.formatted.value} unit={stats.reasoning_token.formatted.unit} />
                 </MetricSection>
                 <MetricSection title={t('sections.costs')} icon={DollarSign}>
                     <DetailMetric label={t('metrics.inputCost')} value={stats.input_cost.formatted.value} unit={stats.input_cost.formatted.unit} />

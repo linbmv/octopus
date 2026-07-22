@@ -17,3 +17,7 @@ export function formatLogTime(timestamp: number, locale = 'en'): string {
 export function formatLogDuration(ms: number): string {
     return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`;
 }
+
+export function shouldShowReasoningTokens(tokens: number): boolean {
+    return Number.isFinite(tokens) && tokens > 0;
+}

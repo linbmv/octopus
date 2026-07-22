@@ -25,6 +25,7 @@ const relayLog = (id: string): RelayLog => ({
     actual_model_name: 'm',
     input_tokens: 0,
     output_tokens: 0,
+    reasoning_tokens: 0,
     ftut: 0,
     use_time: 0,
     cost: 0,

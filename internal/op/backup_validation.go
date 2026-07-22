@@ -685,8 +685,11 @@ func validateDumpRelayLogs(logs []model.RelayLog, state *backupValidationState) 
 			return invalidDump(path+".id", "duplicate relay log id %d", relayLog.ID)
 		}
 		seen[relayLog.ID] = struct{}{}
-		if relayLog.Time < 0 || relayLog.Time > model.MaxUnixTimestamp || relayLog.InputTokens < 0 || relayLog.OutputTokens < 0 || relayLog.Ftut < 0 || relayLog.UseTime < 0 {
+		if relayLog.Time < 0 || relayLog.Time > model.MaxUnixTimestamp || relayLog.InputTokens < 0 || relayLog.OutputTokens < 0 || relayLog.ReasoningTokens < 0 || relayLog.Ftut < 0 || relayLog.UseTime < 0 {
 			return invalidDump(path, "time, token, and duration fields must be non-negative")
+		}
+		if relayLog.ReasoningTokens > relayLog.OutputTokens {
+			return invalidDump(path+".reasoning_tokens", "must not exceed output_tokens")
 		}
 		if !finiteNonNegative(relayLog.Cost) {
 			return invalidDump(path+".cost", "must be a finite non-negative number")
@@ -743,9 +746,12 @@ func validateDumpRelayLogs(logs []model.RelayLog, state *backupValidationState) 
 }
 
 func validateStatsMetrics(path string, metrics model.StatsMetrics) error {
-	if metrics.InputToken < 0 || metrics.OutputToken < 0 || metrics.WaitTime < 0 ||
+	if metrics.InputToken < 0 || metrics.OutputToken < 0 || metrics.ReasoningToken < 0 || metrics.WaitTime < 0 ||
 		metrics.RequestSuccess < 0 || metrics.RequestFailed < 0 {
 		return invalidDump(path, "statistics counters must be non-negative")
+	}
+	if metrics.ReasoningToken > metrics.OutputToken {
+		return invalidDump(path+".reasoning_token", "must not exceed output_token")
 	}
 	if !finiteNonNegative(metrics.InputCost) || !finiteNonNegative(metrics.OutputCost) {
 		return invalidDump(path, "statistics costs must be finite non-negative numbers")
