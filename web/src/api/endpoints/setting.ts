@@ -32,6 +32,10 @@ export const SettingKey = {
     StickyHealthyFirstTokenTimeout: 'sticky_healthy_first_token_timeout',
     ChannelCardPinnedIDs: 'channel_card_pinned_ids',
     GroupCardPinnedIDs: 'group_card_pinned_ids',
+    ChannelCardOrderedIDs: 'channel_card_ordered_ids',
+    GroupCardOrderedIDs: 'group_card_ordered_ids',
+    ChannelCardSortMode: 'channel_card_sort_mode',
+    GroupCardSortMode: 'group_card_sort_mode',
 } as const;
 
 export const RelayLogContentMode = {

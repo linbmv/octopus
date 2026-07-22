@@ -49,12 +49,13 @@ export enum GroupMode {
  * 
  * groups?.forEach(group => console.log(group.name, group.items));
  */
-export function useGroupList() {
+export function useGroupList(options?: { enabled?: boolean }) {
     return useQuery({
         queryKey: ['groups', 'list'],
         queryFn: async () => {
             return apiClient.get<Group[]>('/api/v1/group/list');
         },
+        enabled: options?.enabled ?? true,
         refetchInterval: 30000,
         refetchOnMount: 'always',
     });

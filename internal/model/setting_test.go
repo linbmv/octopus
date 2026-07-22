@@ -27,6 +27,10 @@ func TestDefaultSettingsIncludeHealthWeightedBalancerEnabled(t *testing.T) {
 		SettingKeyHealthSlowModelKeywords:       "thinking,opus,reasoning,long-context,long_context,200k,1m",
 		SettingKeyChannelCardPinnedIDs:          "[]",
 		SettingKeyGroupCardPinnedIDs:            "[]",
+		SettingKeyChannelCardOrderedIDs:         "[]",
+		SettingKeyGroupCardOrderedIDs:           "[]",
+		SettingKeyChannelCardSortMode:           "name-asc",
+		SettingKeyGroupCardSortMode:             "name-asc",
 	}
 	for _, setting := range DefaultSettings() {
 		if value, ok := want[setting.Key]; ok {
@@ -97,6 +101,37 @@ func TestSettingValidateGroupCardPinnedIDs(t *testing.T) {
 	for _, value := range []string{"[7,7]", "[0]", "not-json"} {
 		if err := (&Setting{Key: SettingKeyGroupCardPinnedIDs, Value: value}).Validate(); err == nil {
 			t.Fatalf("Validate(%q) error = nil, want error", value)
+		}
+	}
+}
+
+func TestSettingValidateCardOrderedIDs(t *testing.T) {
+	for _, key := range []SettingKey{SettingKeyChannelCardOrderedIDs, SettingKeyGroupCardOrderedIDs} {
+		for _, value := range []string{"[]", "[9,4,2]"} {
+			if err := (&Setting{Key: key, Value: value}).Validate(); err != nil {
+				t.Fatalf("%s Validate(%q) error = %v", key, value, err)
+			}
+		}
+		for _, value := range []string{"[9,9]", "[-2]", "{}", "null"} {
+			if err := (&Setting{Key: key, Value: value}).Validate(); err == nil {
+				t.Fatalf("%s Validate(%q) error = nil, want error", key, value)
+			}
+		}
+	}
+}
+
+func TestSettingValidateCardSortMode(t *testing.T) {
+	validModes := []string{"name-asc", "name-desc", "created-asc", "created-desc", "manual"}
+	for _, key := range []SettingKey{SettingKeyChannelCardSortMode, SettingKeyGroupCardSortMode} {
+		for _, mode := range validModes {
+			if err := (&Setting{Key: key, Value: mode}).Validate(); err != nil {
+				t.Fatalf("%s Validate(%q) error = %v", key, mode, err)
+			}
+		}
+		for _, mode := range []string{"", "name", "manual-desc"} {
+			if err := (&Setting{Key: key, Value: mode}).Validate(); err == nil {
+				t.Fatalf("%s Validate(%q) error = nil, want error", key, mode)
+			}
 		}
 	}
 }

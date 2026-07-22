@@ -83,6 +83,13 @@
             "nameDesc": "Name Desc",
             "createdAsc": "Time Asc",
             "createdDesc": "Time Desc",
+            "manual": "Manual",
+            "manualOrder": "Manual order",
+            "manualOrderEmpty": {
+                "channel": "No channels",
+                "group": "No groups"
+            },
+            "dragToReorder": "Drag to reorder",
             "asc": "Asc",
             "desc": "Desc",
             "filter": {

@@ -5,6 +5,8 @@ import { useChannelList } from '@/api/endpoints/channel';
 import { SettingKey } from '@/api/endpoints/setting';
 import { Card } from './Card';
 import { useSearchStore, useToolbarViewOptionsStore } from '@/components/modules/toolbar';
+import { sortCardItems } from '@/components/modules/toolbar/card-order';
+import { useGlobalCardOrder } from '@/components/modules/toolbar/use-global-card-order';
 import { useGlobalPinnedIDs } from '@/components/modules/toolbar/use-global-pinned-ids';
 import { VirtualizedGrid } from '@/components/common/VirtualizedGrid';
 
@@ -13,30 +15,22 @@ export function Channel() {
     const pageKey = 'channel' as const;
     const searchTerm = useSearchStore((s) => s.getSearchTerm(pageKey));
     const layout = useToolbarViewOptionsStore((s) => s.getLayout(pageKey));
-    const sortField = useToolbarViewOptionsStore((s) => s.getSortField(pageKey));
-    const sortOrder = useToolbarViewOptionsStore((s) => s.getSortOrder(pageKey));
     const filter = useToolbarViewOptionsStore((s) => s.channelFilter);
+    const { mode: sortMode, orderedIDs } = useGlobalCardOrder(pageKey);
     const { pinnedIDs: pinnedChannelIds, togglePinned: toggleChannelPinned } = useGlobalPinnedIDs(
         SettingKey.ChannelCardPinnedIDs
     );
 
     const sortedChannels = useMemo(() => {
         if (!channelsData) return [];
-        const pinOrder = new Map(pinnedChannelIds.map((id, index) => [id, index]));
-        return [...channelsData].sort((a, b) => {
-            const aPin = pinOrder.get(a.raw.id);
-            const bPin = pinOrder.get(b.raw.id);
-            if (aPin !== undefined || bPin !== undefined) {
-                if (aPin === undefined) return 1;
-                if (bPin === undefined) return -1;
-                return aPin - bPin;
-            }
-            const diff = sortField === 'name'
-                ? a.raw.name.localeCompare(b.raw.name)
-                : a.raw.id - b.raw.id;
-            return sortOrder === 'asc' ? diff : -diff;
+        return sortCardItems(channelsData, {
+            getID: (item) => item.raw.id,
+            getName: (item) => item.raw.name,
+            mode: sortMode,
+            pinnedIDs: pinnedChannelIds,
+            orderedIDs,
         });
-    }, [channelsData, pinnedChannelIds, sortField, sortOrder]);
+    }, [channelsData, orderedIDs, pinnedChannelIds, sortMode]);
 
     const visibleChannels = useMemo(() => {
         const term = searchTerm.toLowerCase().trim();

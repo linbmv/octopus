@@ -83,6 +83,13 @@
             "nameDesc": "名稱倒序",
             "createdAsc": "時間正序",
             "createdDesc": "時間倒序",
+            "manual": "手動排序",
+            "manualOrder": "手動順序",
+            "manualOrderEmpty": {
+                "channel": "暫無供應源",
+                "group": "暫無分組"
+            },
+            "dragToReorder": "拖曳調整順序",
             "asc": "升序",
             "desc": "降序",
             "filter": {

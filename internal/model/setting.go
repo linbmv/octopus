@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -38,6 +39,10 @@ const (
 	SettingKeyStickyHealthyFirstTokenTimeout SettingKey = "sticky_healthy_first_token_timeout" // 粘性健康首token阈值（秒），0=关闭健康粘性检查
 	SettingKeyChannelCardPinnedIDs           SettingKey = "channel_card_pinned_ids"            // 全局渠道卡片置顶 ID 列表（JSON 数组）
 	SettingKeyGroupCardPinnedIDs             SettingKey = "group_card_pinned_ids"              // 全局分组卡片置顶 ID 列表（JSON 数组）
+	SettingKeyChannelCardOrderedIDs          SettingKey = "channel_card_ordered_ids"           // 全局渠道卡片手动排序 ID 列表（JSON 数组）
+	SettingKeyGroupCardOrderedIDs            SettingKey = "group_card_ordered_ids"             // 全局分组卡片手动排序 ID 列表（JSON 数组）
+	SettingKeyChannelCardSortMode            SettingKey = "channel_card_sort_mode"             // 全局渠道卡片排序模式
+	SettingKeyGroupCardSortMode              SettingKey = "group_card_sort_mode"               // 全局分组卡片排序模式
 )
 
 type RelayLogContentMode string
@@ -84,8 +89,12 @@ var settingSchemas = map[SettingKey]settingSchema{
 	SettingKeyHealthShadowMode:               {validate: validateBoolean},
 	SettingKeyHealthMaxMultiplierStack:       {validate: validateNonNegativeFloat},
 	SettingKeyStickyHealthyFirstTokenTimeout: {validate: validateIntegerRange(0, maxDurationValue/int64(time.Second), "seconds")},
-	SettingKeyChannelCardPinnedIDs:           {validate: validatePinnedIDs},
-	SettingKeyGroupCardPinnedIDs:             {validate: validatePinnedIDs},
+	SettingKeyChannelCardPinnedIDs:           {validate: validateCardIDs},
+	SettingKeyGroupCardPinnedIDs:             {validate: validateCardIDs},
+	SettingKeyChannelCardOrderedIDs:          {validate: validateCardIDs},
+	SettingKeyGroupCardOrderedIDs:            {validate: validateCardIDs},
+	SettingKeyChannelCardSortMode:            {validate: validateCardSortMode},
+	SettingKeyGroupCardSortMode:              {validate: validateCardSortMode},
 }
 
 func DefaultSettings() []Setting {
@@ -116,6 +125,10 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyStickyHealthyFirstTokenTimeout, Value: "0"}, // 默认不启用粘性健康检查
 		{Key: SettingKeyChannelCardPinnedIDs, Value: "[]"},          // 默认没有全局置顶渠道卡片
 		{Key: SettingKeyGroupCardPinnedIDs, Value: "[]"},            // 默认没有全局置顶分组卡片
+		{Key: SettingKeyChannelCardOrderedIDs, Value: "[]"},         // 默认没有渠道卡片手动顺序
+		{Key: SettingKeyGroupCardOrderedIDs, Value: "[]"},           // 默认没有分组卡片手动顺序
+		{Key: SettingKeyChannelCardSortMode, Value: "name-asc"},     // 默认按渠道名称正序
+		{Key: SettingKeyGroupCardSortMode, Value: "name-asc"},       // 默认按分组名称正序
 	}
 }
 
@@ -169,7 +182,11 @@ func validateString(string) error {
 	return nil
 }
 
-func validatePinnedIDs(value string) error {
+func validateCardIDs(value string) error {
+	trimmed := bytes.TrimSpace([]byte(value))
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return fmt.Errorf("must be a JSON array of positive IDs")
+	}
 	var ids []int
 	if err := json.Unmarshal([]byte(value), &ids); err != nil {
 		return fmt.Errorf("must be a JSON array of positive IDs")
@@ -185,6 +202,15 @@ func validatePinnedIDs(value string) error {
 		seen[id] = struct{}{}
 	}
 	return nil
+}
+
+func validateCardSortMode(value string) error {
+	switch value {
+	case "name-asc", "name-desc", "created-asc", "created-desc", "manual":
+		return nil
+	default:
+		return fmt.Errorf("must be one of name-asc, name-desc, created-asc, created-desc, or manual")
+	}
 }
 
 func validateNonNegativeFloat(value string) error {

@@ -200,7 +200,7 @@ export type ProbeCapabilitiesRequest = {
  * 
  * channels?.forEach(channel => console.log(channel.raw.name));
  */
-export function useChannelList() {
+export function useChannelList(options?: { enabled?: boolean }) {
     return useQuery({
         queryKey: ['channels', 'list'],
         queryFn: async () => {
@@ -228,6 +228,7 @@ export function useChannelList() {
                 wait_time: formatTime(item.stats.wait_time),
             }
         })) as Array<{ raw: Channel; formatted: StatsMetricsFormatted }>,
+        enabled: options?.enabled ?? true,
         refetchInterval: 30000,
         refetchOnMount: 'always',
     });

@@ -83,6 +83,13 @@
             "nameDesc": "名称倒序",
             "createdAsc": "时间正序",
             "createdDesc": "时间倒序",
+            "manual": "手动排序",
+            "manualOrder": "手动顺序",
+            "manualOrderEmpty": {
+                "channel": "暂无渠道",
+                "group": "暂无分组"
+            },
+            "dragToReorder": "拖拽调整顺序",
             "asc": "升序",
             "desc": "降序",
             "filter": {

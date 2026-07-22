@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { ArrowUpAZ, Clock3, LayoutGrid, List, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { ArrowUpAZ, Clock3, GripVertical, LayoutGrid, List, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
     MorphingDialog,
@@ -17,7 +17,18 @@ import { CreateDialogContent as ChannelCreateContent } from '@/components/module
 import { CreateDialogContent as GroupCreateContent } from '@/components/modules/group/Create';
 import { CreateDialogContent as ModelCreateContent } from '@/components/modules/model/Create';
 import { useTranslations } from 'next-intl';
+import { useChannelList } from '@/api/endpoints/channel';
+import { useGroupList } from '@/api/endpoints/group';
+import { SettingKey } from '@/api/endpoints/setting';
 import { useSearchStore } from './search-store';
+import { ManualOrderList, type ManualOrderItem } from './ManualOrderList';
+import {
+    reconcileCardIDs,
+    sortCardItems,
+    type CardSortMode,
+} from './card-order';
+import { useGlobalCardOrder } from './use-global-card-order';
+import { useGlobalPinnedIDs } from './use-global-pinned-ids';
 import {
     useToolbarViewOptionsStore,
     TOOLBAR_PAGES,
@@ -25,24 +36,20 @@ import {
     type ChannelFilter,
     type GroupFilter,
     type ModelFilter,
-    type ToolbarSortField,
-    type ToolbarSortOrder,
 } from './view-options-store';
 
 const CHANNEL_FILTER_OPTIONS: ChannelFilter[] = ['all', 'enabled', 'disabled'];
 const GROUP_FILTER_OPTIONS: GroupFilter[] = ['all', 'with-members', 'empty'];
 const MODEL_FILTER_OPTIONS: ModelFilter[] = ['all', 'priced', 'free'];
 type CombinedSortOption = {
-    value: `${ToolbarSortField}-${ToolbarSortOrder}`;
-    field: ToolbarSortField;
-    order: ToolbarSortOrder;
+    value: Exclude<CardSortMode, 'manual'>;
     labelKey: string;
 };
 const COMBINED_SORT_OPTIONS: readonly CombinedSortOption[] = [
-    { value: 'name-asc', field: 'name', order: 'asc', labelKey: 'popover.nameAsc' },
-    { value: 'name-desc', field: 'name', order: 'desc', labelKey: 'popover.nameDesc' },
-    { value: 'created-asc', field: 'created', order: 'asc', labelKey: 'popover.createdAsc' },
-    { value: 'created-desc', field: 'created', order: 'desc', labelKey: 'popover.createdDesc' },
+    { value: 'name-asc', labelKey: 'popover.nameAsc' },
+    { value: 'name-desc', labelKey: 'popover.nameDesc' },
+    { value: 'created-asc', labelKey: 'popover.createdAsc' },
+    { value: 'created-desc', labelKey: 'popover.createdDesc' },
 ] as const;
 
 function isToolbarPage(item: NavItem): item is ToolbarPage {
@@ -67,12 +74,8 @@ export function Toolbar() {
     const searchTerm = useSearchStore((s) => (toolbarItem ? s.searchTerms[toolbarItem] || '' : ''));
     const setSearchTerm = useSearchStore((s) => s.setSearchTerm);
     const layout = useToolbarViewOptionsStore((s) => (toolbarItem ? s.getLayout(toolbarItem) : 'grid'));
-    const sortField = useToolbarViewOptionsStore((s) =>
-        toolbarItem === 'channel' || toolbarItem === 'group' ? s.getSortField(toolbarItem) : 'name'
-    );
     const sortOrder = useToolbarViewOptionsStore((s) => (toolbarItem ? s.getSortOrder(toolbarItem) : 'asc'));
     const setLayout = useToolbarViewOptionsStore((s) => s.setLayout);
-    const setSortConfig = useToolbarViewOptionsStore((s) => s.setSortConfig);
     const setSortOrder = useToolbarViewOptionsStore((s) => s.setSortOrder);
     const channelFilter = useToolbarViewOptionsStore((s) => s.channelFilter);
     const groupFilter = useToolbarViewOptionsStore((s) => s.groupFilter);
@@ -80,12 +83,43 @@ export function Toolbar() {
     const setChannelFilter = useToolbarViewOptionsStore((s) => s.setChannelFilter);
     const setGroupFilter = useToolbarViewOptionsStore((s) => s.setGroupFilter);
     const setModelFilter = useToolbarViewOptionsStore((s) => s.setModelFilter);
+    const { data: channelsData = [] } = useChannelList({ enabled: toolbarItem === 'channel' });
+    const { data: groups = [] } = useGroupList({ enabled: toolbarItem === 'group' });
+    const channelOrder = useGlobalCardOrder('channel');
+    const groupOrder = useGlobalCardOrder('group');
+    const { pinnedIDs: pinnedChannelIDs } = useGlobalPinnedIDs(SettingKey.ChannelCardPinnedIDs);
+    const { pinnedIDs: pinnedGroupIDs } = useGlobalPinnedIDs(SettingKey.GroupCardPinnedIDs);
     const [expandedSearchItem, setExpandedSearchItem] = useState<ToolbarPage | null>(null);
     const searchExpanded = expandedSearchItem === toolbarItem;
+    const manualItems = useMemo<ManualOrderItem[]>(() => {
+        if (toolbarItem === 'channel') return channelsData.map(({ raw }) => ({ id: raw.id, name: raw.name }));
+        if (toolbarItem === 'group') return groups.map((group) => ({ id: group.id, name: group.name }));
+        return [];
+    }, [channelsData, groups, toolbarItem]);
 
     if (!toolbarItem) return null;
     const showLayoutOptions = toolbarItem !== 'group';
     const showCombinedSortOptions = toolbarItem === 'channel' || toolbarItem === 'group';
+    const activeCardOrder = toolbarItem === 'channel' ? channelOrder : toolbarItem === 'group' ? groupOrder : null;
+    const activePinnedIDs = toolbarItem === 'channel' ? pinnedChannelIDs : toolbarItem === 'group' ? pinnedGroupIDs : [];
+    const handleCardSortModeChange = (nextMode: CardSortMode) => {
+        if (!activeCardOrder) return;
+        if (nextMode === 'manual') {
+            const itemIDs = manualItems.map((item) => item.id);
+            const initialIDs = activeCardOrder.orderedIDs.some((id) => itemIDs.includes(id))
+                ? reconcileCardIDs(activeCardOrder.orderedIDs, itemIDs)
+                : sortCardItems(manualItems, {
+                    getID: (item) => item.id,
+                    getName: (item) => item.name,
+                    mode: activeCardOrder.mode === 'manual' ? 'name-asc' : activeCardOrder.mode,
+                    pinnedIDs: activePinnedIDs,
+                    orderedIDs: [],
+                }).map((item) => item.id);
+            activeCardOrder.setSortMode(nextMode, initialIDs);
+            return;
+        }
+        activeCardOrder.setSortMode(nextMode);
+    };
 
     const channelFilterLabelKeys: Record<ChannelFilter, string> = {
         all: 'popover.filter.channel.all',
@@ -203,7 +237,7 @@ export function Toolbar() {
                         align="center"
                         side="bottom"
                         sideOffset={8}
-                        className="w-64 rounded-2xl border border-border/60 bg-card p-3 shadow-xl"
+                        className="w-72 rounded-2xl border border-border/60 bg-card p-3 shadow-xl"
                     >
                         <div className="grid gap-3">
                             {showLayoutOptions && (
@@ -248,22 +282,31 @@ export function Toolbar() {
                                             <button
                                                 key={option.value}
                                                 type="button"
-                                                onClick={() => {
-                                                    if (toolbarItem === 'channel' || toolbarItem === 'group') {
-                                                        setSortConfig(toolbarItem, option.field, option.order);
-                                                    }
-                                                }}
+                                                onClick={() => handleCardSortModeChange(option.value)}
                                                 className={cn(
                                                     'h-8 rounded-lg border text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors',
-                                                    sortField === option.field && sortOrder === option.order
+                                                    activeCardOrder?.mode === option.value
                                                         ? 'border-primary/30 bg-primary text-primary-foreground'
                                                         : 'border-border bg-muted/20 text-foreground hover:bg-muted/30'
                                                 )}
                                             >
-                                                {option.field === 'name' ? <ArrowUpAZ className="size-3.5" /> : <Clock3 className="size-3.5" />}
+                                                {option.value.startsWith('name') ? <ArrowUpAZ className="size-3.5" /> : <Clock3 className="size-3.5" />}
                                                 {t(option.labelKey)}
                                             </button>
                                         ))}
+                                        <button
+                                            type="button"
+                                            onClick={() => handleCardSortModeChange('manual')}
+                                            className={cn(
+                                                'col-span-2 h-8 rounded-lg border text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors',
+                                                activeCardOrder?.mode === 'manual'
+                                                    ? 'border-primary/30 bg-primary text-primary-foreground'
+                                                    : 'border-border bg-muted/20 text-foreground hover:bg-muted/30'
+                                            )}
+                                        >
+                                            <GripVertical className="size-3.5" />
+                                            {t('popover.manual')}
+                                        </button>
                                     </div>
                                 ) : (
                                     <div className="grid grid-cols-2 gap-2">
@@ -317,6 +360,16 @@ export function Toolbar() {
                                     ))}
                                 </div>
                             </div>
+
+                            {activeCardOrder?.mode === 'manual' && (toolbarItem === 'channel' || toolbarItem === 'group') && (
+                                <ManualOrderList
+                                    page={toolbarItem}
+                                    items={manualItems}
+                                    orderedIDs={activeCardOrder.orderedIDs}
+                                    pinnedIDs={activePinnedIDs}
+                                    onSave={activeCardOrder.saveOrderedIDs}
+                                />
+                            )}
                         </div>
                     </PopoverContent>
                 </Popover>
