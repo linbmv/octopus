@@ -98,17 +98,7 @@ func IsNetworkError(err error) bool {
 }
 
 func boundedReason(value string) string {
-	value = strings.TrimSpace(strings.Map(func(r rune) rune {
-		if r < 0x20 && r != '\t' {
-			return -1
-		}
-		return r
-	}, value))
-	runes := []rune(value)
-	if len(runes) > 256 {
-		value = string(runes[:256]) + "..."
-	}
-	return value
+	return model.BoundDiagnosticReason(value)
 }
 
 func containsAny(value string, markers ...string) bool {

@@ -3,6 +3,7 @@ package selfheal
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -128,18 +129,14 @@ func artifactURLPath(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	if index := strings.Index(raw, "://"); index >= 0 {
-		raw = raw[index+3:]
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
 	}
-	if index := strings.IndexByte(raw, '/'); index >= 0 {
-		raw = raw[index:]
-	} else {
+	if parsed.Path == "" {
 		return "/"
 	}
-	if index := strings.IndexByte(raw, '?'); index >= 0 {
-		raw = raw[:index]
-	}
-	return raw
+	return parsed.Path
 }
 
 // suggestCompareVariants converts golden-sample header differences into
@@ -152,9 +149,18 @@ func suggestCompareVariants(headerDiff []string, sample *importer.Sample) []Vari
 	}
 	sampleValues := make(map[string]string, len(sample.Headers))
 	for name, values := range sample.Headers {
-		if len(values) > 0 {
-			sampleValues[strings.ToLower(strings.TrimSpace(name))] = strings.TrimSpace(values[0])
+		if len(values) == 0 {
+			continue
 		}
+		// HTTP allows joining repeated header values with commas; a suggested
+		// variant must carry all of them to actually replicate the sample.
+		joined := make([]string, 0, len(values))
+		for _, value := range values {
+			if value = strings.TrimSpace(value); value != "" {
+				joined = append(joined, value)
+			}
+		}
+		sampleValues[strings.ToLower(strings.TrimSpace(name))] = strings.Join(joined, ", ")
 	}
 	suggested := make([]Variant, 0, 4)
 	for _, diff := range headerDiff {

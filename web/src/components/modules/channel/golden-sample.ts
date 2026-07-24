@@ -1,18 +1,9 @@
 import type { GoldenSampleInput } from '@/api/endpoints/channel';
+import { isAuthHeaderName, looksLikeSecretValue } from './sensitive';
 
 export type GoldenSampleParseError = 'empty' | 'invalidJson' | 'missingUrl' | 'tooLarge' | 'authSecret';
 
 const MAX_SAMPLE_BYTES = 68 * 1024;
-
-const AUTH_HEADER_NAMES = new Set([
-    'authorization',
-    'proxy-authorization',
-    'x-api-key',
-    'api-key',
-    'x-goog-api-key',
-    'cookie',
-    'set-cookie',
-]);
 
 /**
  * Parses a pasted golden sample into the API payload. Only compact JSON is
@@ -59,18 +50,13 @@ function normalizeHeaders(value: unknown): Record<string, string[]> | undefined 
     for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
         const key = name.trim();
         if (!key) continue;
-        if (AUTH_HEADER_NAMES.has(key.toLowerCase())) return 'authSecret';
+        if (isAuthHeaderName(key)) return 'authSecret';
         const values = Array.isArray(entry) ? entry : [entry];
         const clean = values.filter((item): item is string => typeof item === 'string');
-        if (clean.some(looksLikeSecret)) return 'authSecret';
+        if (clean.some(looksLikeSecretValue)) return 'authSecret';
         if (clean.length > 0) result[key] = clean;
     }
     return Object.keys(result).length > 0 ? result : undefined;
-}
-
-function looksLikeSecret(value: string): boolean {
-    const lower = value.trim().toLowerCase();
-    return lower.startsWith('bearer ') || lower.startsWith('basic ') || lower.startsWith('sk-');
 }
 
 /** Splits a backend diff entry like "header_added:originator" into UI parts. */

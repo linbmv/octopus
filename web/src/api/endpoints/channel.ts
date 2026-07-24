@@ -746,7 +746,9 @@ export function useChannelSelfHealing(channelId: number, enabled: boolean = true
         refetchInterval: (query) => {
             const sessions = query.state.data?.sessions ?? [];
             const active = sessions.some((session) => session.status === 'queued' || session.status === 'running');
-            return active ? 3000 : 15000;
+            // Idle state only changes through user-triggered mutations, which
+            // already invalidate this query; poll only while a session runs.
+            return active ? 3000 : false;
         },
     });
 }

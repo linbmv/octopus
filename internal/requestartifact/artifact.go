@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bestruirui/octopus/internal/requestrewrite"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
 
@@ -64,8 +65,8 @@ func Build(request *httpclient.Request, protocol, model string, rewrite RewriteS
 	if contentType == "" && request.Headers != nil {
 		contentType = strings.TrimSpace(request.Headers.Get("Content-Type"))
 	}
-	body := buildBodyShape(request.Body, contentType)
-	if bodyModel := extractModel(request.Body, body.Truncated, contentType); bodyModel != "" {
+	body, bodyModel := buildBodyShape(request.Body, contentType)
+	if bodyModel != "" {
 		model = bodyModel
 	}
 	rawURL := request.URL
@@ -147,13 +148,11 @@ func captureHeaders(headers map[string][]string) map[string]string {
 	return result
 }
 
+// isSensitiveHeader delegates to the canonical protected-header list plus the
+// cookie pair, so artifact redaction can never lag behind the rewrite gate.
 func isSensitiveHeader(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-goog-api-key", "api-key":
-		return true
-	default:
-		return false
-	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	return requestrewrite.IsProtectedHeader(name)
 }
 
 func isAllowlistedHeader(name string) bool {
@@ -171,30 +170,36 @@ func isAllowlistedHeader(name string) bool {
 	}
 }
 
-func buildBodyShape(body []byte, contentType string) BodyShape {
+// buildBodyShape parses the body once and also returns the top-level "model"
+// string so Build never has to unmarshal the same bytes twice.
+func buildBodyShape(body []byte, contentType string) (BodyShape, string) {
 	shape := BodyShape{ContentType: truncate(contentType, 256), BodyBytes: len(body)}
 	if len(body) == 0 {
-		return shape
+		return shape, ""
 	}
 	if len(body) > MaxBodyBytes {
 		shape.Truncated = true
-		return shape
+		return shape, ""
 	}
 	var value any
 	if err := json.Unmarshal(body, &value); err != nil {
 		shape.Paths = map[string]string{"/": "non_json"}
-		return shape
+		return shape, ""
 	}
 	shape.Paths = make(map[string]string)
 	state := shapeWalker{paths: shape.Paths}
 	state.walk("", value, 0)
+	model := ""
 	if object, ok := value.(map[string]any); ok {
 		for key := range object {
 			shape.TopLevelKeys = append(shape.TopLevelKeys, key)
 		}
 		sort.Strings(shape.TopLevelKeys)
+		if name, ok := object["model"].(string); ok {
+			model = truncate(strings.TrimSpace(name), 256)
+		}
 	}
-	return shape
+	return shape, model
 }
 
 type shapeWalker struct {
@@ -235,23 +240,6 @@ func (w *shapeWalker) walk(path string, value any, depth int) {
 	default:
 		w.paths[pathOrRoot(path)] = "other"
 	}
-}
-
-func extractModel(body []byte, truncated bool, contentType string) string {
-	if truncated || (!strings.Contains(strings.ToLower(contentType), "json") && !looksLikeJSON(body)) {
-		return ""
-	}
-	var object map[string]any
-	if json.Unmarshal(body, &object) != nil {
-		return ""
-	}
-	model, _ := object["model"].(string)
-	return truncate(strings.TrimSpace(model), 256)
-}
-
-func looksLikeJSON(body []byte) bool {
-	trimmed := strings.TrimSpace(string(body))
-	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
 }
 
 func shapeHash(artifact *Artifact) string {

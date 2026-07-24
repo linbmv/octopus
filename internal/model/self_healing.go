@@ -345,7 +345,10 @@ func NormalizeDiagnosticHeaders(headers http.Header) map[string][]string {
 	return result
 }
 
-func boundedDiagnosticReason(value string) string {
+// BoundDiagnosticReason strips control runes and caps free-form diagnostic
+// text at 256 runes. It is the single bounding rule for reasons, descriptions,
+// and actor strings across the self-healing feature.
+func BoundDiagnosticReason(value string) string {
 	value = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if r < 0x20 && r != '\t' {
 			return -1
@@ -356,6 +359,10 @@ func boundedDiagnosticReason(value string) string {
 		return string([]rune(value)[:256]) + "..."
 	}
 	return value
+}
+
+func boundedDiagnosticReason(value string) string {
+	return BoundDiagnosticReason(value)
 }
 
 func boundedVariantIDs(ids []string) []string {

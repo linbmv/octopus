@@ -222,6 +222,21 @@ func getChannelSelfHealingStatus(c *gin.Context) {
 	})
 }
 
+// runSelfHealingPreview executes a preview and writes the audit event. It
+// returns nil after responding with an error so both the standalone preview
+// route and the diagnostics mode=preview branch stay behaviorally identical.
+func runSelfHealingPreview(c *gin.Context, worker *selfheal.Worker, request selfheal.PreviewRequest) *selfheal.PreviewResult {
+	result, err := worker.Preview(c.Request.Context(), request)
+	if err != nil {
+		respondSelfHealingError(c, err)
+		return nil
+	}
+	middleware.AuditLog(c, middleware.EventChannelSelfHealingPreview, map[string]interface{}{
+		"channel_id": request.ChannelID, "root_cause": request.RootCause, "variant_count": len(result.Plan.Variants),
+	})
+	return result
+}
+
 func previewChannelSelfHealing(c *gin.Context) {
 	channelID, _, ok := selfHealingChannel(c)
 	if !ok {
@@ -243,17 +258,13 @@ func previewChannelSelfHealing(c *gin.Context) {
 		selfHealingUnavailable(c)
 		return
 	}
-	result, err := worker.Preview(c.Request.Context(), selfheal.PreviewRequest{
+	result := runSelfHealingPreview(c, worker, selfheal.PreviewRequest{
 		ChannelID: channelID, ChannelKeyID: request.ChannelKeyID, Endpoint: request.Endpoint,
 		Model: request.Model, RootCause: request.RootCause, MaxVariants: request.MaxVariants,
 	})
-	if err != nil {
-		respondSelfHealingError(c, err)
+	if result == nil {
 		return
 	}
-	middleware.AuditLog(c, middleware.EventChannelSelfHealingPreview, map[string]interface{}{
-		"channel_id": channelID, "root_cause": request.RootCause, "variant_count": len(result.Plan.Variants),
-	})
 	resp.Success(c, result)
 }
 
@@ -285,17 +296,13 @@ func createChannelSelfHealingDiagnostic(c *gin.Context) {
 		return
 	}
 	if request.Mode == model.DiagnosticModePreview {
-		result, err := worker.Preview(c.Request.Context(), selfheal.PreviewRequest{
+		result := runSelfHealingPreview(c, worker, selfheal.PreviewRequest{
 			ChannelID: channelID, ChannelKeyID: request.ChannelKeyID, Endpoint: request.Endpoint,
 			Model: request.Model, RootCause: request.RootCause, MaxVariants: request.MaxVariants,
 		})
-		if err != nil {
-			respondSelfHealingError(c, err)
+		if result == nil {
 			return
 		}
-		middleware.AuditLog(c, middleware.EventChannelSelfHealingPreview, map[string]interface{}{
-			"channel_id": channelID, "root_cause": request.RootCause, "variant_count": len(result.Plan.Variants),
-		})
 		resp.Success(c, map[string]any{"mode": model.DiagnosticModePreview, "preview": result})
 		return
 	}

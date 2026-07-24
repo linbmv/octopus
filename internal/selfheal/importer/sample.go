@@ -5,6 +5,7 @@
 package importer
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,11 +50,17 @@ type Sample struct {
 //
 // Authentication headers are rejected. Bodies larger than 64 KiB are rejected.
 func ParseJSONSample(raw []byte) (*Sample, error) {
-	if len(bytesTrimSpace(raw)) == 0 {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
 		return nil, ErrSampleEmpty
 	}
 	if len(raw) > maxSampleBodyBytes+maxSampleHeaderBytes {
 		return nil, ErrSampleTooLarge
+	}
+	// Only the compact JSON object form is implemented; pasting a cURL command
+	// or HAR export gets a distinct error instead of a generic JSON failure.
+	if trimmed[0] != '{' {
+		return nil, ErrSampleUnsupported
 	}
 	var payload struct {
 		Method  string              `json:"method"`
@@ -309,13 +316,9 @@ func equalStringSlices(left, right []string) bool {
 
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
 		}
 	}
 	return ""
-}
-
-func bytesTrimSpace(raw []byte) []byte {
-	return []byte(strings.TrimSpace(string(raw)))
 }

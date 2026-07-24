@@ -109,6 +109,7 @@ export function containsSensitiveSelfHealingLeak(value: unknown): boolean {
         text.includes('"authorization"') ||
         text.includes('"channel_key"') ||
         text.includes('bearer ') ||
+        text.includes('basic ') ||
         text.includes('sk-') ||
         text.includes('api-key')
     );

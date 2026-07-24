@@ -9,6 +9,12 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { parseGoldenSampleInput, splitDiffEntry } from './golden-sample';
 
+const ACTION_CLASSES: Record<'added' | 'removed' | 'changed', string> = {
+    added: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
+    removed: 'bg-red-500/15 text-red-700 dark:text-red-400',
+    changed: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+};
+
 export function GoldenSampleDiff({ channelId, disabled }: { channelId: number; disabled?: boolean }) {
     const t = useTranslations('channel.detail.selfHealing.goldenSample');
     const compare = useSelfHealingCompare(channelId);
@@ -94,14 +100,7 @@ function CompareResultView({ result }: { result: SelfHealingCompareResult }) {
                                 </Badge>
                                 <Badge
                                     variant="secondary"
-                                    className={cn(
-                                        'h-5 shrink-0 px-1.5 text-[10px]',
-                                        action === 'added'
-                                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-                                            : action === 'removed'
-                                              ? 'bg-red-500/15 text-red-700 dark:text-red-400'
-                                              : 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-                                    )}
+                                    className={cn('h-5 shrink-0 px-1.5 text-[10px]', ACTION_CLASSES[action])}
                                 >
                                     {t(`actions.${action}`)}
                                 </Badge>
