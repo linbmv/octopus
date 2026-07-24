@@ -41,6 +41,11 @@ func CapabilityEvidenceUpsert(ctx context.Context, evidence *model.CapabilityEvi
 		return fmt.Errorf("invalid capability evidence lifetime")
 	}
 	evidence.ErrorClass = truncateCapabilityText(evidence.ErrorClass, 96)
+	evidence.ErrorLevel = strings.ToLower(strings.TrimSpace(evidence.ErrorLevel))
+	if evidence.ErrorLevel != "" && evidence.ErrorLevel != "none" && evidence.ErrorLevel != "key" &&
+		evidence.ErrorLevel != "channel" && evidence.ErrorLevel != "client" {
+		return fmt.Errorf("invalid capability evidence error level")
+	}
 	evidence.ErrorMessage = truncateCapabilityText(evidence.ErrorMessage, 512)
 	if evidence.Source == "" {
 		evidence.Source = "probe"
@@ -50,6 +55,7 @@ func CapabilityEvidenceUpsert(ctx context.Context, evidence *model.CapabilityEvi
 		"endpoint":          evidence.Endpoint,
 		"status":            evidence.Status,
 		"error_class":       evidence.ErrorClass,
+		"error_level":       evidence.ErrorLevel,
 		"error_message":     evidence.ErrorMessage,
 		"http_status":       evidence.HTTPStatus,
 		"scope_fingerprint": evidence.ScopeFingerprint,

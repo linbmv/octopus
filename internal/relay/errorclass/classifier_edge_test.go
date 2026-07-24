@@ -263,6 +263,18 @@ func TestClassifyWithHeadersCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestClassify403WAFIsChannelScoped(t *testing.T) {
+	got := ClassifyWithHeaders(http.StatusForbidden, http.Header{"Content-Type": {"text/html"}}, []byte(`<!doctype html><html>Cloudflare challenge-platform</html>`))
+	if got.Level != ErrorLevelChannel {
+		t.Fatalf("ClassifyWithHeaders(403 WAF) = %s (%s), want channel", got.Level.String(), got.Reason)
+	}
+
+	ordinary := ClassifyWithHeaders(http.StatusForbidden, http.Header{"Content-Type": {"application/json"}}, []byte(`{"error":"permission denied"}`))
+	if ordinary.Level != ErrorLevelKey {
+		t.Fatalf("ClassifyWithHeaders(403 permission) = %s (%s), want key", ordinary.Level.String(), ordinary.Reason)
+	}
+}
+
 func TestClassifyEmbeddedQuotaErrorsAcrossHTTPAndSSE(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -345,6 +357,7 @@ func TestClassifyResponseUsesContentTypeAtSingleEntryPoint(t *testing.T) {
 		{name: "JSON error", contentType: "application/json", body: `{"error":{"type":"rate_limit_error"}}`, want: ErrorLevelKey},
 		{name: "SSE error", contentType: "text/event-stream", body: "event: error\ndata: failed\n\n", want: ErrorLevelKey},
 		{name: "plain overload", contentType: "text/plain", body: "service unavailable", want: ErrorLevelChannel},
+		{name: "WAF HTML behind HTTP 200", contentType: "text/html; charset=utf-8", body: `<!doctype html><html><title>Just a moment...</title></html>`, want: ErrorLevelChannel},
 		{name: "JSON success with null error", contentType: "application/json", body: `{"id":"ok","error":null}`, want: ErrorLevelNone},
 		{name: "binary payload is not scanned", contentType: "application/octet-stream", body: "rate limit", want: ErrorLevelNone},
 	}

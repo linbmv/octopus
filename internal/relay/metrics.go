@@ -13,8 +13,10 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/price"
+	"github.com/bestruirui/octopus/internal/requestartifact"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/httpclient"
 )
 
 // RelayMetrics 负责最终的日志收集与持久化
@@ -39,19 +41,26 @@ type RelayMetrics struct {
 
 	// 出站请求摘要；raw passthrough 会绕过标准化 llm.Request，日志需记录最终出站语义摘要用于审计。
 	OutboundRequestSummary *OutboundRequestSummary
+	// OutboundRequestArtifact is the redacted final request shape captured after
+	// channel rewrites. It is kept in memory for the future baseline sink and is
+	// never serialized into the ordinary relay log automatically.
+	OutboundRequestArtifact *requestartifact.Artifact
 }
 
 type OutboundRequestSummary struct {
-	RawPassthrough        bool           `json:"raw_passthrough"`
-	ParamOverrideApplied  bool           `json:"param_override_applied,omitempty"`
-	JSONRewriteApplied    bool           `json:"json_rewrite_applied,omitempty"`
-	HeaderRewriteApplied  bool           `json:"header_rewrite_applied,omitempty"`
-	RequestRewriteApplied bool           `json:"request_rewrite_applied,omitempty"`
-	BodyBytes             int            `json:"body_bytes"`
-	BodySHA256            string         `json:"body_sha256"`
-	Model                 string         `json:"model,omitempty"`
-	Stream                *bool          `json:"stream,omitempty"`
-	StreamOptions         map[string]any `json:"stream_options,omitempty"`
+	RawPassthrough        bool `json:"raw_passthrough"`
+	ParamOverrideApplied  bool `json:"param_override_applied,omitempty"`
+	JSONRewriteApplied    bool `json:"json_rewrite_applied,omitempty"`
+	HeaderRewriteApplied  bool `json:"header_rewrite_applied,omitempty"`
+	RequestRewriteApplied bool `json:"request_rewrite_applied,omitempty"`
+	BodyBytes             int  `json:"body_bytes"`
+	// BodySHA256 hashes the exact outbound body bytes so logs can be compared
+	// against captured upstream traffic; ShapeSHA256 hashes the redacted shape.
+	BodySHA256    string         `json:"body_sha256"`
+	ShapeSHA256   string         `json:"shape_sha256,omitempty"`
+	Model         string         `json:"model,omitempty"`
+	Stream        *bool          `json:"stream,omitempty"`
+	StreamOptions map[string]any `json:"stream_options,omitempty"`
 }
 
 func (m *RelayMetrics) RecordUsage(usage *llm.Usage) {
@@ -98,28 +107,38 @@ func normalizedReasoningTokens(usage *llm.Usage) int64 {
 }
 
 func (m *RelayMetrics) RecordOutboundRequestSummary(
-	body []byte,
+	request *httpclient.Request,
 	rawPassthrough bool,
 	paramOverrideApplied bool,
 	jsonRewriteApplied bool,
 	headerRewriteApplied bool,
 ) {
-	sum := sha256.Sum256(body)
+	artifact := requestartifact.Build(request, "", "", requestartifact.RewriteSummary{
+		RawPassthrough:        rawPassthrough,
+		ParamOverrideApplied:  paramOverrideApplied,
+		JSONRewriteApplied:    jsonRewriteApplied,
+		HeaderRewriteApplied:  headerRewriteApplied,
+		RequestRewriteApplied: paramOverrideApplied || jsonRewriteApplied || headerRewriteApplied,
+	})
+	if artifact == nil {
+		return
+	}
+	m.OutboundRequestArtifact = artifact
+	bodyHash := sha256.Sum256(request.Body)
 	summary := &OutboundRequestSummary{
 		RawPassthrough:        rawPassthrough,
 		ParamOverrideApplied:  paramOverrideApplied,
 		JSONRewriteApplied:    jsonRewriteApplied,
 		HeaderRewriteApplied:  headerRewriteApplied,
 		RequestRewriteApplied: paramOverrideApplied || jsonRewriteApplied || headerRewriteApplied,
-		BodyBytes:             len(body),
-		BodySHA256:            hex.EncodeToString(sum[:]),
+		BodyBytes:             artifact.Body.BodyBytes,
+		BodySHA256:            hex.EncodeToString(bodyHash[:]),
+		ShapeSHA256:           artifact.ShapeSHA256,
+		Model:                 artifact.Model,
 	}
 
 	var bodyMap map[string]any
-	if err := json.Unmarshal(body, &bodyMap); err == nil {
-		if model, ok := bodyMap["model"].(string); ok {
-			summary.Model = model
-		}
+	if err := json.Unmarshal(request.Body, &bodyMap); err == nil {
 		if stream, ok := bodyMap["stream"].(bool); ok {
 			summary.Stream = &stream
 		}

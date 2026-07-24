@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/bestruirui/octopus/internal/capability"
-	"github.com/bestruirui/octopus/internal/client"
+	"github.com/bestruirui/octopus/internal/channelstate"
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -216,27 +216,28 @@ func listChannel(c *gin.Context) {
 }
 
 type channelCreateRequest struct {
-	Name             string                       `json:"name"`
-	Type             llm.APIFormat                `json:"type"`
-	Enabled          *bool                        `json:"enabled,omitempty"`
-	BaseUrls         []model.BaseUrl              `json:"base_urls"`
-	Keys             []model.ChannelKeyAddRequest `json:"keys"`
-	Model            string                       `json:"model"`
-	CustomModel      string                       `json:"custom_model,omitempty"`
-	Proxy            bool                         `json:"proxy,omitempty"`
-	AutoSync         bool                         `json:"auto_sync,omitempty"`
-	AutoGroup        model.AutoGroupType          `json:"auto_group,omitempty"`
-	CustomHeader     []model.CustomHeader         `json:"custom_header,omitempty"`
-	HeaderRules      []model.HeaderRule           `json:"header_rules,omitempty"`
-	JSONRewriteRules []model.JSONRewriteRule      `json:"json_rewrite_rules,omitempty"`
-	ParamOverride    *string                      `json:"param_override,omitempty"`
-	RawPassthrough   bool                         `json:"raw_passthrough,omitempty"`
-	RPMLimit         int                          `json:"rpm_limit,omitempty"`
-	MaxConcurrency   int                          `json:"max_concurrency,omitempty"`
-	ChannelProxy     *string                      `json:"channel_proxy,omitempty"`
-	MatchRegex       *string                      `json:"match_regex,omitempty"`
-	UserAgent        string                       `json:"user_agent,omitempty"`
-	PolicyProfile    model.ChannelPolicyProfile   `json:"policy_profile,omitempty"`
+	Name               string                       `json:"name"`
+	Type               llm.APIFormat                `json:"type"`
+	Enabled            *bool                        `json:"enabled,omitempty"`
+	BaseUrls           []model.BaseUrl              `json:"base_urls"`
+	Keys               []model.ChannelKeyAddRequest `json:"keys"`
+	Model              string                       `json:"model"`
+	CustomModel        string                       `json:"custom_model,omitempty"`
+	Proxy              bool                         `json:"proxy,omitempty"`
+	AutoSync           bool                         `json:"auto_sync,omitempty"`
+	AutoGroup          model.AutoGroupType          `json:"auto_group,omitempty"`
+	CustomHeader       []model.CustomHeader         `json:"custom_header,omitempty"`
+	HeaderRules        []model.HeaderRule           `json:"header_rules,omitempty"`
+	JSONRewriteRules   []model.JSONRewriteRule      `json:"json_rewrite_rules,omitempty"`
+	ParamOverride      *string                      `json:"param_override,omitempty"`
+	RawPassthrough     bool                         `json:"raw_passthrough,omitempty"`
+	RPMLimit           int                          `json:"rpm_limit,omitempty"`
+	MaxConcurrency     int                          `json:"max_concurrency,omitempty"`
+	ChannelProxy       *string                      `json:"channel_proxy,omitempty"`
+	MatchRegex         *string                      `json:"match_regex,omitempty"`
+	UserAgent          string                       `json:"user_agent,omitempty"`
+	PolicyProfile      model.ChannelPolicyProfile   `json:"policy_profile,omitempty"`
+	SelfHealingEnabled bool                         `json:"self_healing_enabled,omitempty"`
 }
 
 func (r channelCreateRequest) channel() model.Channel {
@@ -249,27 +250,28 @@ func (r channelCreateRequest) channel() model.Channel {
 		keys[i] = model.ChannelKey{Enabled: key.Enabled, ChannelKey: key.ChannelKey, Remark: key.Remark}
 	}
 	return model.Channel{
-		Name:             r.Name,
-		Type:             r.Type,
-		Enabled:          enabled,
-		BaseUrls:         r.BaseUrls,
-		Keys:             keys,
-		Model:            r.Model,
-		CustomModel:      r.CustomModel,
-		Proxy:            r.Proxy,
-		AutoSync:         r.AutoSync,
-		AutoGroup:        r.AutoGroup,
-		CustomHeader:     r.CustomHeader,
-		HeaderRules:      r.HeaderRules,
-		JSONRewriteRules: r.JSONRewriteRules,
-		ParamOverride:    r.ParamOverride,
-		RawPassthrough:   r.RawPassthrough,
-		RPMLimit:         r.RPMLimit,
-		MaxConcurrency:   r.MaxConcurrency,
-		ChannelProxy:     r.ChannelProxy,
-		MatchRegex:       r.MatchRegex,
-		UserAgent:        r.UserAgent,
-		PolicyProfile:    r.PolicyProfile,
+		Name:               r.Name,
+		Type:               r.Type,
+		Enabled:            enabled,
+		BaseUrls:           r.BaseUrls,
+		Keys:               keys,
+		Model:              r.Model,
+		CustomModel:        r.CustomModel,
+		Proxy:              r.Proxy,
+		AutoSync:           r.AutoSync,
+		AutoGroup:          r.AutoGroup,
+		CustomHeader:       r.CustomHeader,
+		HeaderRules:        r.HeaderRules,
+		JSONRewriteRules:   r.JSONRewriteRules,
+		ParamOverride:      r.ParamOverride,
+		RawPassthrough:     r.RawPassthrough,
+		RPMLimit:           r.RPMLimit,
+		MaxConcurrency:     r.MaxConcurrency,
+		ChannelProxy:       r.ChannelProxy,
+		MatchRegex:         r.MatchRegex,
+		UserAgent:          r.UserAgent,
+		PolicyProfile:      r.PolicyProfile,
+		SelfHealingEnabled: r.SelfHealingEnabled,
 	}
 }
 
@@ -406,35 +408,7 @@ func deleteChannel(c *gin.Context) {
 }
 
 func invalidateChannelRuntimeState(channelID int, channels ...*model.Channel) {
-	balancer.InvalidateChannel(channelID)
-	relay.InvalidateRuntimeURLState(channelID)
-
-	seenProxyURLs := make(map[string]struct{}, len(channels))
-	foundChannel := false
-	for _, channel := range channels {
-		if channel == nil {
-			continue
-		}
-		foundChannel = true
-		if channel.ChannelProxy == nil {
-			continue
-		}
-		proxyURL := strings.TrimSpace(*channel.ChannelProxy)
-		if proxyURL == "" {
-			continue
-		}
-		if _, exists := seenProxyURLs[proxyURL]; exists {
-			continue
-		}
-		seenProxyURLs[proxyURL] = struct{}{}
-		client.InvalidateCustomProxyClient(proxyURL)
-	}
-	if !foundChannel {
-		// A concurrent cache refresh can make the pre-change snapshot unavailable.
-		// Clearing this small bounded cache is safer than retaining an obsolete
-		// authenticated proxy transport whose previous URL is no longer known.
-		client.InvalidateAllCustomProxyClients()
-	}
+	channelstate.Invalidate(channelID, channels...)
 }
 
 type fetchModelRequest struct {

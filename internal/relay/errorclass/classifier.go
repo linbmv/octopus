@@ -123,6 +123,9 @@ func ClassifyWithHeaders(statusCode int, headers http.Header, responseBody []byt
 // For successful binary responses, a non-text content type disables body
 // keyword scanning so arbitrary payload bytes cannot become routing signals.
 func ClassifyResponse(statusCode int, headers http.Header, responseBody []byte, contentType string) Classification {
+	if statusCode >= 200 && statusCode < 300 && isUnexpectedHTMLResponse(contentType, responseBody) {
+		return Classification{Level: ErrorLevelChannel, Reason: "HTTP 2xx HTML/WAF response"}
+	}
 	// Structured quota and embedded/SSE errors can arrive behind HTTP 200, so
 	// inspect the bounded body before the ordinary 2xx success fast path.
 	if shouldInspectResponseBody(statusCode, contentType, responseBody) {
@@ -167,6 +170,21 @@ func ClassifyResponse(statusCode int, headers http.Header, responseBody []byte, 
 		Level:  meta.Level,
 		Reason: http.StatusText(statusCode),
 	}
+}
+
+func isUnexpectedHTMLResponse(contentType string, responseBody []byte) bool {
+	if len(responseBody) == 0 {
+		return false
+	}
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml") {
+		return true
+	}
+	body := strings.TrimSpace(lowerScanBody(responseBody))
+	if !strings.HasPrefix(body, "<!doctype html") && !strings.HasPrefix(body, "<html") {
+		return false
+	}
+	return bodyContainsAny(body, "cloudflare", "cf-chl-", "challenge-platform", "captcha", "enable javascript", "sign in", "log in")
 }
 
 func allowsPlainTextMarkers(contentType string) bool {
@@ -404,6 +422,12 @@ func classify403Error(responseBody []byte) Classification {
 		"探测请求",
 		"无意义内容",
 		"封禁ip",
+		"cloudflare",
+		"cf-chl-",
+		"challenge-platform",
+		"captcha",
+		"enable javascript",
+		"web application firewall",
 	) {
 		return Classification{
 			Level:  ErrorLevelChannel,

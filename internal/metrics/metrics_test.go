@@ -34,13 +34,19 @@ func TestMiddlewareRecordsRequestMetrics(t *testing.T) {
 
 func TestHandlerExposesOctopusMetrics(t *testing.T) {
 	RecordRelay(true, 7, 0)
+	RecordSelfHealingDiagnostic(3, "protocol_drift", "completed")
+	RecordSelfHealingPatch("apply", "applied", "high")
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	if !strings.Contains(response.Body.String(), "octopus_relay_requests_total") {
+	body := response.Body.String()
+	if !strings.Contains(body, "octopus_relay_requests_total") {
 		t.Fatal("metrics response does not contain relay metrics")
+	}
+	if !strings.Contains(body, "octopus_self_healing_diagnostic_total") {
+		t.Fatal("metrics response does not contain self-healing metrics")
 	}
 }
 

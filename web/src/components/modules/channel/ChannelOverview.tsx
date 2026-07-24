@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn, formatMoney } from '@/lib/utils';
 import { CapabilityEvidencePanel } from './CapabilityEvidence';
+import { SelfHealingPanel } from './SelfHealing';
 
 export function ChannelOverview({
     channel,
@@ -42,6 +43,7 @@ export function ChannelOverview({
 
                 <ChannelErrorOverview channelId={channel.id} />
                 <ChannelCircuitPanel channelId={channel.id} />
+                <SelfHealingPanel channel={channel} />
                 <CapabilityEvidencePanel channel={channel} />
                 <MetricSection title={t('sections.requests')} icon={TrendingUp}>
                     <DetailMetric icon={CheckCircle2} label={t('metrics.successRequests')} value={stats.request_success.formatted.value} unit={stats.request_success.formatted.unit} color="text-accent" />

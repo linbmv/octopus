@@ -74,6 +74,41 @@ func TestStreamProbeRequiresStreamingResponseEvidence(t *testing.T) {
 	}
 }
 
+func TestProbeUsesRetryAfterScopeFromUnifiedClassifier(t *testing.T) {
+	provider := fakeProbeProvider(t, func(_ *http.Request, _ string) *http.Response {
+		response := probeHTTPResponse(http.StatusTooManyRequests, `{"error":{"message":"rate limited"}}`, "application/json")
+		response.Header.Set("Retry-After", "120")
+		return response
+	})
+	channel, key := probeChannelFixture()
+	result := provider.Probe(context.Background(), channel, key, "https://provider.test", "listed-model", model.CapabilityText, 8)
+	if result.Status != model.CapabilityTransient || result.ErrorClass != "rate_limited_channel" || result.ErrorLevel != "channel" {
+		t.Fatalf("rate limit result = %#v", result)
+	}
+}
+
+func TestProbeRejectsHTTP200HTMLAsChannelFailure(t *testing.T) {
+	provider := fakeProbeProvider(t, func(_ *http.Request, _ string) *http.Response {
+		return probeHTTPResponse(http.StatusOK, `<!doctype html><html><title>Cloudflare challenge</title></html>`, "text/html")
+	})
+	channel, key := probeChannelFixture()
+	result := provider.Probe(context.Background(), channel, key, "https://provider.test", "listed-model", model.CapabilityText, 8)
+	if result.Status != model.CapabilityTransient || result.ErrorClass != "upstream_transient" || result.ErrorLevel != "channel" {
+		t.Fatalf("HTML soft-error result = %#v", result)
+	}
+}
+
+func TestProbeClassifiesHTTP200QuotaEnvelopeAsKeyFailure(t *testing.T) {
+	provider := fakeProbeProvider(t, func(_ *http.Request, _ string) *http.Response {
+		return probeHTTPResponse(http.StatusOK, `{"type":"error","error":{"type":"1308","message":"usage limit reached"}}`, "application/json")
+	})
+	channel, key := probeChannelFixture()
+	result := provider.Probe(context.Background(), channel, key, "https://provider.test", "listed-model", model.CapabilityText, 8)
+	if result.Status != model.CapabilityTransient || result.ErrorClass != "key_transient" || result.ErrorLevel != "key" {
+		t.Fatalf("quota soft-error result = %#v", result)
+	}
+}
+
 func fakeProbeProvider(t *testing.T, handler func(*http.Request, string) *http.Response) HTTPProber {
 	t.Helper()
 	return HTTPProber{ClientForChannel: func(*model.Channel) (*http.Client, error) {

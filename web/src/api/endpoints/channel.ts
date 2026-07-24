@@ -96,6 +96,7 @@ export type CreateChannelRequest = {
     max_concurrency?: number;
     user_agent?: string;
     policy_profile?: ChannelPolicyProfile;
+    self_healing_enabled?: boolean;
 };
 
 /**
@@ -123,6 +124,7 @@ export type UpdateChannelRequest = {
     max_concurrency?: number;
     user_agent?: string;
     policy_profile?: ChannelPolicyProfile;
+    self_healing_enabled?: boolean;
     // keys diff
     keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
     keys_to_update?: Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string }>;
@@ -481,6 +483,354 @@ export function useResetChannelCircuit(channelId: number) {
         },
         onError: (error) => {
             logger.error('清除渠道熔断失败:', error);
+        },
+    });
+}
+
+/** Root causes returned by the self-healing diagnostic layer (not ErrorLevel). */
+export type SelfHealingRootCause =
+    | 'none'
+    | 'capacity'
+    | 'rate_limit'
+    | 'auth'
+    | 'waf_or_client_fingerprint'
+    | 'protocol_drift'
+    | 'endpoint'
+    | 'network'
+    | 'decode'
+    | 'model_access'
+    | 'unknown';
+
+export type SelfHealingDiagnosticMode = 'preview' | 'live' | 'compare';
+export type SelfHealingSessionStatus =
+    | 'queued'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'canceled'
+    | 'expired';
+export type SelfHealingPatchStatus =
+    | 'previewed'
+    | 'applying'
+    | 'applied'
+    | 'rejected'
+    | 'rolled_back'
+    | 'rollback_failed';
+export type SelfHealingPatchConfidence = 'high' | 'medium' | 'low';
+
+export type RequestShapeArtifact = {
+    method?: string;
+    url?: string;
+    protocol?: string;
+    model?: string;
+    headers?: Record<string, string>;
+    body: {
+        content_type?: string;
+        body_bytes: number;
+        top_level_keys?: string[];
+        paths?: Record<string, string>;
+        truncated?: boolean;
+    };
+    shape_sha256: string;
+    rewrite: {
+        raw_passthrough: boolean;
+        param_override_applied?: boolean;
+        json_rewrite_applied?: boolean;
+        header_rewrite_applied?: boolean;
+        request_rewrite_applied?: boolean;
+    };
+};
+
+export type SelfHealingSession = {
+    id: string;
+    channel_id: number;
+    model: string;
+    wire_protocol: string;
+    endpoint_fingerprint: string;
+    config_version: number;
+    mode: SelfHealingDiagnosticMode;
+    trigger: string;
+    status: SelfHealingSessionStatus;
+    root_cause: SelfHealingRootCause;
+    error_level?: string;
+    error_reason?: string;
+    actor?: string;
+    max_attempts: number;
+    attempt_count: number;
+    reserved_cost_usd: number;
+    spent_cost_usd: number;
+    stop_reason?: string;
+    deadline: string;
+    started_at?: string;
+    completed_at?: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type SelfHealingAttempt = {
+    id: number;
+    session_id: string;
+    variant_id: string;
+    parent_variant_id?: string;
+    changed_dimension?: string;
+    status: string;
+    request_shape: RequestShapeArtifact;
+    response_headers?: Record<string, string[]>;
+    http_status?: number;
+    error_level?: string;
+    root_cause: SelfHealingRootCause;
+    error_reason?: string;
+    shape_diff?: string[];
+    success: boolean;
+    duration_ms?: number;
+    cost_usd: number;
+    started_at: string;
+    finished_at?: string;
+};
+
+export type SelfHealingPatchChange = {
+    field: string;
+    evidence_variant_ids?: string[];
+};
+
+export type SelfHealingPatch = {
+    id: string;
+    channel_id: number;
+    diagnostic_session_id: string;
+    base_channel_version: number;
+    confidence: SelfHealingPatchConfidence;
+    changes: SelfHealingPatchChange[];
+    max_live_requests: number;
+    status: SelfHealingPatchStatus;
+    apply_error?: string;
+    verification_http_status?: number;
+    verification_error_level?: string;
+    verification_root_cause?: SelfHealingRootCause;
+    verification_reason?: string;
+    verified_at?: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type SelfHealingBaseline = {
+    id: number;
+    channel_id: number;
+    model: string;
+    wire_protocol: string;
+    endpoint_fingerprint: string;
+    request_shape: RequestShapeArtifact;
+    http_status?: number;
+    content_type?: string;
+    source: string;
+    captured_at: string;
+    expires_at: string;
+    version: number;
+};
+
+export type SelfHealingQueueStats = {
+    accepted?: number;
+    coalesced?: number;
+    dropped?: number;
+    failures?: number;
+    queue_depth?: number;
+    queue_limit?: number;
+    concurrency?: number;
+};
+
+export type SelfHealingStatus = {
+    global_enabled: boolean;
+    capture_success_baselines: boolean;
+    channel_enabled: boolean;
+    channel_config_version: number;
+    worker_available: boolean;
+    queue?: SelfHealingQueueStats;
+    sessions: SelfHealingSession[];
+    patches: SelfHealingPatch[];
+    baselines: SelfHealingBaseline[];
+};
+
+export type SelfHealingPreviewRequest = {
+    channel_key_id?: number;
+    endpoint?: string;
+    model?: string;
+    root_cause: SelfHealingRootCause;
+    max_variants?: number;
+};
+
+export type SelfHealingPreviewResult = {
+    plan: {
+        early_stop?: boolean;
+        stop_cause?: string;
+        stop_reason?: string;
+        variants: Array<{
+            variant_id: string;
+            dimension?: string;
+            description?: string;
+            parent_variant_id?: string;
+        }>;
+    };
+    artifacts: RequestShapeArtifact[];
+    shape_diffs: string[][];
+};
+
+export type SelfHealingDiagnosticRequest = {
+    mode?: SelfHealingDiagnosticMode;
+    channel_key_id?: number;
+    endpoint?: string;
+    model?: string;
+    root_cause: SelfHealingRootCause;
+    max_cost_usd?: number;
+    max_variants?: number;
+};
+
+export type SelfHealingDiagnosticSubmit = {
+    session: SelfHealingSession;
+    accepted: boolean;
+    early_stop: boolean;
+    reserved_cost_usd: number;
+    queue?: SelfHealingQueueStats;
+};
+
+export type SelfHealingDiagnosticDetail = {
+    session: SelfHealingSession;
+    attempts: SelfHealingAttempt[];
+    patches: SelfHealingPatch[];
+};
+
+export type GoldenSampleInput = {
+    method?: string;
+    url: string;
+    headers?: Record<string, string[]>;
+    body?: unknown;
+    source?: string;
+};
+
+export type SelfHealingCompareResult = {
+    sample: {
+        source: string;
+        method: string;
+        url: string;
+        host: string;
+        path: string;
+        headers: Record<string, string[]>;
+        body_keys?: string[];
+    };
+    artifact: RequestShapeArtifact;
+    header_diff: string[];
+    body_diff: string[];
+    url_diff: string[];
+    suggested_variants?: Array<{
+        variant_id: string;
+        dimension: string;
+        description: string;
+        user_agent?: string;
+        header_set?: Record<string, string>;
+    }>;
+};
+
+export type SelfHealingCompareResponse = {
+    mode: 'compare';
+    compare: SelfHealingCompareResult;
+};
+
+function invalidateSelfHealing(queryClient: ReturnType<typeof useQueryClient>, channelId: number) {
+    queryClient.invalidateQueries({ queryKey: ['channels', channelId, 'self-healing'] });
+    queryClient.invalidateQueries({ queryKey: ['channels', 'list'] });
+}
+
+export function useChannelSelfHealing(channelId: number, enabled: boolean = true) {
+    return useQuery({
+        queryKey: ['channels', channelId, 'self-healing'],
+        queryFn: async () => apiClient.get<SelfHealingStatus>(`/api/v1/channel/${channelId}/self-healing`),
+        enabled: enabled && channelId > 0,
+        refetchInterval: (query) => {
+            const sessions = query.state.data?.sessions ?? [];
+            const active = sessions.some((session) => session.status === 'queued' || session.status === 'running');
+            return active ? 3000 : 15000;
+        },
+    });
+}
+
+export function useSelfHealingPreview(channelId: number) {
+    return useMutation({
+        mutationFn: async (request: SelfHealingPreviewRequest) =>
+            apiClient.post<SelfHealingPreviewResult>(`/api/v1/channel/${channelId}/self-healing/preview`, request),
+        onError: (error) => {
+            logger.error('self-healing preview failed:', error);
+        },
+    });
+}
+
+export function useSelfHealingCompare(channelId: number) {
+    return useMutation({
+        mutationFn: async (sample: GoldenSampleInput) =>
+            apiClient.post<SelfHealingCompareResponse>(`/api/v1/channel/${channelId}/self-healing/diagnostics`, {
+                mode: 'compare',
+                root_cause: 'protocol_drift',
+                golden_sample: sample,
+            }),
+        onError: (error) => {
+            logger.error('self-healing compare failed:', error);
+        },
+    });
+}
+
+export function useCreateSelfHealingDiagnostic(channelId: number) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (request: SelfHealingDiagnosticRequest) =>
+            apiClient.post<SelfHealingDiagnosticSubmit>(`/api/v1/channel/${channelId}/self-healing/diagnostics`, request),
+        onSuccess: () => {
+            invalidateSelfHealing(queryClient, channelId);
+        },
+        onError: (error) => {
+            logger.error('self-healing diagnostic failed:', error);
+        },
+    });
+}
+
+export function useSelfHealingDiagnostic(channelId: number, diagnosticId: string | null) {
+    return useQuery({
+        queryKey: ['channels', channelId, 'self-healing', 'diagnostic', diagnosticId],
+        queryFn: async () =>
+            apiClient.get<SelfHealingDiagnosticDetail>(
+                `/api/v1/channel/${channelId}/self-healing/diagnostics/${diagnosticId}`,
+            ),
+        enabled: channelId > 0 && !!diagnosticId,
+        refetchInterval: (query) => {
+            const status = query.state.data?.session.status;
+            return status === 'queued' || status === 'running' ? 2000 : false;
+        },
+    });
+}
+
+export function useApplySelfHealingPatch(channelId: number) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (data: { diagnosticId: string; patchId: string }) =>
+            apiClient.post<SelfHealingPatch>(
+                `/api/v1/channel/${channelId}/self-healing/diagnostics/${data.diagnosticId}/apply`,
+                { patch_id: data.patchId },
+            ),
+        onSuccess: () => {
+            invalidateSelfHealing(queryClient, channelId);
+        },
+        onError: (error) => {
+            logger.error('self-healing apply failed:', error);
+        },
+    });
+}
+
+export function useRollbackSelfHealingPatch(channelId: number) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (patchId: string) =>
+            apiClient.post<SelfHealingPatch>(`/api/v1/channel/${channelId}/self-healing/rollback/${patchId}`, {}),
+        onSuccess: () => {
+            invalidateSelfHealing(queryClient, channelId);
+        },
+        onError: (error) => {
+            logger.error('self-healing rollback failed:', error);
         },
     });
 }

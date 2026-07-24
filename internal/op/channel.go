@@ -139,6 +139,20 @@ func ChannelKeySaveDB(ctx context.Context) error {
 }
 
 func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model.Channel, error) {
+	return channelUpdate(req, nil, ctx)
+}
+
+// ChannelUpdateExpectedVersion atomically claims and updates one channel
+// configuration version. It is used by self-healing apply/rollback so a stale
+// diagnosis can never overwrite a concurrent administrator edit.
+func ChannelUpdateExpectedVersion(req *model.ChannelUpdateRequest, expectedVersion int, ctx context.Context) (*model.Channel, error) {
+	if expectedVersion <= 0 {
+		return nil, fmt.Errorf("%w: expected channel config version must be positive", ErrInvalidInput)
+	}
+	return channelUpdate(req, &expectedVersion, ctx)
+}
+
+func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx context.Context) (*model.Channel, error) {
 	if err := model.ValidateChannelUpdate(req); err != nil {
 		return nil, fmt.Errorf("%w: invalid channel update: %v", ErrInvalidInput, err)
 	}
@@ -164,6 +178,19 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 			panic(r)
 		}
 	}()
+	if expectedVersion != nil {
+		result := tx.Model(&model.Channel{}).
+			Where("id = ? AND config_version = ?", req.ID, *expectedVersion).
+			UpdateColumn("config_version", gorm.Expr("config_version + ?", 1))
+		if result.Error != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("claim channel config version: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			tx.Rollback()
+			return nil, fmt.Errorf("%w: channel configuration changed concurrently", ErrConflict)
+		}
+	}
 
 	if err := applyChannelPatchTx(tx, req); err != nil {
 		tx.Rollback()
@@ -181,11 +208,23 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		tx.Rollback()
 		return nil, err
 	}
+	if expectedVersion == nil && channelUpdateHasChanges(req) {
+		if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).
+			UpdateColumn("config_version", gorm.Expr("config_version + ?", 1)).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("increment channel config version: %w", err)
+		}
+	}
 	if err := invalidateCapabilityEvidenceForChannelUpdateTx(tx, req); err != nil {
 		tx.Rollback()
 		return nil, fmt.Errorf("invalidate channel capability evidence: %w", err)
 	}
-
+	if tx.Migrator().HasTable(&model.ChannelBaseline{}) {
+		if err := deleteChannelBaselinesKeysTx(tx, req.ID, req.KeysToDelete); err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("delete removed-key channel baselines: %w", err)
+		}
+	}
 	if err := tx.Commit().Error; err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
@@ -229,6 +268,7 @@ func applyChannelPatchTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {
 	helper.ApplyField("match_regex", req.MatchRegex)
 	helper.ApplyField("user_agent", req.UserAgent)
 	helper.ApplyField("policy_profile", req.PolicyProfile)
+	helper.ApplyField("self_healing_enabled", req.SelfHealingEnabled)
 
 	if !helper.HasUpdates() {
 		return nil
@@ -247,6 +287,19 @@ func applyChannelPatchTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {
 		}
 	}
 	return nil
+}
+
+func channelUpdateHasChanges(req *model.ChannelUpdateRequest) bool {
+	if req == nil {
+		return false
+	}
+	return req.Name != nil || req.Type != nil || req.Enabled != nil || req.BaseUrls != nil ||
+		req.Model != nil || req.CustomModel != nil || req.Proxy != nil || req.AutoSync != nil ||
+		req.AutoGroup != nil || req.CustomHeader != nil || req.HeaderRules != nil ||
+		req.JSONRewriteRules != nil || req.ChannelProxy != nil || req.ParamOverride != nil ||
+		req.RawPassthrough != nil || req.RPMLimit != nil || req.MaxConcurrency != nil ||
+		req.MatchRegex != nil || req.UserAgent != nil || req.PolicyProfile != nil ||
+		req.SelfHealingEnabled != nil || len(req.KeysToAdd) > 0 || len(req.KeysToUpdate) > 0 || len(req.KeysToDelete) > 0
 }
 
 // GORM serializers are not invoked for map-based Updates values. Encode JSON
@@ -371,7 +424,9 @@ func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("%w: channel not found", ErrNotFound)
 	}
-	result := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Update("enabled", enabled)
+	result := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"enabled": enabled, "config_version": gorm.Expr("config_version + ?", 1),
+	})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -385,6 +440,7 @@ func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 		}
 	}
 	oldChannel.Enabled = enabled
+	oldChannel.ConfigVersion++
 	channelCache.Set(id, oldChannel)
 	return nil
 }
@@ -433,6 +489,16 @@ func ChannelDel(id int, ctx context.Context) error {
 			tx.Rollback()
 			return fmt.Errorf("failed to delete channel capability evidence: %w", err)
 		}
+	}
+	if tx.Migrator().HasTable(&model.ChannelBaseline{}) {
+		if err := deleteChannelBaselinesChannelTx(tx, id); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to delete channel baselines: %w", err)
+		}
+	}
+	if err := deleteSelfHealingChannelTx(tx, id); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to delete channel self-healing evidence: %w", err)
 	}
 
 	// 删除统计数据

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/bestruirui/octopus/internal/conf"
+	"github.com/bestruirui/octopus/internal/requestartifact"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -47,8 +49,36 @@ func (m *relayPipelineMiddleware) OnOutboundRawRequest(ctx context.Context, requ
 			// Non-fatal: let the request proceed; upstream will reject if fields remain.
 		}
 	}
+	m.captureOutboundRequestArtifact(request)
 
 	return request, nil
+}
+
+func (m *relayPipelineMiddleware) captureOutboundRequestArtifact(request *httpclient.Request) {
+	if m == nil || m.attempt == nil || m.attempt.channel == nil || m.attempt.metrics == nil {
+		return
+	}
+	// Artifact building parses and hashes the full body; skip the cost entirely
+	// when self-healing (the only consumer) is disabled.
+	if !conf.Current().SelfHealing.Enabled {
+		return
+	}
+	rewrite := requestartifact.RewriteSummary{}
+	if summary := m.attempt.metrics.OutboundRequestSummary; summary != nil {
+		rewrite = requestartifact.RewriteSummary{
+			RawPassthrough:        summary.RawPassthrough,
+			ParamOverrideApplied:  summary.ParamOverrideApplied,
+			JSONRewriteApplied:    summary.JSONRewriteApplied,
+			HeaderRewriteApplied:  summary.HeaderRewriteApplied,
+			RequestRewriteApplied: summary.RequestRewriteApplied,
+		}
+	}
+	m.attempt.metrics.OutboundRequestArtifact = requestartifact.Build(
+		request,
+		string(m.attempt.channel.Type),
+		m.attempt.metrics.ActualModel,
+		rewrite,
+	)
 }
 
 func (m *relayPipelineMiddleware) OnOutboundRawError(ctx context.Context, err error) {

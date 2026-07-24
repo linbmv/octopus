@@ -216,6 +216,7 @@ func (w *Worker) handle(parent context.Context, job Job) error {
 		EndpointFingerprint: model.CapabilityEndpointFingerprint(job.Endpoint),
 		Status:              result.Status,
 		ErrorClass:          result.ErrorClass,
+		ErrorLevel:          result.ErrorLevel,
 		ErrorMessage:        result.ErrorMessage,
 		HTTPStatus:          result.HTTPStatus,
 		ScopeFingerprint:    model.CapabilityScopeFingerprint(channel, key, job.Endpoint),

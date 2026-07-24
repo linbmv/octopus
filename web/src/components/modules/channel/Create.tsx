@@ -35,6 +35,7 @@ export function CreateDialogContent() {
         max_concurrency: 0,
         user_agent: '',
         policy_profile: ChannelPolicyProfile.Standard,
+        self_healing_enabled: false,
     });
     const t = useTranslations('channel.create');
 
@@ -76,6 +77,7 @@ export function CreateDialogContent() {
                 max_concurrency: Math.max(0, Number(formData.max_concurrency || 0)),
                 user_agent: formData.user_agent.trim(),
                 policy_profile: formData.policy_profile,
+                self_healing_enabled: formData.self_healing_enabled,
             },
             {
                 onSuccess: () => {
@@ -101,6 +103,7 @@ export function CreateDialogContent() {
                         max_concurrency: 0,
                         user_agent: '',
                         policy_profile: ChannelPolicyProfile.Standard,
+                        self_healing_enabled: false,
                     });
                     setIsOpen(false);
                 }

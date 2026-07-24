@@ -87,7 +87,7 @@ func (ra *relayAttempt) applyChannelRequestOptions(outboundRequest *httpclient.R
 	// content never enter this audit summary.
 	if rawPassthroughApplied || paramOverrideApplied || jsonRewriteApplied || headerRewriteApplied {
 		ra.metrics.RecordOutboundRequestSummary(
-			outboundRequest.Body,
+			outboundRequest,
 			rawPassthroughApplied,
 			paramOverrideApplied,
 			jsonRewriteApplied,

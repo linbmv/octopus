@@ -764,6 +764,130 @@
                 "stateOpen": "凍結中",
                 "stateHalfOpen": "試探中",
                 "remaining": "剩餘 {seconds} 秒"
+            },
+            "selfHealing": {
+                "title": "供應源自癒",
+                "hint": "隔離診斷僅使用該供應源既有 Key，以及合成 OK 探測（輸出上限 8 token）。容量類故障不會產生設定修補。",
+                "loading": "正在載入自癒狀態...",
+                "loadFailed": "自癒狀態載入失敗",
+                "actionFailed": "自癒操作失敗",
+                "configVersion": "設定版本 {version}",
+                "rootCause": "根因",
+                "capacityNoPatch": "{cause} 不會產生設定修補",
+                "patchReadyHint": "已有可審閱修補。確認後才會套用；套用後自動驗證，失敗自動回滾。",
+                "rolledBackHint": "先前套用已回滾。請先檢視證據再重試。",
+                "gates": {
+                    "global": "全域開關",
+                    "channel": "供應源開關",
+                    "worker": "背景 Worker",
+                    "baselines": "成功基線採集",
+                    "on": "開",
+                    "off": "關"
+                },
+                "states": {
+                    "disabled": "未啟用",
+                    "healthy": "健康",
+                    "watching": "監視中",
+                    "capacity": "容量故障",
+                    "suspected_drift": "疑似協定漂移",
+                    "diagnosing": "診斷中",
+                    "patch_ready": "修補待確認",
+                    "rolled_back": "已回滾"
+                },
+                "rootCauses": {
+                    "none": "無",
+                    "capacity": "容量",
+                    "rate_limit": "限流",
+                    "auth": "認證",
+                    "waf_or_client_fingerprint": "WAF / 用戶端指紋",
+                    "protocol_drift": "協定漂移",
+                    "endpoint": "端點",
+                    "network": "網路",
+                    "decode": "解碼",
+                    "model_access": "模型存取",
+                    "unknown": "未知"
+                },
+                "sessionStatuses": {
+                    "queued": "排隊中",
+                    "running": "執行中",
+                    "completed": "已完成",
+                    "failed": "失敗",
+                    "canceled": "已取消",
+                    "expired": "已過期"
+                },
+                "patchStatuses": {
+                    "previewed": "待確認",
+                    "applying": "套用中",
+                    "applied": "已套用",
+                    "rejected": "已拒絕",
+                    "rolled_back": "已回滾",
+                    "rollback_failed": "回滾失敗"
+                },
+                "confidence": {
+                    "high": "高",
+                    "medium": "中",
+                    "low": "低"
+                },
+                "actions": {
+                    "preview": "請求預覽",
+                    "diagnose": "開始診斷",
+                    "apply": "套用修補",
+                    "confirmApply": "確認套用",
+                    "rollback": "回滾",
+                    "confirmRollback": "確認回滾"
+                },
+                "baseline": {
+                    "title": "最近成功基線",
+                    "model": "模型：{model}",
+                    "endpoint": "端點指紋：{fingerprint}",
+                    "capturedAt": "採集於 {time}"
+                },
+                "preview": {
+                    "title": "預覽（不存取上游）",
+                    "earlyStop": "提前停止：{reason}",
+                    "variants": "計畫產生 {count} 個變體形狀"
+                },
+                "sessions": {
+                    "title": "最近診斷"
+                },
+                "detail": {
+                    "title": "診斷詳情",
+                    "summary": "{status} · {attempts} 次嘗試 · {patches} 個修補",
+                    "success": "成功",
+                    "failed": "失敗"
+                },
+                "patches": {
+                    "title": "修補",
+                    "noChanges": "無可寫欄位變更"
+                },
+                "goldenSample": {
+                    "title": "黃金樣本對比",
+                    "hint": "貼上脫敏後的 JSON 請求樣本（method、url、headers、body）。認證標頭會被拒絕，且不會產生上游請求。",
+                    "placeholder": "{\"method\":\"POST\",\"url\":\"https://...\",\"headers\":{\"User-Agent\":[\"...\"]},\"body\":{...}}",
+                    "compare": "對比",
+                    "compareFailed": "黃金樣本對比失敗",
+                    "sampleSummary": "樣本：{method} {path}",
+                    "noDiff": "樣本與目前出站請求形狀沒有差異",
+                    "suggestions": "建議變體",
+                    "suggestionsHint": "執行診斷即可透過隔離探測請求安全地驗證這些變體。",
+                    "kinds": {
+                        "url": "URL",
+                        "header": "請求標頭",
+                        "body": "請求主體"
+                    },
+                    "actions": {
+                        "added": "僅樣本有",
+                        "removed": "僅 Octopus 有",
+                        "changed": "不一致"
+                    },
+                    "parseErrors": {
+                        "empty": "樣本為空",
+                        "invalidJson": "樣本必須是 JSON 物件",
+                        "missingUrl": "樣本必須包含 url 欄位",
+                        "tooLarge": "樣本超出大小限制",
+                        "authSecret": "樣本包含認證金鑰，請先移除 Authorization/API-key 等標頭"
+                    }
+                }
             }
         },
         "create": {
@@ -819,6 +943,8 @@
             "proxy": "使用代理",
             "rawPassthrough": "原始透傳",
             "rawPassthroughHint": "僅 OpenAI Chat 同格式生效。將客戶端原始請求 JSON 透傳到上游（僅替換 model），以提升 prompt 快取命中率。建議不要與參數覆蓋同時使用。",
+            "selfHealing": "供應源自癒",
+            "selfHealingHint": "供應源級開關。仍需開啟全域自癒。診斷不會自動改寫生產設定。",
             "modelCustomPlaceholder": "自定義模型名稱",
             "modelAdd": "新增",
             "modelRefresh": "重新整理",

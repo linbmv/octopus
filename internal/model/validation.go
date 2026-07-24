@@ -90,6 +90,9 @@ func ValidateChannel(channel *Channel) error {
 	if channel.PolicyProfile == "" {
 		channel.PolicyProfile = ChannelPolicyStandard
 	}
+	if channel.ConfigVersion <= 0 {
+		channel.ConfigVersion = 1
+	}
 	if !channel.PolicyProfile.Valid() {
 		return fmt.Errorf("invalid channel policy_profile %q", channel.PolicyProfile)
 	}

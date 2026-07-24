@@ -50,6 +50,8 @@ export interface Channel {
   match_regex?: string | null;
   user_agent: string;
   policy_profile: ChannelPolicyProfile;
+  self_healing_enabled: boolean;
+  config_version: number;
 }
 
 export interface ChannelAttempt {
@@ -130,6 +132,7 @@ export interface ChannelUpdateRequest {
   match_regex?: string | null;
   user_agent?: string | null;
   policy_profile?: ChannelPolicyProfile | null;
+  self_healing_enabled?: boolean | null;
   keys_to_add?: ChannelKeyAddRequest[];
   keys_to_update?: ChannelKeyUpdateRequest[];
   keys_to_delete?: number[];

@@ -63,6 +63,10 @@ type Channel struct {
 	// 部分上游按客户端标识放行（如"仅 Claude Code 客户端"的中转站），需在此填对应 UA。
 	UserAgent     string               `json:"user_agent" gorm:"default:''"`
 	PolicyProfile ChannelPolicyProfile `json:"policy_profile" gorm:"size:32;not null;default:standard"`
+	// SelfHealingEnabled is the per-channel safety gate. The global switch alone
+	// never authorizes sentinel or diagnostic traffic for a channel.
+	SelfHealingEnabled bool `json:"self_healing_enabled" gorm:"not null;default:false"`
+	ConfigVersion      int  `json:"config_version" gorm:"not null;default:1"`
 }
 
 type BaseUrl struct {
@@ -107,27 +111,28 @@ type ChannelKey struct {
 
 // ChannelUpdateRequest 渠道更新请求 - 仅包含变更的数据
 type ChannelUpdateRequest struct {
-	ID               int                   `json:"id" binding:"required"`
-	Name             *string               `json:"name,omitempty"`
-	Type             *llm.APIFormat        `json:"type,omitempty"`
-	Enabled          *bool                 `json:"enabled,omitempty"`
-	BaseUrls         *[]BaseUrl            `json:"base_urls,omitempty"`
-	Model            *string               `json:"model,omitempty"`
-	CustomModel      *string               `json:"custom_model,omitempty"`
-	Proxy            *bool                 `json:"proxy,omitempty"`
-	AutoSync         *bool                 `json:"auto_sync,omitempty"`
-	AutoGroup        *AutoGroupType        `json:"auto_group,omitempty"`
-	CustomHeader     *[]CustomHeader       `json:"custom_header,omitempty"`
-	HeaderRules      *[]HeaderRule         `json:"header_rules,omitempty"`
-	JSONRewriteRules *[]JSONRewriteRule    `json:"json_rewrite_rules,omitempty"`
-	ChannelProxy     *string               `json:"channel_proxy,omitempty"`
-	ParamOverride    *string               `json:"param_override,omitempty"`
-	RawPassthrough   *bool                 `json:"raw_passthrough,omitempty"`
-	RPMLimit         *int                  `json:"rpm_limit,omitempty"`
-	MaxConcurrency   *int                  `json:"max_concurrency,omitempty"`
-	MatchRegex       *string               `json:"match_regex,omitempty"`
-	UserAgent        *string               `json:"user_agent,omitempty"`
-	PolicyProfile    *ChannelPolicyProfile `json:"policy_profile,omitempty"`
+	ID                 int                   `json:"id" binding:"required"`
+	Name               *string               `json:"name,omitempty"`
+	Type               *llm.APIFormat        `json:"type,omitempty"`
+	Enabled            *bool                 `json:"enabled,omitempty"`
+	BaseUrls           *[]BaseUrl            `json:"base_urls,omitempty"`
+	Model              *string               `json:"model,omitempty"`
+	CustomModel        *string               `json:"custom_model,omitempty"`
+	Proxy              *bool                 `json:"proxy,omitempty"`
+	AutoSync           *bool                 `json:"auto_sync,omitempty"`
+	AutoGroup          *AutoGroupType        `json:"auto_group,omitempty"`
+	CustomHeader       *[]CustomHeader       `json:"custom_header,omitempty"`
+	HeaderRules        *[]HeaderRule         `json:"header_rules,omitempty"`
+	JSONRewriteRules   *[]JSONRewriteRule    `json:"json_rewrite_rules,omitempty"`
+	ChannelProxy       *string               `json:"channel_proxy,omitempty"`
+	ParamOverride      *string               `json:"param_override,omitempty"`
+	RawPassthrough     *bool                 `json:"raw_passthrough,omitempty"`
+	RPMLimit           *int                  `json:"rpm_limit,omitempty"`
+	MaxConcurrency     *int                  `json:"max_concurrency,omitempty"`
+	MatchRegex         *string               `json:"match_regex,omitempty"`
+	UserAgent          *string               `json:"user_agent,omitempty"`
+	PolicyProfile      *ChannelPolicyProfile `json:"policy_profile,omitempty"`
+	SelfHealingEnabled *bool                 `json:"self_healing_enabled,omitempty"`
 
 	KeysToAdd    []ChannelKeyAddRequest    `json:"keys_to_add,omitempty"`
 	KeysToUpdate []ChannelKeyUpdateRequest `json:"keys_to_update,omitempty"`

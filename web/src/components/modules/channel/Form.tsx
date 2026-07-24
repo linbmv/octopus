@@ -47,6 +47,7 @@ export interface ChannelFormData {
     max_concurrency: number;
     user_agent: string;
     policy_profile: ChannelPolicyProfile;
+    self_healing_enabled: boolean;
 }
 
 export interface ChannelFormProps {
@@ -317,6 +318,13 @@ export function ChannelForm({
                             <span className="text-sm text-card-foreground">{t('rawPassthrough')}</span>
                         </label>
                     )}
+                    <label className="flex items-center gap-2 cursor-pointer" title={t('selfHealingHint')}>
+                        <Switch
+                            checked={formData.self_healing_enabled}
+                            onCheckedChange={(checked) => onFormDataChange({ ...formData, self_healing_enabled: checked })}
+                        />
+                        <span className="text-sm text-card-foreground">{t('selfHealing')}</span>
+                    </label>
                 </div>
             </div>
 

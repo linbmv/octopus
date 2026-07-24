@@ -134,6 +134,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 	}
 
 	if fwdErr == nil {
+		ra.recordSuccessfulChannelBaseline(ctx, upstreamStatusCode, upstreamHeaders)
 		upstreamSpan.SetAttributes(attribute.Int("http.response.status_code", upstreamStatusCode))
 		urlLatency := ra.responseHeaderDuration
 		if firstTokenDuration, ok := span.FirstTokenDuration(); ok {
@@ -228,6 +229,19 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 	}
 	// 使用完整的上游响应体进行智能错误决策。
 	decision := ra.decideError(upstreamStatusCode, upstreamHeaders, upstreamResponseBody, fwdErr)
+	transportErr := fwdErr
+	if upstreamStatusCode > 0 {
+		// HTTP and soft/SSE failures must be diagnosed from the same response
+		// evidence as ClassifyWithHeaders, not mislabeled as transport errors.
+		transportErr = nil
+	}
+	observeUpstreamFailure(UpstreamFailureObservation{
+		ChannelID: ra.channel.ID, ChannelKeyID: ra.usedKey.ID,
+		Model: ra.metrics.ActualModel, Endpoint: ra.baseURL,
+		HTTPStatus: upstreamStatusCode, Headers: upstreamHeaders,
+		ResponseBody: upstreamResponseBody, TransportError: transportErr,
+		ObservedAt: now.UTC(),
+	})
 	if upstreamStatusCode == http.StatusTooManyRequests && decision.Classification.Level == errorclass.ErrorLevelChannel {
 		recordChannelRateLimit(ra.channel.ID, retryAfterDuration(upstreamHeaders, now, defaultRateLimitCooldown))
 	}
@@ -388,6 +402,7 @@ func (ra *relayAttempt) switchToNextBaseURL() bool {
 		ra.outAdapter = outAdapter
 		ra.metrics.ParamOverride = ""
 		ra.metrics.OutboundRequestSummary = nil
+		ra.metrics.OutboundRequestArtifact = nil
 		ra.responseHeaderDuration = 0
 		ra.attemptAction = "selected"
 		ra.selectionReason = "base_url_failover"
@@ -419,6 +434,7 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		ra.outAdapter = outAdapter
 		ra.metrics.ParamOverride = ""
 		ra.metrics.OutboundRequestSummary = nil
+		ra.metrics.OutboundRequestArtifact = nil
 		ra.attemptAction = "selected"
 		ra.selectionReason = "key_failover"
 		return true

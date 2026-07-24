@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,5 +96,34 @@ func writeCapabilityEvidence(
 	}
 	if err := CapabilityEvidenceUpsert(ctx, &evidence); err != nil {
 		t.Fatalf("upsert capability evidence: %v", err)
+	}
+}
+
+func TestCapabilityEvidencePersistsBoundedErrorLevel(t *testing.T) {
+	initTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	evidence := model.CapabilityEvidence{
+		ChannelID: 31, ChannelKeyID: 301, Model: "model-a",
+		WireProtocol: llm.APIFormatOpenAIChatCompletion, Capability: model.CapabilityText,
+		Status: model.CapabilityTransient, ErrorClass: "upstream_transient", ErrorLevel: "CHANNEL",
+		ErrorMessage: "Bearer secret-value must not persist",
+		Endpoint:     "https://provider.test", EndpointFingerprint: model.CapabilityEndpointFingerprint("https://provider.test"),
+		ScopeFingerprint: "scope", Source: "probe", ProbedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	if err := CapabilityEvidenceUpsert(ctx, &evidence); err != nil {
+		t.Fatalf("upsert capability evidence: %v", err)
+	}
+	items, err := CapabilityEvidenceList(ctx, evidence.ChannelID)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("list evidence = %#v, %v", items, err)
+	}
+	if items[0].ErrorLevel != "channel" || strings.Contains(items[0].ErrorMessage, "secret-value") {
+		t.Fatalf("persisted evidence = %#v", items[0])
+	}
+
+	evidence.ErrorLevel = "invalid"
+	if err := CapabilityEvidenceUpsert(ctx, &evidence); err == nil {
+		t.Fatal("invalid error level was accepted")
 	}
 }

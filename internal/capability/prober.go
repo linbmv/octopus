@@ -14,6 +14,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/relay/errorclass"
 	"github.com/bestruirui/octopus/internal/requestrewrite"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/transformer"
@@ -26,6 +27,7 @@ const probePNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 type ProbeResult struct {
 	Status       model.CapabilityStatus
 	ErrorClass   string
+	ErrorLevel   string
 	ErrorMessage string
 	HTTPStatus   int
 }
@@ -76,12 +78,14 @@ func (p HTTPProber) Probe(
 		return ProbeResult{
 			Status:       model.CapabilityTransient,
 			ErrorClass:   "response_too_large",
+			ErrorLevel:   errorclass.ErrorLevelChannel.String(),
 			ErrorMessage: "probe response exceeded the bounded read limit",
 			HTTPStatus:   response.StatusCode,
 		}
 	}
 
-	if response.StatusCode >= 200 && response.StatusCode < 300 {
+	classification := errorclass.ClassifyWithHeaders(response.StatusCode, response.Header, body)
+	if response.StatusCode >= 200 && response.StatusCode < 300 && classification.Level == errorclass.ErrorLevelNone {
 		switch capability {
 		case model.CapabilityTool:
 			if !responseContainsToolCall(body) {
@@ -107,10 +111,14 @@ func (p HTTPProber) Probe(
 	}
 
 	message := extractProviderError(body)
-	status, class := classifyHTTPFailure(response.StatusCode, message, capability)
+	status, class := classifyProbeFailure(response.StatusCode, message, capability, classification)
+	if message == "provider rejected the capability probe" && classification.Reason != "" {
+		message = classification.Reason
+	}
 	return ProbeResult{
 		Status:       status,
 		ErrorClass:   class,
+		ErrorLevel:   classification.Level.String(),
 		ErrorMessage: safeProbeMessage(message),
 		HTTPStatus:   response.StatusCode,
 	}
@@ -362,8 +370,13 @@ func responseContainsToolCall(body []byte) bool {
 	return visit(value)
 }
 
-func classifyHTTPFailure(code int, message string, capability model.Capability) (model.CapabilityStatus, string) {
-	lower := strings.ToLower(message)
+func classifyProbeFailure(
+	code int,
+	message string,
+	capability model.Capability,
+	classification errorclass.Classification,
+) (model.CapabilityStatus, string) {
+	lower := strings.ToLower(message + " " + classification.Reason)
 	if code == http.StatusUnauthorized || code == http.StatusForbidden || containsAny(lower,
 		"unauthorized", "not authorized", "permission denied", "access denied", "invalid api key", "authentication") {
 		return model.CapabilityUnauthorized, "unauthorized"
@@ -372,13 +385,16 @@ func classifyHTTPFailure(code int, message string, capability model.Capability) 
 		return model.CapabilityUnauthorized, "model_unauthorized"
 	}
 	if code == http.StatusTooManyRequests {
-		return model.CapabilityTransient, "rate_limited"
+		if classification.Level == errorclass.ErrorLevelChannel {
+			return model.CapabilityTransient, "rate_limited_channel"
+		}
+		return model.CapabilityTransient, "rate_limited_key"
 	}
 	if code == http.StatusNotFound || code == http.StatusMethodNotAllowed || code == http.StatusNotImplemented ||
 		containsAny(lower, "not implemented", "not_implemented", "unknown endpoint") {
 		return model.CapabilityNotImplemented, "not_implemented"
 	}
-	if code == http.StatusRequestTimeout || code >= 500 {
+	if code == http.StatusRequestTimeout || code >= 500 || classification.Level == errorclass.ErrorLevelChannel {
 		return model.CapabilityTransient, "upstream_transient"
 	}
 	if code == http.StatusBadRequest || code == http.StatusUnprocessableEntity {
@@ -387,8 +403,11 @@ func classifyHTTPFailure(code int, message string, capability model.Capability) 
 		}
 		return model.CapabilityUnsupported, "unsupported_request"
 	}
-	if code >= 400 && code < 500 {
+	if code >= 400 && code < 500 || classification.Level == errorclass.ErrorLevelClient {
 		return model.CapabilityUnsupported, "unsupported_request"
+	}
+	if classification.Level == errorclass.ErrorLevelKey {
+		return model.CapabilityTransient, "key_transient"
 	}
 	return model.CapabilityTransient, "unexpected_status"
 }
@@ -408,7 +427,12 @@ func transientProbeResult(class string, err error) ProbeResult {
 	if err != nil {
 		message = safeProbeMessage(err.Error())
 	}
-	return ProbeResult{Status: model.CapabilityTransient, ErrorClass: class, ErrorMessage: message}
+	return ProbeResult{
+		Status:       model.CapabilityTransient,
+		ErrorClass:   class,
+		ErrorLevel:   errorclass.ErrorLevelChannel.String(),
+		ErrorMessage: message,
+	}
 }
 
 func extractProviderError(body []byte) string {

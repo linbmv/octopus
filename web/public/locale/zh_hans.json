@@ -764,6 +764,130 @@
                 "stateOpen": "冻结中",
                 "stateHalfOpen": "试探中",
                 "remaining": "剩余 {seconds} 秒"
+            },
+            "selfHealing": {
+                "title": "渠道自愈",
+                "hint": "隔离诊断仅使用该渠道已有 Key，以及合成 OK 探测（输出上限 8 token）。容量类故障不会生成配置补丁。",
+                "loading": "正在加载自愈状态...",
+                "loadFailed": "自愈状态加载失败",
+                "actionFailed": "自愈操作失败",
+                "configVersion": "配置版本 {version}",
+                "rootCause": "根因",
+                "capacityNoPatch": "{cause} 不会生成配置补丁",
+                "patchReadyHint": "已有可审阅补丁。确认后才会应用；应用后自动验证，失败自动回滚。",
+                "rolledBackHint": "此前应用已回滚。请先查看证据再重试。",
+                "gates": {
+                    "global": "全局开关",
+                    "channel": "渠道开关",
+                    "worker": "后台 Worker",
+                    "baselines": "成功基线采集",
+                    "on": "开",
+                    "off": "关"
+                },
+                "states": {
+                    "disabled": "未启用",
+                    "healthy": "健康",
+                    "watching": "监视中",
+                    "capacity": "容量故障",
+                    "suspected_drift": "疑似协议漂移",
+                    "diagnosing": "诊断中",
+                    "patch_ready": "补丁待确认",
+                    "rolled_back": "已回滚"
+                },
+                "rootCauses": {
+                    "none": "无",
+                    "capacity": "容量",
+                    "rate_limit": "限流",
+                    "auth": "认证",
+                    "waf_or_client_fingerprint": "WAF / 客户端指纹",
+                    "protocol_drift": "协议漂移",
+                    "endpoint": "端点",
+                    "network": "网络",
+                    "decode": "解码",
+                    "model_access": "模型访问",
+                    "unknown": "未知"
+                },
+                "sessionStatuses": {
+                    "queued": "排队中",
+                    "running": "运行中",
+                    "completed": "已完成",
+                    "failed": "失败",
+                    "canceled": "已取消",
+                    "expired": "已过期"
+                },
+                "patchStatuses": {
+                    "previewed": "待确认",
+                    "applying": "应用中",
+                    "applied": "已应用",
+                    "rejected": "已拒绝",
+                    "rolled_back": "已回滚",
+                    "rollback_failed": "回滚失败"
+                },
+                "confidence": {
+                    "high": "高",
+                    "medium": "中",
+                    "low": "低"
+                },
+                "actions": {
+                    "preview": "请求预览",
+                    "diagnose": "开始诊断",
+                    "apply": "应用补丁",
+                    "confirmApply": "确认应用",
+                    "rollback": "回滚",
+                    "confirmRollback": "确认回滚"
+                },
+                "baseline": {
+                    "title": "最近成功基线",
+                    "model": "模型：{model}",
+                    "endpoint": "端点指纹：{fingerprint}",
+                    "capturedAt": "采集于 {time}"
+                },
+                "preview": {
+                    "title": "预览（不访问上游）",
+                    "earlyStop": "提前停止：{reason}",
+                    "variants": "计划生成 {count} 个变体形状"
+                },
+                "sessions": {
+                    "title": "最近诊断"
+                },
+                "detail": {
+                    "title": "诊断详情",
+                    "summary": "{status} · {attempts} 次尝试 · {patches} 个补丁",
+                    "success": "成功",
+                    "failed": "失败"
+                },
+                "patches": {
+                    "title": "补丁",
+                    "noChanges": "无可写字段变更"
+                },
+                "goldenSample": {
+                    "title": "黄金样本对比",
+                    "hint": "粘贴脱敏后的 JSON 请求样本（method、url、headers、body）。认证头会被拒绝，且不会产生上游请求。",
+                    "placeholder": "{\"method\":\"POST\",\"url\":\"https://...\",\"headers\":{\"User-Agent\":[\"...\"]},\"body\":{...}}",
+                    "compare": "对比",
+                    "compareFailed": "黄金样本对比失败",
+                    "sampleSummary": "样本：{method} {path}",
+                    "noDiff": "样本与当前出站请求形状没有差异",
+                    "suggestions": "建议变体",
+                    "suggestionsHint": "运行诊断即可通过隔离探测请求安全地验证这些变体。",
+                    "kinds": {
+                        "url": "URL",
+                        "header": "请求头",
+                        "body": "请求体"
+                    },
+                    "actions": {
+                        "added": "仅样本有",
+                        "removed": "仅 Octopus 有",
+                        "changed": "不一致"
+                    },
+                    "parseErrors": {
+                        "empty": "样本为空",
+                        "invalidJson": "样本必须是 JSON 对象",
+                        "missingUrl": "样本必须包含 url 字段",
+                        "tooLarge": "样本超出大小限制",
+                        "authSecret": "样本包含认证密钥，请先移除 Authorization/API-key 等请求头"
+                    }
+                }
             }
         },
         "create": {
@@ -819,6 +943,8 @@
             "proxy": "使用代理",
             "rawPassthrough": "原始透传",
             "rawPassthroughHint": "仅 OpenAI Chat 同格式生效。将客户端原始请求 JSON 透传到上游（仅替换 model），以提升 prompt 缓存命中率。建议不要与参数覆盖同时使用。",
+            "selfHealing": "渠道自愈",
+            "selfHealingHint": "渠道级开关。仍需开启全局自愈。诊断不会自动改写生产配置。",
             "modelCustomPlaceholder": "自定义模型名称",
             "modelAdd": "添加",
             "modelRefresh": "刷新",

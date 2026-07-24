@@ -764,6 +764,130 @@
                 "stateOpen": "frozen",
                 "stateHalfOpen": "probing",
                 "remaining": "{seconds}s left"
+            },
+            "selfHealing": {
+                "title": "Self-healing",
+                "hint": "Isolated diagnostics use channel keys and a synthetic OK probe (max 8 output tokens). Capacity errors never generate config patches.",
+                "loading": "Loading self-healing status...",
+                "loadFailed": "Failed to load self-healing status",
+                "actionFailed": "Self-healing action failed",
+                "configVersion": "Config version {version}",
+                "rootCause": "Root cause",
+                "capacityNoPatch": "{cause} does not produce configuration patches",
+                "patchReadyHint": "A patch is ready. Review changes, then confirm apply. Verification runs automatically; failure rolls back.",
+                "rolledBackHint": "A previous apply was rolled back. Review evidence before retrying.",
+                "gates": {
+                    "global": "Global switch",
+                    "channel": "Channel switch",
+                    "worker": "Worker",
+                    "baselines": "Baseline capture",
+                    "on": "On",
+                    "off": "Off"
+                },
+                "states": {
+                    "disabled": "Disabled",
+                    "healthy": "Healthy",
+                    "watching": "Watching",
+                    "capacity": "Capacity",
+                    "suspected_drift": "Suspected drift",
+                    "diagnosing": "Diagnosing",
+                    "patch_ready": "Patch ready",
+                    "rolled_back": "Rolled back"
+                },
+                "rootCauses": {
+                    "none": "None",
+                    "capacity": "Capacity",
+                    "rate_limit": "Rate limit",
+                    "auth": "Auth",
+                    "waf_or_client_fingerprint": "WAF / client fingerprint",
+                    "protocol_drift": "Protocol drift",
+                    "endpoint": "Endpoint",
+                    "network": "Network",
+                    "decode": "Decode",
+                    "model_access": "Model access",
+                    "unknown": "Unknown"
+                },
+                "sessionStatuses": {
+                    "queued": "Queued",
+                    "running": "Running",
+                    "completed": "Completed",
+                    "failed": "Failed",
+                    "canceled": "Canceled",
+                    "expired": "Expired"
+                },
+                "patchStatuses": {
+                    "previewed": "Previewed",
+                    "applying": "Applying",
+                    "applied": "Applied",
+                    "rejected": "Rejected",
+                    "rolled_back": "Rolled back",
+                    "rollback_failed": "Rollback failed"
+                },
+                "confidence": {
+                    "high": "High",
+                    "medium": "Medium",
+                    "low": "Low"
+                },
+                "actions": {
+                    "preview": "Request preview",
+                    "diagnose": "Start diagnosis",
+                    "apply": "Apply patch",
+                    "confirmApply": "Confirm apply",
+                    "rollback": "Rollback",
+                    "confirmRollback": "Confirm rollback"
+                },
+                "baseline": {
+                    "title": "Latest success baseline",
+                    "model": "Model: {model}",
+                    "endpoint": "Endpoint fingerprint: {fingerprint}",
+                    "capturedAt": "Captured {time}"
+                },
+                "preview": {
+                    "title": "Preview (no upstream call)",
+                    "earlyStop": "Early stop: {reason}",
+                    "variants": "{count} variant shapes planned"
+                },
+                "sessions": {
+                    "title": "Recent diagnostics"
+                },
+                "detail": {
+                    "title": "Diagnostic detail",
+                    "summary": "{status} · {attempts} attempts · {patches} patches",
+                    "success": "Success",
+                    "failed": "Failed"
+                },
+                "patches": {
+                    "title": "Patches",
+                    "noChanges": "No allowlisted field changes"
+                },
+                "goldenSample": {
+                    "title": "Golden sample compare",
+                    "hint": "Paste a redacted JSON request sample (method, url, headers, body). Auth headers are rejected. No upstream call is made.",
+                    "placeholder": "{\"method\":\"POST\",\"url\":\"https://...\",\"headers\":{\"User-Agent\":[\"...\"]},\"body\":{...}}",
+                    "compare": "Compare",
+                    "compareFailed": "Golden sample compare failed",
+                    "sampleSummary": "Sample: {method} {path}",
+                    "noDiff": "No differences between the sample and the current outbound request shape",
+                    "suggestions": "Suggested variants",
+                    "suggestionsHint": "Run a diagnosis to test these safely with isolated probe requests.",
+                    "kinds": {
+                        "url": "URL",
+                        "header": "Header",
+                        "body": "Body"
+                    },
+                    "actions": {
+                        "added": "Sample only",
+                        "removed": "Octopus only",
+                        "changed": "Different"
+                    },
+                    "parseErrors": {
+                        "empty": "Sample is empty",
+                        "invalidJson": "Sample must be a JSON object",
+                        "missingUrl": "Sample must include a url field",
+                        "tooLarge": "Sample exceeds the size limit",
+                        "authSecret": "Sample contains authentication secrets; remove Authorization/API-key headers first"
+                    }
+                }
             }
         },
         "create": {
@@ -819,6 +943,8 @@
             "proxy": "Use Proxy",
             "rawPassthrough": "Raw Passthrough",
             "rawPassthroughHint": "OpenAI Chat only. Forwards the original request JSON upstream (only the model is patched) to improve prompt cache hits. Avoid combining with Param Override.",
+            "selfHealing": "Self-healing",
+            "selfHealingHint": "Per-channel gate. Still requires the global self-healing switch. Diagnostics never auto-apply patches.",
             "modelCustomPlaceholder": "Custom model name",
             "modelAdd": "Add",
             "modelRefresh": "Refresh",

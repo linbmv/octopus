@@ -62,6 +62,7 @@ type CapabilityEvidence struct {
 	EndpointFingerprint string           `json:"-" gorm:"size:64;not null;uniqueIndex:idx_capability_scope,priority:6"`
 	Status              CapabilityStatus `json:"status" gorm:"size:32;not null;index"`
 	ErrorClass          string           `json:"error_class,omitempty" gorm:"size:96"`
+	ErrorLevel          string           `json:"error_level,omitempty" gorm:"size:16"`
 	ErrorMessage        string           `json:"error_message,omitempty" gorm:"size:512"`
 	HTTPStatus          int              `json:"http_status,omitempty"`
 	ScopeFingerprint    string           `json:"-" gorm:"size:64;not null"`
@@ -89,6 +90,7 @@ func CapabilityScopeFingerprint(channel *Channel, key ChannelKey, endpoint strin
 		HeaderRules      []HeaderRule
 		JSONRewriteRules []JSONRewriteRule
 		ParamOverride    *string
+		RawPassthrough   bool
 		UserAgent        string
 	}{
 		Type:             channel.Type,
@@ -100,6 +102,7 @@ func CapabilityScopeFingerprint(channel *Channel, key ChannelKey, endpoint strin
 		HeaderRules:      channel.HeaderRules,
 		JSONRewriteRules: channel.JSONRewriteRules,
 		ParamOverride:    channel.ParamOverride,
+		RawPassthrough:   channel.RawPassthrough,
 		UserAgent:        strings.TrimSpace(channel.UserAgent),
 	}
 	encoded, _ := json.Marshal(payload)
