@@ -97,3 +97,39 @@ func TestBuildVariantRequestUsesProtocolSpecificSyntheticRawBody(t *testing.T) {
 		})
 	}
 }
+
+// TestMinimalDiagnosticRequestRawBodyMatchesTransformerOutput pins the
+// hand-written RawRequest bodies (used verbatim by raw_passthrough channels)
+// to what the real outbound transformer produces from the same llm.Request.
+// If an axonhub upgrade changes the wire schema, this fails instead of
+// letting diagnostics probe with a body production would never send.
+func TestMinimalDiagnosticRequestRawBodyMatchesTransformerOutput(t *testing.T) {
+	request := minimalDiagnosticRequest(llm.APIFormatOpenAIResponse, "model-a")
+	outbound, err := responses.NewOutboundTransformer("https://provider.test", "test-key")
+	if err != nil {
+		t.Fatalf("create outbound transformer: %v", err)
+	}
+	wire, err := outbound.TransformRequest(context.Background(), request)
+	if err != nil {
+		t.Fatalf("transform minimal request: %v", err)
+	}
+	var fromTransformer, fromRaw map[string]any
+	if err := json.Unmarshal(wire.Body, &fromTransformer); err != nil {
+		t.Fatalf("transformer body: %v", err)
+	}
+	if err := json.Unmarshal(request.RawRequest.Body, &fromRaw); err != nil {
+		t.Fatalf("raw body: %v", err)
+	}
+	for _, field := range []string{"model", "stream"} {
+		if fromRaw[field] == nil {
+			t.Fatalf("raw body lacks %q: %s", field, request.RawRequest.Body)
+		}
+	}
+	if fromTransformer["model"] != fromRaw["model"] {
+		t.Fatalf("model drift: transformer=%v raw=%v", fromTransformer["model"], fromRaw["model"])
+	}
+	// max_output_tokens is the token budget contract for Responses probes.
+	if fromRaw["max_output_tokens"] == nil || fromTransformer["max_output_tokens"] == nil {
+		t.Fatalf("max_output_tokens missing: transformer=%v raw=%v", fromTransformer["max_output_tokens"], fromRaw["max_output_tokens"])
+	}
+}
