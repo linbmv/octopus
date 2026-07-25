@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"time"
 
@@ -172,7 +173,7 @@ func applyConfigUpdates(ctx context.Context, previous conf.Config, updates <-cha
 			if previous.CapabilityProbe != config.CapabilityProbe {
 				log.Warnf("capability probe worker configuration changed; restart required for that field")
 			}
-			if previous.SelfHealing != config.SelfHealing {
+			if !reflect.DeepEqual(previous.SelfHealing, config.SelfHealing) {
 				log.Warnf("self-healing worker configuration changed; restart required for that field")
 			}
 			log.Infof("config reloaded")

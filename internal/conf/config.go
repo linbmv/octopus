@@ -126,6 +126,12 @@ type SelfHealingDiagnostic struct {
 	CostPerRequestUSD float64 `mapstructure:"cost_per_request_usd"`
 	MaxBatchCostUSD   float64 `mapstructure:"max_batch_cost_usd"`
 	MaxTotalCostUSD   float64 `mapstructure:"max_total_cost_usd"`
+	// ExtraUserAgents and ExtraHeaders extend the built-in client-fingerprint
+	// candidates without a redeploy when upstream clients ship new versions.
+	// ExtraHeaders entries use "name: value" form; protected auth headers are
+	// dropped during variant normalization.
+	ExtraUserAgents []string `mapstructure:"extra_user_agents"`
+	ExtraHeaders    []string `mapstructure:"extra_headers"`
 }
 
 type Config struct {
@@ -502,6 +508,15 @@ func Validate(config Config) error {
 	}
 	if diagnostic.MaxBatchCostUSD > diagnostic.MaxTotalCostUSD {
 		return fmt.Errorf("self_healing.diagnostic.max_batch_cost_usd must not exceed max_total_cost_usd")
+	}
+	if len(diagnostic.ExtraUserAgents) > 8 || len(diagnostic.ExtraHeaders) > 8 {
+		return fmt.Errorf("self_healing.diagnostic.extra_user_agents and extra_headers each allow at most 8 entries")
+	}
+	for _, header := range diagnostic.ExtraHeaders {
+		name, _, found := strings.Cut(header, ":")
+		if !found || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("self_healing.diagnostic.extra_headers entries must use \"name: value\" form, got %q", header)
+		}
 	}
 	return nil
 }

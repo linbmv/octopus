@@ -9,7 +9,7 @@ import (
 
 func TestGenerateVariantsBoundsAndDeduplicatesSingleDimensions(t *testing.T) {
 	channel := &model.Channel{UserAgent: "old", CustomHeader: []model.CustomHeader{{HeaderKey: "originator", HeaderValue: "old"}}, HeaderRules: []model.HeaderRule{{Action: "set", HeaderKey: "originator", HeaderValue: "old"}}}
-	plan := GenerateVariants(channel, llm.APIFormatOpenAIResponse, model.RootCauseProtocolDrift, 16)
+	plan := GenerateVariants(channel, llm.APIFormatOpenAIResponse, model.RootCauseProtocolDrift, 16, ExtraCandidates{})
 	if plan.EarlyStop || len(plan.Variants) == 0 || len(plan.Variants) > 16 {
 		t.Fatalf("variant plan = %#v", plan)
 	}
@@ -35,7 +35,7 @@ func TestGenerateVariantsBoundsAndDeduplicatesSingleDimensions(t *testing.T) {
 func TestGenerateVariantsStopsForCapacityAndAuth(t *testing.T) {
 	channel := &model.Channel{UserAgent: "old"}
 	for _, cause := range []model.RootCause{model.RootCauseCapacity, model.RootCauseRateLimit, model.RootCauseAuth, model.RootCauseNetwork} {
-		plan := GenerateVariants(channel, llm.APIFormatAnthropicMessage, cause, 16)
+		plan := GenerateVariants(channel, llm.APIFormatAnthropicMessage, cause, 16, ExtraCandidates{})
 		if !plan.EarlyStop || len(plan.Variants) != 1 || plan.Variants[0].Dimension != DimensionBaseline {
 			t.Fatalf("cause %s plan = %#v, want baseline-only early stop", cause, plan)
 		}
@@ -72,5 +72,29 @@ func TestBodyCandidatesArePatchable(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestGenerateVariantsIncludesConfiguredExtraCandidates(t *testing.T) {
+	channel := &model.Channel{UserAgent: "current-ua"}
+	extra := ExtraCandidates{
+		UserAgents: []string{"codex-tui/0.150.0", "current-ua", " "},
+		Headers:    []string{"x-new-beta: enabled", "authorization: secret", "malformed-entry"},
+	}
+	plan := GenerateVariants(channel, llm.APIFormatOpenAIResponse, model.RootCauseProtocolDrift, 16, extra)
+	var foundUA, foundHeader bool
+	for _, variant := range plan.Variants {
+		if variant.UserAgent != nil && *variant.UserAgent == "codex-tui/0.150.0" {
+			foundUA = true
+		}
+		if variant.HeaderSet["x-new-beta"] == "enabled" {
+			foundHeader = true
+		}
+		if variant.HeaderSet["authorization"] != "" {
+			t.Fatal("protected extra header survived variant generation")
+		}
+	}
+	if !foundUA || !foundHeader {
+		t.Fatalf("extra candidates missing: ua=%v header=%v plan=%#v", foundUA, foundHeader, plan.Variants)
 	}
 }

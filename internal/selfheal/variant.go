@@ -114,10 +114,18 @@ func normalizeNames(values []string) []string {
 	return result
 }
 
+// ExtraCandidates carries operator-configured client-fingerprint candidates
+// (conf self_healing.diagnostic.extra_user_agents / extra_headers) so upstream
+// client churn is a config edit, not a redeploy.
+type ExtraCandidates struct {
+	UserAgents []string
+	Headers    []string
+}
+
 // GenerateVariants creates a bounded, deduplicated matrix. Capacity, quota,
 // auth, endpoint, and network observations stop after the baseline because no
 // header/body change can repair those failures.
-func GenerateVariants(channel *model.Channel, protocol llm.APIFormat, rootCause model.RootCause, maxVariants int) VariantPlan {
+func GenerateVariants(channel *model.Channel, protocol llm.APIFormat, rootCause model.RootCause, maxVariants int, extra ExtraCandidates) VariantPlan {
 	if maxVariants <= 0 || maxVariants > MaxDiagnosticVariants {
 		maxVariants = MaxDiagnosticVariants
 	}
@@ -149,8 +157,23 @@ func GenerateVariants(channel *model.Channel, protocol llm.APIFormat, rootCause 
 	for _, value := range userAgentCandidates(channel, protocol) {
 		add(Variant{Dimension: DimensionUserAgent, Description: "try a known client User-Agent", UserAgent: &value})
 	}
+	for _, value := range extra.UserAgents {
+		value := strings.TrimSpace(value)
+		if value != "" && value != channel.UserAgent {
+			add(Variant{Dimension: DimensionUserAgent, Description: "try a configured client User-Agent", UserAgent: &value})
+		}
+	}
 	for _, header := range headerCandidates(channel, protocol) {
 		add(header)
+	}
+	for _, entry := range extra.Headers {
+		name, value, found := strings.Cut(entry, ":")
+		name = strings.ToLower(strings.TrimSpace(name))
+		value = strings.TrimSpace(value)
+		if !found || name == "" || value == "" || requestrewrite.IsProtectedHeader(name) {
+			continue
+		}
+		add(Variant{Dimension: DimensionHeader, Description: "add configured header " + name, HeaderSet: map[string]string{name: value}})
 	}
 	for _, body := range bodyCandidates(protocol) {
 		add(body)

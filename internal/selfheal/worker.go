@@ -146,6 +146,13 @@ func (w *Worker) Stop(ctx context.Context) error {
 }
 func (w *Worker) Stats() appruntime.QueueStats { return w.queue.Stats() }
 
+func (w *Worker) extraCandidates() ExtraCandidates {
+	return ExtraCandidates{
+		UserAgents: w.config.Diagnostic.ExtraUserAgents,
+		Headers:    w.config.Diagnostic.ExtraHeaders,
+	}
+}
+
 func (w *Worker) Submit(ctx context.Context, request SubmitRequest) (SubmitReport, error) {
 	if w == nil || !w.config.Enabled {
 		return SubmitReport{}, ErrSelfHealingDisabled
@@ -166,7 +173,7 @@ func (w *Worker) Submit(ctx context.Context, request SubmitRequest) (SubmitRepor
 	if !request.Trigger.Valid() {
 		return SubmitReport{}, errors.New("invalid diagnostic trigger")
 	}
-	plan := GenerateVariants(channel, channel.Type, request.RootCause, w.config.Diagnostic.MaxVariants)
+	plan := GenerateVariants(channel, channel.Type, request.RootCause, w.config.Diagnostic.MaxVariants, w.extraCandidates())
 	maxAttempts := len(plan.Variants)
 	if plan.EarlyStop {
 		maxAttempts = 1
@@ -258,7 +265,7 @@ func (w *Worker) Preview(ctx context.Context, request PreviewRequest) (*PreviewR
 	if maxVariants <= 0 {
 		maxVariants = w.config.Diagnostic.MaxVariants
 	}
-	plan := GenerateVariants(channel, channel.Type, request.RootCause, maxVariants)
+	plan := GenerateVariants(channel, channel.Type, request.RootCause, maxVariants, w.extraCandidates())
 	internalRequest := minimalDiagnosticRequest(channel.Type, modelName)
 	result := &PreviewResult{Plan: plan, Artifacts: make([]*requestartifact.Artifact, 0, len(plan.Variants)), ShapeDiffs: make([][]string, 0, len(plan.Variants))}
 	for _, variant := range plan.Variants {
@@ -285,7 +292,7 @@ func (w *Worker) handle(parent context.Context, job diagnosticJob) error {
 	if err != nil {
 		return w.finishFailed(parent, session, model.RootCauseUnknown, "", err.Error())
 	}
-	plan := GenerateVariants(channel, session.WireProtocol, session.RootCause, session.MaxAttempts)
+	plan := GenerateVariants(channel, session.WireProtocol, session.RootCause, session.MaxAttempts, w.extraCandidates())
 	internalRequest := minimalDiagnosticRequest(channel.Type, session.Model)
 	baselineAvailable := hasValidDiagnosticBaseline(parent, session, channel, key)
 	lastDiagnosis := Diagnosis{RootCause: session.RootCause}

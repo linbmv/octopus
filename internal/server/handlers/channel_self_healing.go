@@ -19,6 +19,7 @@ import (
 	"github.com/bestruirui/octopus/internal/server/router"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
+	"golang.org/x/sync/errgroup"
 )
 
 var newSelfHealingPatchService = func() *selfheal.PatchService {
@@ -181,19 +182,32 @@ func getChannelSelfHealingStatus(c *gin.Context) {
 	if !ok {
 		return
 	}
-	sessions, err := op.DiagnosticSessionList(c.Request.Context(), channelID, selfHealingLimit(c))
-	if err != nil {
-		respondInternalError(c, "list self-healing diagnostic sessions failed", err)
-		return
-	}
-	patches, err := op.ChannelPatchListByChannel(c.Request.Context(), channelID, selfHealingLimit(c))
-	if err != nil {
-		respondInternalError(c, "list self-healing channel patches failed", err)
-		return
-	}
-	baselines, err := op.ChannelBaselineList(c.Request.Context(), channelID, selfHealingLimit(c))
-	if err != nil {
-		respondInternalError(c, "list self-healing channel baselines failed", err)
+	// The status poll runs every few seconds while a session is active; the
+	// three independent list queries run concurrently to keep it cheap.
+	var (
+		sessions  []model.DiagnosticSession
+		patches   []model.ChannelPatch
+		baselines []model.ChannelBaseline
+	)
+	limit := selfHealingLimit(c)
+	group, groupCtx := errgroup.WithContext(c.Request.Context())
+	group.Go(func() error {
+		var err error
+		sessions, err = op.DiagnosticSessionList(groupCtx, channelID, limit)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		patches, err = op.ChannelPatchListByChannel(groupCtx, channelID, limit)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		baselines, err = op.ChannelBaselineList(groupCtx, channelID, limit)
+		return err
+	})
+	if err := group.Wait(); err != nil {
+		respondInternalError(c, "list self-healing status failed", err)
 		return
 	}
 	responseSessions := make([]selfHealingSessionResponse, 0, len(sessions))

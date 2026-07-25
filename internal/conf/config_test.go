@@ -126,6 +126,12 @@ func TestValidateSelfHealingLimits(t *testing.T) {
 			c.SelfHealing.Diagnostic.MaxBatchCostUSD = 1
 			c.SelfHealing.Diagnostic.MaxTotalCostUSD = 0.5
 		}},
+		{name: "too many extra user agents", want: "extra_user_agents", set: func(c *Config) {
+			c.SelfHealing.Diagnostic.ExtraUserAgents = make([]string, 9)
+		}},
+		{name: "malformed extra header", want: "extra_headers", set: func(c *Config) {
+			c.SelfHealing.Diagnostic.ExtraHeaders = []string{"no-colon-entry"}
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config := Default()
