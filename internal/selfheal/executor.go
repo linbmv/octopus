@@ -80,7 +80,7 @@ func (e IsolatedExecutor) Execute(
 	if err != nil {
 		return AttemptResult{Artifact: built.Artifact, ShapeDiff: built.ShapeDiff, Classification: Classify(Observation{TransportError: err}), Duration: e.now().Sub(started)}
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	body, readErr := readDiagnosticBody(ctx, response, maxBytes)
 	if readErr != nil && len(body) == 0 {
 		return AttemptResult{Artifact: built.Artifact, ShapeDiff: built.ShapeDiff, HTTPStatus: response.StatusCode, ResponseHeaders: model.NormalizeDiagnosticHeaders(response.Header), Classification: Classify(Observation{HTTPStatus: response.StatusCode, Headers: response.Header, TransportError: readErr}), Duration: e.now().Sub(started), TransportError: readErr}
