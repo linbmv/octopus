@@ -319,9 +319,11 @@ func createChannelSelfHealingDiagnostic(c *gin.Context) {
 			respondSelfHealingError(c, err)
 			return
 		}
+		compareActor, _ := c.Get("username")
 		middleware.AuditLog(c, middleware.EventChannelSelfHealingCompare, map[string]interface{}{
 			"channel_id": channelID, "header_diff_count": len(result.HeaderDiff),
 			"body_diff_count": len(result.BodyDiff), "suggested_count": len(result.Suggested),
+			"actor": strings.TrimSpace(stringValue(compareActor)),
 		})
 		resp.Success(c, map[string]any{"mode": model.DiagnosticModeCompare, "compare": result})
 		return
@@ -440,7 +442,9 @@ func applyChannelSelfHealingPatch(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if session.ID != strings.TrimSpace(c.Param("diagnostic_id")) || patch.DiagnosticSessionID != session.ID {
+	// selfHealingPatchScope loads the session from the patch itself, so only the
+	// URL's diagnostic id still needs to match.
+	if session.ID != strings.TrimSpace(c.Param("diagnostic_id")) {
 		selfHealingNotFound(c)
 		return
 	}
@@ -463,15 +467,16 @@ func rollbackChannelSelfHealingPatch(c *gin.Context) {
 	if !ok {
 		return
 	}
-	patch, _, ok := selfHealingPatchScope(c, channelID, strings.TrimSpace(c.Param("patch_id")))
-	if !ok {
-		return
-	}
 	// Require an empty JSON object so the route keeps the same strict JSON and
-	// content-type contract as the other mutating channel APIs.
+	// content-type contract as the other mutating channel APIs; bind before any
+	// DB lookups like the other handlers.
 	var request struct{}
 	if err := bindStrictJSON(c, &request); err != nil {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	patch, _, ok := selfHealingPatchScope(c, channelID, strings.TrimSpace(c.Param("patch_id")))
+	if !ok {
 		return
 	}
 	result, err := newSelfHealingPatchService().Rollback(c.Request.Context(), patch.ID)

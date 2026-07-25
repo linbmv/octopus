@@ -172,3 +172,38 @@ func TestDiagnosticScopeAndSyntheticTokenBudgetAreBounded(t *testing.T) {
 		t.Fatal("synthetic request body used the channel token")
 	}
 }
+
+func TestSentinelIgnoresKeyLevelFailures(t *testing.T) {
+	channel := initSelfHealingWorkerDB(t)
+	config := testSelfHealingConfig()
+	config.FailureThreshold = 1
+	fake := &fakeDiagnosticExecutor{succeedOn: DimensionUserAgent}
+	worker, err := NewWorker(config, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := worker.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Stop(context.Background()) }()
+	createSentinelBaseline(t, channel)
+	// A key-level 400 that relay heals by rotating keys: even a body that
+	// classifies as protocol drift must not count as channel failure evidence.
+	worker.sentinel.Observe(relay.UpstreamFailureObservation{
+		ChannelID: channel.ID, ChannelKeyID: channel.Keys[0].ID, Model: channel.Model,
+		Endpoint: channel.BaseUrls[0].URL, HTTPStatus: http.StatusBadRequest,
+		Headers:      http.Header{"Content-Type": {"application/json"}},
+		ResponseBody: []byte(`{"error":{"type":"validation_error","message":"unknown field"}}`),
+		ErrorLevel:   "key",
+	})
+	time.Sleep(50 * time.Millisecond)
+	sessions, err := op.DiagnosticSessionList(context.Background(), channel.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("key-level failure created diagnostic session: %#v", sessions)
+	}
+}

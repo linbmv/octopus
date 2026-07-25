@@ -14,13 +14,18 @@ const maxFailureObservationBodyBytes = 8192
 // and is consumed synchronously by the registered observer; self-healing must
 // persist only the resulting bounded classification fields.
 type UpstreamFailureObservation struct {
-	ChannelID      int
-	ChannelKeyID   int
-	Model          string
-	Endpoint       string
-	HTTPStatus     int
-	Headers        http.Header
-	ResponseBody   []byte
+	ChannelID    int
+	ChannelKeyID int
+	Model        string
+	Endpoint     string
+	HTTPStatus   int
+	Headers      http.Header
+	ResponseBody []byte
+	// ErrorLevel carries relay's own classification of this attempt ("key",
+	// "channel", "client"). Key-level failures heal by rotating to the next key
+	// within the same request, so observers must not count them as channel
+	// evidence even when their own re-classification would disagree.
+	ErrorLevel     string
 	TransportError error
 	ObservedAt     time.Time
 }

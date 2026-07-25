@@ -12,6 +12,7 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay"
+	"github.com/bestruirui/octopus/internal/relay/errorclass"
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
@@ -124,6 +125,11 @@ func (s *Sentinel) Stop(ctx context.Context) error {
 // tests and is also the callback target used by relay's in-process observer.
 func (s *Sentinel) Observe(observation relay.UpstreamFailureObservation) {
 	if s == nil || !s.config.Enabled || observation.ChannelID <= 0 {
+		return
+	}
+	// Key-level failures heal by rotating to the next key inside the same
+	// request; counting them would diagnose channels users see as healthy.
+	if observation.ErrorLevel == errorclass.ErrorLevelKey.String() {
 		return
 	}
 	diagnosis := Classify(Observation{

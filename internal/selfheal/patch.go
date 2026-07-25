@@ -156,12 +156,8 @@ func safeTopLevelField(name string) bool {
 	if name == "" || strings.ContainsAny(name, "/~") {
 		return false
 	}
-	switch name {
-	case "stream", "store", "reasoning", "include", "instructions", "thinking":
-		return true
-	default:
-		return false
-	}
+	_, ok := patchableBodyFields[name]
+	return ok
 }
 
 func validatePatchSnapshot(snapshot model.ChannelPatchSnapshot) error {

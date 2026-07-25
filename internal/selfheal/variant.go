@@ -238,6 +238,14 @@ func headerCandidates(channel *model.Channel, protocol llm.APIFormat) []Variant 
 	return result
 }
 
+// patchableBodyFields is the single allowlist shared by variant generation
+// (bodyCandidates) and patch synthesis (safeTopLevelField). A field must never
+// be probe-able without also being patchable, otherwise a successful diagnostic
+// fails at patch time and the session is recorded as failed.
+var patchableBodyFields = map[string]struct{}{
+	"stream": {}, "store": {}, "reasoning": {}, "include": {}, "instructions": {}, "thinking": {},
+}
+
 func bodyCandidates(protocol llm.APIFormat) []Variant {
 	result := make([]Variant, 0, 8)
 	add := func(description string, set map[string]any, remove []string) {

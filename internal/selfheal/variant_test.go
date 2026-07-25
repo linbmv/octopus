@@ -52,3 +52,25 @@ func TestVariantNormalizationDropsProtectedHeaders(t *testing.T) {
 		t.Fatalf("normalized variant = %#v", variant)
 	}
 }
+
+func TestBodyCandidatesArePatchable(t *testing.T) {
+	// A field the diagnostic can probe but the patch builder rejects turns a
+	// successful diagnosis into a failed session; keep the two in lockstep.
+	for _, protocol := range []llm.APIFormat{
+		llm.APIFormatOpenAIChatCompletion, llm.APIFormatOpenAIResponse,
+		llm.APIFormatOpenAIResponseCompact, llm.APIFormatAnthropicMessage,
+	} {
+		for _, variant := range bodyCandidates(protocol) {
+			for name := range variant.BodySet {
+				if !safeTopLevelField(name) {
+					t.Fatalf("protocol %s: BodySet field %q is probe-able but not patchable", protocol, name)
+				}
+			}
+			for _, name := range variant.BodyDelete {
+				if !safeTopLevelField(name) {
+					t.Fatalf("protocol %s: BodyDelete field %q is probe-able but not patchable", protocol, name)
+				}
+			}
+		}
+	}
+}

@@ -240,6 +240,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		Model: ra.metrics.ActualModel, Endpoint: ra.baseURL,
 		HTTPStatus: upstreamStatusCode, Headers: upstreamHeaders,
 		ResponseBody: upstreamResponseBody, TransportError: transportErr,
+		ErrorLevel: decision.Classification.Level.String(),
 		ObservedAt: now.UTC(),
 	})
 	if upstreamStatusCode == http.StatusTooManyRequests && decision.Classification.Level == errorclass.ErrorLevelChannel {
