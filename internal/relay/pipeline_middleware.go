@@ -79,6 +79,13 @@ func (m *relayPipelineMiddleware) captureOutboundRequestArtifact(request *httpcl
 		m.attempt.metrics.ActualModel,
 		rewrite,
 	)
+	// The summary is written before codex stripping; the artifact built here is
+	// the final shape, so it owns the redacted shape hash.
+	if artifact := m.attempt.metrics.OutboundRequestArtifact; artifact != nil {
+		if summary := m.attempt.metrics.OutboundRequestSummary; summary != nil {
+			summary.ShapeSHA256 = artifact.ShapeSHA256
+		}
+	}
 }
 
 func (m *relayPipelineMiddleware) OnOutboundRawError(ctx context.Context, err error) {

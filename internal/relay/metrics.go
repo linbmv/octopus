@@ -113,17 +113,13 @@ func (m *RelayMetrics) RecordOutboundRequestSummary(
 	jsonRewriteApplied bool,
 	headerRewriteApplied bool,
 ) {
-	artifact := requestartifact.Build(request, "", "", requestartifact.RewriteSummary{
-		RawPassthrough:        rawPassthrough,
-		ParamOverrideApplied:  paramOverrideApplied,
-		JSONRewriteApplied:    jsonRewriteApplied,
-		HeaderRewriteApplied:  headerRewriteApplied,
-		RequestRewriteApplied: paramOverrideApplied || jsonRewriteApplied || headerRewriteApplied,
-	})
-	if artifact == nil {
+	if request == nil {
 		return
 	}
-	m.OutboundRequestArtifact = artifact
+	// The summary is audit metadata on the hot path: it hashes and inspects the
+	// body directly instead of building a full requestartifact shape. The
+	// redacted ShapeSHA256 is backfilled by the pipeline middleware after codex
+	// stripping, when self-healing has artifact capture enabled.
 	bodyHash := sha256.Sum256(request.Body)
 	summary := &OutboundRequestSummary{
 		RawPassthrough:        rawPassthrough,
@@ -131,14 +127,15 @@ func (m *RelayMetrics) RecordOutboundRequestSummary(
 		JSONRewriteApplied:    jsonRewriteApplied,
 		HeaderRewriteApplied:  headerRewriteApplied,
 		RequestRewriteApplied: paramOverrideApplied || jsonRewriteApplied || headerRewriteApplied,
-		BodyBytes:             artifact.Body.BodyBytes,
+		BodyBytes:             len(request.Body),
 		BodySHA256:            hex.EncodeToString(bodyHash[:]),
-		ShapeSHA256:           artifact.ShapeSHA256,
-		Model:                 artifact.Model,
 	}
 
 	var bodyMap map[string]any
 	if err := json.Unmarshal(request.Body, &bodyMap); err == nil {
+		if model, ok := bodyMap["model"].(string); ok {
+			summary.Model = model
+		}
 		if stream, ok := bodyMap["stream"].(bool); ok {
 			summary.Stream = &stream
 		}
