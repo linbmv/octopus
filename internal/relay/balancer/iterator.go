@@ -110,12 +110,28 @@ func NewIteratorFromCandidatesWithSession(group model.Group, apiKeyID int, reque
 	}
 }
 
+// HardUnusableRank 及以上的 rank 表示"硬不可用"（如 compact 已确认不兼容），
+// 排序时无视用户 Priority 直接排到最后。低于该值的 rank 属于软证据
+// （capability 探测结果），仅在同 Priority 内起次级排序作用。
+const HardUnusableRank = 1 << 20
+
 func applyCandidateRanks(candidates []model.GroupItem, ranks map[int]int) {
 	if len(candidates) <= 1 || len(ranks) == 0 {
 		return
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		return rankOfCandidate(candidates[i], ranks) < rankOfCandidate(candidates[j], ranks)
+		ri, rj := rankOfCandidate(candidates[i], ranks), rankOfCandidate(candidates[j], ranks)
+		// 硬不可用的候选（如 compact 不兼容）排最后，无视 Priority
+		hardI, hardJ := ri >= HardUnusableRank, rj >= HardUnusableRank
+		if hardI != hardJ {
+			return !hardI
+		}
+		// Priority 为第一排序键（升序：值越小越优先）
+		if candidates[i].Priority != candidates[j].Priority {
+			return candidates[i].Priority < candidates[j].Priority
+		}
+		// Priority 相同时，按 capability rank 排序
+		return ri < rj
 	})
 }
 

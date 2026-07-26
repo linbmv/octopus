@@ -376,7 +376,8 @@ func compactGroupItemRank(item dbmodel.GroupItem, channel *dbmodel.Channel) int 
 	case dbmodel.CompactStrategyOfficial:
 		return 0
 	case dbmodel.CompactStrategyIncompatible:
-		return 6
+		// 已确认不兼容属于硬不可用：排序时无视用户 Priority 直接垫底。
+		return balancer.HardUnusableRank + 6
 	}
 	if channel == nil {
 		return 5
