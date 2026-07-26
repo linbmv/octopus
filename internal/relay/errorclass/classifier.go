@@ -253,6 +253,49 @@ func classifyEmbeddedError(statusCode int, responseBody []byte, allowPlainTextMa
 	case "rate_limit_error", "rate_limit_exceeded", "too_many_requests", "authentication_error":
 		return Classification{Level: ErrorLevelKey, Reason: "upstream " + errorType}, true
 	case "invalid_request_error", "validation_error":
+		// 二次分诊：invalid_request_error 常被上游代理层拿来包装非用户错误。
+		// 生产语料例：
+		//   - "Not Found, error: 模型不存在, code: model_not_found, type: invalid_request_error"
+		//   - "Bad Request, error: No available channel for model X, type: invalid_request_error"
+		//   - "Bad Request, error: 分组 Other 下模型 X 无可用渠道, type: invalid_request_error"
+		// 只有真正的用户 payload 错才应停止 failover。
+		if bodyContainsAny(body,
+			"no available channel",
+			"model permission",
+			"无可用渠道",
+			"distributor",
+			"is not supported by any configured account",
+			"模型不存在",
+			"model_not_supported",
+		) {
+			return Classification{Level: ErrorLevelChannel, Reason: "upstream " + errorType + " (upstream routing)"}, true
+		}
+		if bodyContainsAny(body,
+			"api key",
+			"api_key",
+			"invalid_authentication",
+			"authentication failed",
+			"unauthorized",
+		) {
+			return Classification{Level: ErrorLevelKey, Reason: "upstream " + errorType + " (auth)"}, true
+		}
+		// ① 明确的用户 payload 错——跨渠道也无法修复，标记为 deterministic。
+		if bodyContainsAny(body,
+			"context length",
+			"context_length_exceeded",
+			"maximum context",
+			"prompt is too long",
+			"prompt too long",
+			"context window",
+			"too many tokens",
+			"maximum number of tokens",
+			"tool schema",
+			"invalid tool",
+			"invalid function",
+			"invalid content",
+		) {
+			return Classification{Level: ErrorLevelClient, Reason: "deterministic client error"}, true
+		}
 		return Classification{Level: ErrorLevelClient, Reason: "upstream " + errorType}, true
 	}
 
@@ -442,9 +485,13 @@ func classify403Error(responseBody []byte) Classification {
 }
 
 // classify404Error 根据响应体内容智能分类 404 错误
-// 设计原则：404 本身是异常情况，只有明确的客户端错误才不切换
-//   - 模型不存在（客户端级）：明确的 model_not_found 或 does not exist
-//   - 其他情况（渠道级）：空响应、HTML、异常 JSON 等都应切换渠道
+//
+// 判定顺序：
+//  1. 空响应/HTML → channel（URL 或 WAF 配置错）
+//  2. 明确的"当前渠道不支持该模型"表述 → channel（换渠道有救）
+//  3. model_not_found / does not exist（未提及渠道限定语境）→ client 歧义，
+//     兜底交给决策层探测；避免请求真的写错模型时也扫全 group
+//  4. 其他 → channel
 func classify404Error(responseBody []byte) Classification {
 	if len(responseBody) == 0 {
 		return Classification{
@@ -455,7 +502,25 @@ func classify404Error(responseBody []byte) Classification {
 
 	bodyLower := lowerScanBody(responseBody)
 
-	// 仅当明确是"模型不存在"时才视为客户端错误
+	// "当前渠道/分组没配置该模型"—— new-api/one-api 常见语料。
+	// 生产实测: "Model \"gpt-5.6-sol-openai-compact\" is not supported by any configured account in this group"
+	if bodyContainsAny(bodyLower,
+		"is not supported by any configured account",
+		"in this group",
+		"no available channel",
+		"no available account",
+		"分组",
+		"无可用渠道",
+	) {
+		return Classification{
+			Level:  ErrorLevelChannel,
+			Reason: "404 model unsupported in current channel/group",
+		}
+	}
+
+	// 通用的 model_not_found / does not exist——可能真的写错模型名，
+	// 也可能是某个上游代理没同步模型表。保留 client 语义但让决策层
+	// 用有限预算跨渠道探测。
 	if strings.Contains(bodyLower, "model_not_found") ||
 		strings.Contains(bodyLower, "does not exist") {
 		return Classification{
@@ -616,7 +681,20 @@ func parseRetryAfterSeconds(retryAfter string) int {
 }
 
 // classify400Error 根据响应体内容智能分类 400 错误
-// 设计原则：400 默认是客户端错误，但某些上游会用 400 返回权限/配额问题
+//
+// 上游代理网关（new-api、one-api 及其分叉）经常用 400 传递本应是 5xx/401 的
+// 错误。仅按状态码硬编码为 client 会使跨渠道 failover 在遇到"上游代理层
+// 问题"时提前退出（生产 14 天 client-terminal 案例的 99% 属于此类）。
+//
+// 判定顺序（越具体越先）：
+//  1. 明确 client 词（真的用户 payload 错，绝不重试）→ client (deterministic)
+//  2. key 权限/额度词 → key
+//  3. channel 上游代理层词 → channel
+//  4. 兜底 → client (ambiguous)，reason "400 bad request"
+//
+// 兜底的"歧义 client"由 error_decision.applyClientErorRetryPolicy 判定为
+// "允许跨渠道探测"（Level 保持 client 不扣健康，Action 改为 retry_channel），
+// 探测预算耗尽后再交给 runer 兜底返回。
 func classify400Error(responseBody []byte) Classification {
 	if len(responseBody) == 0 {
 		return Classification{
@@ -627,18 +705,69 @@ func classify400Error(responseBody []byte) Classification {
 
 	bodyLower := lowerScanBody(responseBody)
 
-	// 识别伪装成 400 的权限/配额错误
-	if strings.Contains(bodyLower, "quota") ||
-		strings.Contains(bodyLower, "insufficient_quota") ||
-		strings.Contains(bodyLower, "billing") ||
-		strings.Contains(bodyLower, "payment") {
+	// ① 明确的用户 payload 错——跨渠道也无法修复，直接返回。
+	if bodyContainsAny(bodyLower,
+		"context length",
+		"context_length_exceeded",
+		"maximum context",
+		"prompt is too long",
+		"prompt too long",
+		"context window",
+		"too many tokens",
+		"maximum number of tokens",
+		"tool schema",
+		"invalid tool",
+		"invalid function",
+		"invalid content",
+	) {
 		return Classification{
-			Level:  ErrorLevelKey,
-			Reason: "400 quota/billing error (treat as key-level)",
+			Level:  ErrorLevelClient,
+			Reason: "400 deterministic client error",
 		}
 	}
 
-	// 真正的客户端错误
+	// ② key 级：额度/账单 + 上游认证失败（new-api 常见）。
+	if bodyContainsAny(bodyLower,
+		"quota",
+		"insufficient_quota",
+		"billing",
+		"payment",
+		"api key not valid",
+		"invalid api key",
+		"invalid_api_key",
+		"api_key_invalid",
+		"authentication failed",
+		"authentication_error",
+		"invalid_authentication",
+		"unauthorized",
+	) {
+		return Classification{
+			Level:  ErrorLevelKey,
+			Reason: "400 auth/quota error (treat as key-level)",
+		}
+	}
+
+	// ③ channel 级：上游代理层路由/配置错，换渠道有救。
+	if bodyContainsAny(bodyLower,
+		"no available channel",
+		"model permission",
+		"model_permission",
+		"is not supported by any configured account",
+		"distributor",
+		"无可用渠道",
+		"分组",
+	) ||
+		// new-api 有一个典型 body 解析错的 400：说明上游本身崩了不是 payload 错。
+		(strings.Contains(bodyLower, "invalid character") &&
+			strings.Contains(bodyLower, "looking for beginning of value")) {
+		return Classification{
+			Level:  ErrorLevelChannel,
+			Reason: "400 upstream routing error (treat as channel-level)",
+		}
+	}
+
+	// ④ 兜底：形式上是 400 但语料未命中——保留 client 语义，交给决策层做
+	// 有预算的跨渠道探测，reason 保持 "400 bad request" 供 policy 判断歧义。
 	return Classification{
 		Level:  ErrorLevelClient,
 		Reason: "400 bad request",

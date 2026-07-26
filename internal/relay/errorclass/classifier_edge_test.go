@@ -408,6 +408,171 @@ func TestLargeResponseBodyPerformance(t *testing.T) {
 	}
 }
 
+// TestClassify400WithProxyLayerErrors 覆盖 P0：new-api / 上游代理层用 400 传
+// 递的可跨渠道恢复错误必须离开 client 级，避免 runner 中断 failover。
+func TestClassify400WithProxyLayerErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		responseBody []byte
+		wantLevel    ErrorLevel
+	}{
+		{
+			name:         "api key not valid (Gemini via new-api)",
+			responseBody: []byte(`{"error":{"message":"API key not valid. Please pass a valid API key.","code":400}}`),
+			wantLevel:    ErrorLevelKey,
+		},
+		{
+			name:         "invalid api key (OpenAI-compatible)",
+			responseBody: []byte(`{"error":{"type":"invalid_request_error","message":"Invalid API key provided"}}`),
+			wantLevel:    ErrorLevelKey,
+		},
+		{
+			name:         "unauthorized wording behind 400",
+			responseBody: []byte(`{"error":"unauthorized: bearer token rejected"}`),
+			wantLevel:    ErrorLevelKey,
+		},
+		{
+			name:         "no available channel (new-api routing)",
+			responseBody: []byte(`{"error":{"message":"No available channel for model gemini-3.5-flash under group Other (distributor)","code":"model_not_found","type":"new_api_error"}}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
+			name:         "chinese no available channel",
+			responseBody: []byte(`{"error":"分组 Other 下模型 gemini-3.5-flash 无可用渠道（distributor）"}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
+			name:         "new-api body parse failure",
+			responseBody: []byte(`{"error":"Invalid request: Invalid request: invalid character 'd' looking for beginning of value","type":"new_api_error"}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
+			name:         "model not supported by group",
+			responseBody: []byte(`{"error":"Model gpt-5.6-sol is not supported by any configured account in this group","type":"new_api_error"}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
+			name:         "context length is real client error",
+			responseBody: []byte(`{"error":{"message":"This model's maximum context length is 128000 tokens, however you requested 200000","type":"invalid_request_error","code":"context_length_exceeded"}}`),
+			wantLevel:    ErrorLevelClient,
+		},
+		{
+			name:         "prompt too long is real client error",
+			responseBody: []byte(`{"error":"Prompt is too long: 5000 tokens > 4096 limit"}`),
+			wantLevel:    ErrorLevelClient,
+		},
+		{
+			name:         "invalid tool schema is real client error",
+			responseBody: []byte(`{"error":"invalid tool schema at tools[2].function.parameters"}`),
+			wantLevel:    ErrorLevelClient,
+		},
+		{
+			name:         "generic 400 is ambiguous client",
+			responseBody: []byte(`{"error":"Bad Request"}`),
+			wantLevel:    ErrorLevelClient,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(400, tt.responseBody)
+			if got.Level != tt.wantLevel {
+				t.Fatalf("level = %v, want %v (reason=%q)", got.Level, tt.wantLevel, got.Reason)
+			}
+		})
+	}
+}
+
+// TestClassify404WithGroupScopedModelNotFound 覆盖 P0：当 model_not_found 明确
+// 来自"当前 group 无可用后端"时应属 channel 级；无 group 语境时保持 client。
+func TestClassify404WithGroupScopedModelNotFound(t *testing.T) {
+	tests := []struct {
+		name         string
+		responseBody []byte
+		wantLevel    ErrorLevel
+	}{
+		{
+			name:         "model not supported by group is channel",
+			responseBody: []byte(`{"error":"Model X is not supported by any configured account in this group","code":"model_not_found"}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
+			name:         "model not available in this group is channel",
+			responseBody: []byte(`{"error":"分组 default 下模型 X 无可用渠道"}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
+			name:         "raw model_not_found without group is client",
+			responseBody: []byte(`{"error":"model_not_found: unknown-model"}`),
+			wantLevel:    ErrorLevelClient,
+		},
+		{
+			name:         "raw does not exist without group is client",
+			responseBody: []byte(`{"error":"The model does not exist"}`),
+			wantLevel:    ErrorLevelClient,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(404, tt.responseBody)
+			if got.Level != tt.wantLevel {
+				t.Fatalf("level = %v, want %v (reason=%q)", got.Level, tt.wantLevel, got.Reason)
+			}
+		})
+	}
+}
+
+// TestClassifyEmbeddedInvalidRequestError 覆盖 P0：invalid_request_error 需要
+// 按 body 二次分诊，只有真的 client 语义才保持 client。
+func TestClassifyEmbeddedInvalidRequestError(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantLevel  ErrorLevel
+	}{
+		{
+			name:       "invalid_request with no available channel is channel",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"type":"invalid_request_error","message":"No available channel for model X"}}`,
+			wantLevel:  ErrorLevelChannel,
+		},
+		{
+			name:       "invalid_request with 404 model_not_found in group is channel",
+			statusCode: http.StatusNotFound,
+			body:       `{"error":{"type":"invalid_request_error","message":"Model X is not supported by any configured account in this group","code":"model_not_found"}}`,
+			wantLevel:  ErrorLevelChannel,
+		},
+		{
+			name:       "invalid_request with api key wording is key",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"type":"invalid_request_error","message":"Invalid api key"}}`,
+			wantLevel:  ErrorLevelKey,
+		},
+		{
+			name:       "invalid_request with context_length_exceeded stays client",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Prompt is too long"}}`,
+			wantLevel:  ErrorLevelClient,
+		},
+		{
+			name:       "invalid_request with tool call state stays client",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"type":"invalid_request_error","message":"No tool call found for function call output with call_id call_abc"}}`,
+			wantLevel:  ErrorLevelClient,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyWithHeaders(tt.statusCode, nil, []byte(tt.body))
+			if got.Level != tt.wantLevel {
+				t.Fatalf("level = %v, want %v (reason=%q)", got.Level, tt.wantLevel, got.Reason)
+			}
+		})
+	}
+}
+
+
 // TestHTTPDateParsing tests HTTP-date format in Retry-After header
 func TestHTTPDateParsing(t *testing.T) {
 	tests := []struct {
