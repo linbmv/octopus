@@ -190,17 +190,54 @@ func decisionForClassification(statusCode int, classification errorclass.Classif
 	return decision
 }
 
-func applyClientErrorRetryPolicy(decision *ErrorDecision, profile dbmodel.ChannelPolicyProfile) {
+// applyClientErrorRetryPolicy 把"歧义 client"错误降级为可跨渠道探测，同时保留
+// Level=client 的健康语义（不扣渠道健康分、不冷却 URL、不熔断）。
+//
+// 背景：上游代理网关（new-api / one-api 及其分叉）经常用 400 / invalid_request_error /
+// 404 model_not_found 传递本应是 5xx/401 的错误。当分类器无法明确判定为"用户
+// payload 错"时，reason 会保留 "400 bad request" / "upstream invalid_request_error"
+// 等歧义字样；这类错误换个渠道就可能成功，不应中断 failover。
+//
+// 明确的用户 payload 错（context length、tool schema、prompt too long 等）会
+// 在 classifier 阶段带上 "deterministic" / 具体词标记，此处保持 ReturnClient 立即返回。
+//
+// profile 参数暂时保留以兼容既有调用点；生产 35 个渠道均为 standard，历史的
+// proxyProfile 分支不再是唯一入口，逻辑改为按 reason 精细判定。
+func applyClientErrorRetryPolicy(decision *ErrorDecision, _ dbmodel.ChannelPolicyProfile) {
 	if decision == nil || decision.Classification.Level != errorclass.ErrorLevelClient {
 		return
 	}
 	reason := strings.ToLower(strings.TrimSpace(decision.Classification.Reason))
-	providerSpecific := strings.Contains(reason, "tool call state mismatch") ||
-		strings.Contains(reason, "model_not_found")
-	proxyProfile := profile == dbmodel.ChannelPolicyTrustedProxy || profile == dbmodel.ChannelPolicyUntrustedProxy
-	if providerSpecific || proxyProfile {
-		decision.Action = ErrorActionRetryChannel
+	if isDeterministicClientError(reason) {
+		return // keep Action=ReturnClient — payload itself is invalid, changing channel cannot help
 	}
+	// Ambiguous client error: allow cross-channel probing.
+	// Level stays client so health stats/URL cooldown/circuit breaker skip it;
+	// Action changes to retry_channel so runner.iter advances to the next candidate.
+	decision.Action = ErrorActionRetryChannel
+}
+
+// isDeterministicClientError identifies reasons that reflect a genuine client
+// payload problem (invalid tool schema, context length exceeded, malformed
+// input). These must NOT be retried across channels because no other upstream
+// can satisfy them either.
+func isDeterministicClientError(reason string) bool {
+	return strings.Contains(reason, "deterministic client") ||
+		strings.Contains(reason, "context length") ||
+		strings.Contains(reason, "context window") ||
+		strings.Contains(reason, "prompt is too long") ||
+		strings.Contains(reason, "prompt too long") ||
+		strings.Contains(reason, "maximum context") ||
+		strings.Contains(reason, "maximum number of tokens") ||
+		strings.Contains(reason, "too many tokens") ||
+		strings.Contains(reason, "tool schema") ||
+		strings.Contains(reason, "invalid tool") ||
+		strings.Contains(reason, "invalid function") ||
+		strings.Contains(reason, "invalid content")
+	// NOTE: "tool call state mismatch" is intentionally NOT deterministic — it
+	// reflects upstream tool_call_id tracking differences (new-api / one-api
+	// variants), and a different provider often accepts the same payload. Keep
+	// it in the ambiguous bucket so runer can try the next candidate.
 }
 
 func (ra *relayAttempt) decideError(statusCode int, headers http.Header, responseBody []byte, err error) ErrorDecision {

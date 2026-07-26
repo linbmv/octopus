@@ -24,11 +24,20 @@ func TestErrorDecisionUsesExplicitActions(t *testing.T) {
 		wantRetryKey bool
 	}{
 		{
-			name:       "deterministic upstream client error returns to client",
+			name:       "deterministic client error returns to client immediately",
+			status:     http.StatusBadRequest,
+			body:       `{"error":{"type":"invalid_request_error","message":"This model's maximum context length is 128000 tokens"}}`,
+			err:        errors.New("invalid request"),
+			wantAction: ErrorActionReturnClient,
+			wantLevel:  "client",
+			wantClient: http.StatusBadRequest,
+		},
+		{
+			name:       "ambiguous client error allows cross-channel probing",
 			status:     http.StatusBadRequest,
 			body:       `{"error":{"type":"invalid_request_error"}}`,
 			err:        errors.New("invalid request"),
-			wantAction: ErrorActionReturnClient,
+			wantAction: ErrorActionRetryChannel,
 			wantLevel:  "client",
 			wantClient: http.StatusBadRequest,
 		},
@@ -84,26 +93,39 @@ func TestErrorDecisionUsesExplicitActions(t *testing.T) {
 }
 
 func TestClientErrorRetryPolicyUsesChannelProfile(t *testing.T) {
-	body := []byte(`{"error":{"type":"invalid_request_error"}}`)
-	for _, test := range []struct {
-		name    string
-		profile dbmodel.ChannelPolicyProfile
-		want    ErrorAction
-	}{
-		{name: "standard is conservative", profile: dbmodel.ChannelPolicyStandard, want: ErrorActionReturnClient},
-		{name: "official is authoritative", profile: dbmodel.ChannelPolicyOfficial, want: ErrorActionReturnClient},
-		{name: "trusted proxy may differ", profile: dbmodel.ChannelPolicyTrustedProxy, want: ErrorActionRetryChannel},
-		{name: "untrusted proxy may misclassify", profile: dbmodel.ChannelPolicyUntrustedProxy, want: ErrorActionRetryChannel},
-	} {
-		t.Run(test.name, func(t *testing.T) {
+	t.Run("deterministic client error returns immediately regardless of profile", func(t *testing.T) {
+		body := []byte(`{"error":{"type":"invalid_request_error","message":"prompt is too long: 5000 tokens"}}`)
+		for _, profile := range []dbmodel.ChannelPolicyProfile{
+			dbmodel.ChannelPolicyStandard,
+			dbmodel.ChannelPolicyOfficial,
+			dbmodel.ChannelPolicyTrustedProxy,
+			dbmodel.ChannelPolicyUntrustedProxy,
+		} {
 			decision := decideRelayErrorWithOptions(http.StatusBadRequest, nil, body, errors.New("bad request"), errorDecisionOptions{
-				PolicyProfile: test.profile,
+				PolicyProfile: profile,
 			})
-			if decision.Action != test.want || decision.ClientStatusCode != http.StatusBadRequest {
-				t.Fatalf("decision = %+v, want action=%s status=400", decision, test.want)
+			if decision.Action != ErrorActionReturnClient || decision.ClientStatusCode != http.StatusBadRequest {
+				t.Fatalf("profile=%s: decision = %+v, want action=return_client status=400", profile, decision)
 			}
-		})
-	}
+		}
+	})
+
+	t.Run("ambiguous client error allows cross-channel probing regardless of profile", func(t *testing.T) {
+		body := []byte(`{"error":{"type":"invalid_request_error"}}`)
+		for _, profile := range []dbmodel.ChannelPolicyProfile{
+			dbmodel.ChannelPolicyStandard,
+			dbmodel.ChannelPolicyOfficial,
+			dbmodel.ChannelPolicyTrustedProxy,
+			dbmodel.ChannelPolicyUntrustedProxy,
+		} {
+			decision := decideRelayErrorWithOptions(http.StatusBadRequest, nil, body, errors.New("bad request"), errorDecisionOptions{
+				PolicyProfile: profile,
+			})
+			if decision.Action != ErrorActionRetryChannel || decision.ClientStatusCode != http.StatusBadRequest {
+				t.Fatalf("profile=%s: decision = %+v, want action=retry_channel status=400", profile, decision)
+			}
+		}
+	})
 }
 
 func TestCompactEndpointCompatibilityDecisionIsConservative(t *testing.T) {
