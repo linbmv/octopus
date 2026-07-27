@@ -16,12 +16,16 @@ import (
 func TestNewHTTPTransportWithTimeouts_AppliesDialTimeout(t *testing.T) {
 	// Save original config and restore after test
 	originalConfig := conf.Current()
-	defer conf.Set(originalConfig)
+	defer func() {
+		_ = conf.Set(originalConfig)
+	}()
 
 	// Set a specific dial timeout
 	cfg := originalConfig
 	cfg.Relay.DialTimeoutSeconds = 2
-	conf.Set(cfg)
+	if err := conf.Set(cfg); err != nil {
+		t.Fatalf("conf.Set failed: %v", err)
+	}
 
 	transport, err := newHTTPTransportWithTimeouts()
 	if err != nil {
@@ -38,7 +42,7 @@ func TestNewHTTPTransportWithTimeouts_AppliesDialTimeout(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if err == nil {
-		conn.Close()
+		_ = conn.Close()
 		t.Fatal("expected dial to timeout, but it succeeded")
 	}
 
@@ -53,12 +57,16 @@ func TestNewHTTPTransportWithTimeouts_AppliesDialTimeout(t *testing.T) {
 func TestNewHTTPTransportWithTimeouts_AppliesResponseHeaderTimeout(t *testing.T) {
 	// Save original config and restore after test
 	originalConfig := conf.Current()
-	defer conf.Set(originalConfig)
+	defer func() {
+		_ = conf.Set(originalConfig)
+	}()
 
 	// Set a specific response header timeout
 	cfg := originalConfig
 	cfg.Relay.ResponseHeaderTimeoutSeconds = 2
-	conf.Set(cfg)
+	if err := conf.Set(cfg); err != nil {
+		t.Fatalf("conf.Set failed: %v", err)
+	}
 
 	transport, err := newHTTPTransportWithTimeouts()
 	if err != nil {
@@ -82,7 +90,7 @@ func TestNewHTTPTransportWithTimeouts_AppliesResponseHeaderTimeout(t *testing.T)
 	elapsed := time.Since(start)
 
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatal("expected response header timeout, but request succeeded")
 	}
 
@@ -102,13 +110,17 @@ func TestNewHTTPTransportWithTimeouts_AppliesResponseHeaderTimeout(t *testing.T)
 func TestNewHTTPTransportWithTimeouts_ZeroTimeoutDisablesGuard(t *testing.T) {
 	// Save original config and restore after test
 	originalConfig := conf.Current()
-	defer conf.Set(originalConfig)
+	defer func() {
+		_ = conf.Set(originalConfig)
+	}()
 
 	// Set timeouts to 0 (disabled)
 	cfg := originalConfig
 	cfg.Relay.DialTimeoutSeconds = 0
 	cfg.Relay.ResponseHeaderTimeoutSeconds = 0
-	conf.Set(cfg)
+	if err := conf.Set(cfg); err != nil {
+		t.Fatalf("conf.Set failed: %v", err)
+	}
 
 	transport, err := newHTTPTransportWithTimeouts()
 	if err != nil {
@@ -127,13 +139,17 @@ func TestNewHTTPTransportWithTimeouts_ZeroTimeoutDisablesGuard(t *testing.T) {
 func TestNewHTTPClientNoProxy_UsesTimeouts(t *testing.T) {
 	// Save original config and restore after test
 	originalConfig := conf.Current()
-	defer conf.Set(originalConfig)
+	defer func() {
+		_ = conf.Set(originalConfig)
+	}()
 
 	// Set specific timeouts
 	cfg := originalConfig
 	cfg.Relay.DialTimeoutSeconds = 5
 	cfg.Relay.ResponseHeaderTimeoutSeconds = 10
-	conf.Set(cfg)
+	if err := conf.Set(cfg); err != nil {
+		t.Fatalf("conf.Set failed: %v", err)
+	}
 
 	client, err := newHTTPClientNoProxy()
 	if err != nil {
