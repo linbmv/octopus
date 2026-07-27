@@ -57,6 +57,12 @@ type Relay struct {
 	MaxJSONRequestBytes                     int64 `mapstructure:"max_json_request_bytes"`
 	MaxImageRequestBytes                    int64 `mapstructure:"max_image_request_bytes"`
 	MaxNonStreamResponseBytes               int64 `mapstructure:"max_non_stream_response_bytes"`
+	// DialTimeoutSeconds bounds the TCP+TLS handshake phase for establishing
+	// the upstream connection. Zero uses Go's default dialer timeout (30s).
+	DialTimeoutSeconds int `mapstructure:"dial_timeout_seconds"`
+	// ResponseHeaderTimeoutSeconds bounds the wait for upstream response headers
+	// after the request has been fully written. Zero disables the guard.
+	ResponseHeaderTimeoutSeconds int `mapstructure:"response_header_timeout_seconds"`
 }
 
 type Metrics struct {
@@ -269,6 +275,8 @@ func setDefaultsFor(v *viper.Viper) {
 	v.SetDefault("relay.max_json_request_bytes", 32<<20)
 	v.SetDefault("relay.max_image_request_bytes", 64<<20)
 	v.SetDefault("relay.max_non_stream_response_bytes", 64<<20)
+	v.SetDefault("relay.dial_timeout_seconds", 10)
+	v.SetDefault("relay.response_header_timeout_seconds", 30)
 	v.SetDefault("observability.metrics.enabled", false)
 	v.SetDefault("observability.metrics.host", "127.0.0.1")
 	v.SetDefault("observability.metrics.port", 9090)
@@ -366,6 +374,12 @@ func Validate(config Config) error {
 	}
 	if config.Relay.StreamFirstEventBudgetSeconds < 0 || config.Relay.StreamFirstEventBudgetSeconds > 24*60*60 {
 		return fmt.Errorf("relay.stream_first_event_budget_seconds must be between 0 and 86400")
+	}
+	if config.Relay.DialTimeoutSeconds < 0 || config.Relay.DialTimeoutSeconds > 300 {
+		return fmt.Errorf("relay.dial_timeout_seconds must be between 0 and 300")
+	}
+	if config.Relay.ResponseHeaderTimeoutSeconds < 0 || config.Relay.ResponseHeaderTimeoutSeconds > 600 {
+		return fmt.Errorf("relay.response_header_timeout_seconds must be between 0 and 600")
 	}
 	const maxConfiguredBodyBytes = int64(1 << 30)
 	for name, value := range map[string]int64{

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"golang.org/x/net/proxy"
@@ -221,8 +222,34 @@ func clonedDefaultTransport() (*http.Transport, error) {
 	return transport.Clone(), nil
 }
 
-func newHTTPClientNoProxy() (*http.Client, error) {
+func newHTTPTransportWithTimeouts() (*http.Transport, error) {
 	cloned, err := clonedDefaultTransport()
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply relay timeout configuration from global config
+	cfg := conf.Current()
+
+	// Set dial timeout (TCP + TLS handshake)
+	if cfg.Relay.DialTimeoutSeconds > 0 {
+		dialer := &net.Dialer{
+			Timeout:   time.Duration(cfg.Relay.DialTimeoutSeconds) * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
+		cloned.DialContext = dialer.DialContext
+	}
+
+	// Set response header timeout
+	if cfg.Relay.ResponseHeaderTimeoutSeconds > 0 {
+		cloned.ResponseHeaderTimeout = time.Duration(cfg.Relay.ResponseHeaderTimeoutSeconds) * time.Second
+	}
+
+	return cloned, nil
+}
+
+func newHTTPClientNoProxy() (*http.Client, error) {
+	cloned, err := newHTTPTransportWithTimeouts()
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +258,7 @@ func newHTTPClientNoProxy() (*http.Client, error) {
 }
 
 func newHTTPClientCustomProxy(proxyURLStr string) (*http.Client, error) {
-	cloned, err := clonedDefaultTransport()
+	cloned, err := newHTTPTransportWithTimeouts()
 	if err != nil {
 		return nil, err
 	}
@@ -250,8 +277,32 @@ func newHTTPClientCustomProxy(proxyURLStr string) (*http.Client, error) {
 			return nil, fmt.Errorf("invalid socks proxy: %w", err)
 		}
 		cloned.Proxy = nil
+		// For SOCKS proxy, wrap the dialer to preserve timeout settings
+		cfg := conf.Current()
+		dialTimeout := 30 * time.Second // Go default
+		if cfg.Relay.DialTimeoutSeconds > 0 {
+			dialTimeout = time.Duration(cfg.Relay.DialTimeoutSeconds) * time.Second
+		}
 		cloned.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return socksDialer.Dial(network, addr)
+			// Apply timeout to the SOCKS dial
+			dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+			defer cancel()
+			// proxy.Dialer doesn't support context, so we use a goroutine with timeout
+			type result struct {
+				conn net.Conn
+				err  error
+			}
+			ch := make(chan result, 1)
+			go func() {
+				conn, err := socksDialer.Dial(network, addr)
+				ch <- result{conn, err}
+			}()
+			select {
+			case res := <-ch:
+				return res.conn, res.err
+			case <-dialCtx.Done():
+				return nil, dialCtx.Err()
+			}
 		}
 	default:
 		return nil, fmt.Errorf("unsupported proxy scheme: %s", proxyURL.Scheme)
