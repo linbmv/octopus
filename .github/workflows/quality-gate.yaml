@@ -157,7 +157,10 @@ jobs:
           test -f build/docker/linux/amd64/octopus
           test -f build/docker/linux/arm64/octopus
           test "$(cat build/docker/SOURCE_COMMIT)" = "${GITHUB_SHA}"
-          ! grep -q -- '-dirty$' build/docker/VERSION
+          if grep -q -- '-dirty$' build/docker/VERSION; then
+            echo "Refusing dirty container inputs" >&2
+            exit 1
+          fi
           (cd build/docker && sha256sum --check --strict SHA256SUMS)
           test "$(od -An -tx1 -j18 -N2 build/docker/linux/amd64/octopus | tr -d ' \n')" = 3e00
           test "$(od -An -tx1 -j18 -N2 build/docker/linux/arm64/octopus | tr -d ' \n')" = b700

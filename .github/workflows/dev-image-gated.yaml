@@ -79,7 +79,10 @@ jobs:
           set -euo pipefail
           test "$(find build/docker -type f | wc -l)" -eq 5
           test "$(cat build/docker/SOURCE_COMMIT)" = "${GATED_SHA}"
-          ! grep -q -- '-dirty$' build/docker/VERSION
+          if grep -q -- '-dirty$' build/docker/VERSION; then
+            echo "Refusing dirty container inputs" >&2
+            exit 1
+          fi
           (cd build/docker && sha256sum --check --strict SHA256SUMS)
           test "$(od -An -tx1 -j18 -N2 build/docker/linux/amd64/octopus | tr -d ' \n')" = 3e00
           test "$(od -An -tx1 -j18 -N2 build/docker/linux/arm64/octopus | tr -d ' \n')" = b700
@@ -94,9 +97,11 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           shortsha="$(git rev-parse --short "${GATED_SHA}")"
           tag="${image}:dev-staging-${GATED_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}-${{ matrix.arch }}"
-          echo "image=${image}" >>"${GITHUB_OUTPUT}"
-          echo "shortsha=${shortsha}" >>"${GITHUB_OUTPUT}"
-          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+          {
+            echo "image=${image}"
+            echo "shortsha=${shortsha}"
+            echo "tag=${tag}"
+          } >>"${GITHUB_OUTPUT}"
 
       - name: Set up QEMU for arm64 runtime verification
         if: ${{ matrix.arch == 'arm64' }}
