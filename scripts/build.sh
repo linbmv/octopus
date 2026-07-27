@@ -32,8 +32,13 @@ readonly EXPECTED_RELEASE_ARCHIVES=(
     "octopus-windows-x86_64.zip"
 )
 readonly EXPECTED_RELEASE_TARGETS="${#EXPECTED_RELEASE_ARCHIVES[@]}"
+readonly CONTAINER_TARGETS=(
+    "x86_64:linux/amd64"
+    "arm64:linux/arm64"
+)
 
 # Build metadata
+readonly COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
 readonly COMMIT_ID="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 readonly BUILD_TIME="$(TZ='Asia/Shanghai' date +'%F %T %z')"
 readonly GIT_AUTHOR="linbmv"
@@ -207,6 +212,19 @@ reset_release_outputs() {
     rm -rf -- "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/docker" "${OUTPUT_DIR}/archives"
     mkdir -p "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/docker" "${OUTPUT_DIR}/archives"
     log_success "Release output directories are clean"
+}
+
+reset_container_outputs() {
+    log_step "Resetting container output directories"
+
+    if [ "${OUTPUT_DIR}" != "build" ]; then
+        log_error "Refusing to reset an unexpected output directory: ${OUTPUT_DIR}"
+        return 1
+    fi
+
+    rm -rf -- "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/docker"
+    mkdir -p "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/docker"
+    log_success "Container output directories are clean"
 }
 
 # =============================================================================
@@ -483,6 +501,48 @@ prepare_docker_binaries() {
     log_success "Prepared ${copied_count} Docker binaries in ${docker_dir}/"
 }
 
+prepare_container_binaries() {
+    log_step "Preparing amd64 and arm64 container binaries"
+
+    local docker_dir="${OUTPUT_DIR}/docker"
+    local target
+
+    for target in "${CONTAINER_TARGETS[@]}"; do
+        local arch="${target%%:*}"
+        local docker_platform="${target#*:}"
+        local source_file="${OUTPUT_DIR}/bin/${APP_NAME}-linux-${arch}"
+        local target_dir="${docker_dir}/${docker_platform}"
+
+        if [ ! -f "${source_file}" ]; then
+            log_error "Container binary not found: ${source_file}"
+            return 1
+        fi
+        mkdir -p "${target_dir}"
+        install -m 0555 "${source_file}" "${target_dir}/${APP_NAME}"
+        log_success "Installed bin/$(basename "${source_file}") -> docker/${docker_platform}/${APP_NAME}"
+    done
+
+    printf '%s\n' "${COMMIT_SHA}" >"${docker_dir}/SOURCE_COMMIT"
+    printf '%s\n' "${GIT_VERSION}" >"${docker_dir}/VERSION"
+
+    if command_exists sha256sum; then
+        (cd "${docker_dir}" && \
+            sha256sum SOURCE_COMMIT VERSION \
+                linux/amd64/${APP_NAME} linux/arm64/${APP_NAME} >SHA256SUMS)
+        (cd "${docker_dir}" && sha256sum --check --strict SHA256SUMS >/dev/null)
+    elif command_exists shasum; then
+        (cd "${docker_dir}" && \
+            shasum -a 256 SOURCE_COMMIT VERSION \
+                linux/amd64/${APP_NAME} linux/arm64/${APP_NAME} >SHA256SUMS)
+        (cd "${docker_dir}" && shasum -a 256 --check SHA256SUMS >/dev/null)
+    else
+        log_error "No SHA-256 command available"
+        return 1
+    fi
+
+    log_success "Prepared checksummed amd64 and arm64 container inputs"
+}
+
 # =============================================================================
 # Main Execution
 # =============================================================================
@@ -492,6 +552,7 @@ show_usage() {
     echo ""
     echo "Commands:"
     echo "  release              Build all platforms and create distribution packages"
+    echo "  container            Build frontend once and prepare amd64/arm64 container inputs"
     echo "  build <os> <arch>    Build for specific OS and architecture"
     echo "  help                 Show this help message"
     echo ""
@@ -505,6 +566,7 @@ show_usage() {
     echo "  $0 build windows x86_64"
     echo "  $0 build linux x86_64"
     echo "  $0 build android arm64"
+    echo "  $0 container"
     echo "  $0 release"
     echo "  $0 version"
 }
@@ -538,6 +600,48 @@ validate_os_arch() {
 
 main() {
     case "${1:-}" in
+    "container")
+        if [ $# -ne 1 ]; then
+            log_error "Container command does not accept additional arguments"
+            show_usage
+            exit 1
+        fi
+
+        log_step "Starting container input build"
+        echo "Building ${APP_NAME} ${GIT_VERSION} (${COMMIT_ID}) for linux/amd64 and linux/arm64"
+        echo ""
+
+        if ! prepare_environment; then
+            log_error "Failed to prepare build environment"
+            exit 1
+        fi
+        if ! reset_container_outputs; then
+            log_error "Failed to reset container outputs"
+            exit 1
+        fi
+        if ! build_frontend; then
+            log_error "Failed to build frontend"
+            exit 1
+        fi
+
+        log_step "Building container binaries"
+        local target
+        for target in "${CONTAINER_TARGETS[@]}"; do
+            local target_arch="${target%%:*}"
+            if ! build_standard linux "${target_arch}"; then
+                log_error "Failed to build linux/${target_arch} container binary"
+                exit 1
+            fi
+        done
+
+        if ! prepare_container_binaries; then
+            log_error "Failed to prepare container binaries"
+            exit 1
+        fi
+
+        log_step "Container input build completed"
+        log_success "Verified inputs ready in ${OUTPUT_DIR}/docker/"
+        ;;
     "build")
         if [ $# -ne 3 ]; then
             log_error "Build command requires OS and architecture"

@@ -18,11 +18,83 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  quality-gate:
-    name: Quality Gate
+  go-static:
+    name: Go static analysis and build
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.5'
+
+      - name: Install pinned Go analysis tools
+        run: |
+          go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+          go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
+          go install "golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION}"
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+
+      - name: Go lint and workflow validation
+        run: |
+          go mod verify
+          golangci-lint run --timeout=5m ./...
+          staticcheck ./...
+          deadcode -test ./...
+          actionlint
+
+      - name: Go vulnerability scan
+        run: govulncheck ./...
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go build
+        run: go build ./...
+
+  go-test:
+    name: Go race tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.5'
+
+      - name: Go race tests
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+        with:
+          file: ./coverage.out
+          fail_ci_if_error: false
+
+  frontend-container:
+    name: Frontend tests and reusable container inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -45,64 +117,50 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
-          cache: 'pnpm'
+          cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: Go Lint
-        run: |
-          go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
-          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
-          go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
-          go install "golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION}"
-          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
-          golangci-lint run --timeout=5m ./...
-          staticcheck ./...
-          deadcode -test ./...
-          actionlint
-
-      - name: Go Vulnerability Scan
-        run: govulncheck ./...
-
-      - name: Go Test
-        run: go test -race -coverprofile=coverage.out ./...
-
-      - name: Go Vet
-        run: go vet ./...
-
-      - name: Go Build
-        run: go build ./...
-
-      - name: Frontend Install
-        working-directory: ./web
+      - name: Install frontend dependencies
+        working-directory: web
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium
-        working-directory: ./web
+        working-directory: web
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Frontend Lint
-        working-directory: ./web
-        run: pnpm run lint
+      - name: Verify frontend source
+        working-directory: web
+        run: |
+          pnpm run lint
+          pnpm run type-check
+          pnpm run test
 
-      - name: Frontend Type Check
-        working-directory: ./web
-        run: pnpm run type-check
-
-      - name: Frontend Unit Tests
-        working-directory: ./web
-        run: pnpm run test
-
-      - name: Frontend Build
-        working-directory: ./web
-        run: pnpm run build
+      - name: Build amd64 and arm64 container inputs once
+        run: bash scripts/build.sh container
 
       - name: Frontend Browser E2E
-        working-directory: ./web
+        working-directory: web
         env:
           GOCACHE: ${{ runner.temp }}/octopus-e2e-go-build
           NEXT_TELEMETRY_DISABLED: '1'
           OCTOPUS_E2E_SKIP_BUILD: '1'
+          OCTOPUS_E2E_USE_PACKAGED_STATIC: '1'
         run: pnpm run test:e2e
+
+      - name: Validate reusable container inputs
+        run: |
+          set -euo pipefail
+          test "$(find build/docker -type f | wc -l)" -eq 5
+          test -f build/docker/SHA256SUMS
+          test -f build/docker/SOURCE_COMMIT
+          test -f build/docker/VERSION
+          test -f build/docker/linux/amd64/octopus
+          test -f build/docker/linux/arm64/octopus
+          test "$(cat build/docker/SOURCE_COMMIT)" = "${GITHUB_SHA}"
+          ! grep -q -- '-dirty$' build/docker/VERSION
+          (cd build/docker && sha256sum --check --strict SHA256SUMS)
+          test "$(od -An -tx1 -j18 -N2 build/docker/linux/amd64/octopus | tr -d ' \n')" = 3e00
+          test "$(od -An -tx1 -j18 -N2 build/docker/linux/arm64/octopus | tr -d ' \n')" = b700
 
       - name: Upload Playwright failure evidence
         if: ${{ failure() }}
@@ -113,11 +171,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Upload Coverage
-        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      - name: Upload verified container inputs
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          file: ./coverage.out
-          fail_ci_if_error: false
+          name: dev-container-inputs-${{ github.sha }}
+          path: build/docker/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
   database-matrix:
     name: MySQL 8.0 and PostgreSQL 17 integration
@@ -268,3 +330,31 @@ jobs:
           set -euo pipefail
           test "${SECRET_SCAN_RESULT}" = success
           test "${SOURCE_SCAN_RESULT}" = success
+
+  quality-gate:
+    name: Quality Gate
+    if: ${{ always() }}
+    needs:
+      - go-static
+      - go-test
+      - frontend-container
+      - database-matrix
+      - supply-chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce every quality gate
+        env:
+          DATABASE_RESULT: ${{ needs.database-matrix.result }}
+          FRONTEND_CONTAINER_RESULT: ${{ needs.frontend-container.result }}
+          GO_STATIC_RESULT: ${{ needs.go-static.result }}
+          GO_TEST_RESULT: ${{ needs.go-test.result }}
+          SUPPLY_CHAIN_RESULT: ${{ needs.supply-chain.result }}
+        run: |
+          set -euo pipefail
+          test "${GO_STATIC_RESULT}" = success
+          test "${GO_TEST_RESULT}" = success
+          test "${FRONTEND_CONTAINER_RESULT}" = success
+          test "${DATABASE_RESULT}" = success
+          test "${SUPPLY_CHAIN_RESULT}" = success

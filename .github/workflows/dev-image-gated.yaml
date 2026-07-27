@@ -1,9 +1,8 @@
 name: Dev Image
 
-# 开发通道镜像：Quality Gate 在 dev 分支成功后，构建并发布 edge / dev-<sha>
-# 镜像，供测试用户拉取最新代码。绝不发布 latest / v* —— 那些是正式
-# release workflow（v* tag，带 Cosign 签名与 SBOM attestation）的专属输出。
-# 本通道镜像未经签名，仅供尝鲜与回归验证。
+# Development images are published only from the exact dev commit that passed
+# every Quality Gate job. The gate builds the deployable binaries once; this
+# workflow packages and runtime-tests those immutable inputs before moving tags.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -18,17 +17,40 @@ permissions: {}
 
 concurrency:
   group: dev-image-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
+  # Do not interrupt tag promotion between the two image variants. Quality
+  # Gate already cancels superseded commits before they can reach this workflow.
+  cancel-in-progress: false
 
 jobs:
-  dev-image:
-    name: Build and publish dev channel image
+  build-platform:
+    name: Build and verify ${{ matrix.variant }} ${{ matrix.platform }}
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: debian
+            platform: linux/amd64
+            arch: amd64
+            dockerfile: scripts/dockerfiles/Dockerfile.debian
+          - variant: debian
+            platform: linux/arm64
+            arch: arm64
+            dockerfile: scripts/dockerfiles/Dockerfile.debian
+          - variant: alpine
+            platform: linux/amd64
+            arch: amd64
+            dockerfile: scripts/dockerfiles/Dockerfile.alpine
+          - variant: alpine
+            platform: linux/arm64
+            arch: arm64
+            dockerfile: scripts/dockerfiles/Dockerfile.alpine
     steps:
       - name: Checkout gated commit
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -36,40 +58,48 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version: '1.26.5'
+      - name: Verify exact gated checkout
+        env:
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: test "$(git rev-parse HEAD)" = "${GATED_SHA}"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+      - name: Download verified container inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          version: '9.15.9'
+          name: dev-container-inputs-${{ github.event.workflow_run.head_sha }}
+          path: build/docker
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: '24'
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-
-      - name: Build container binaries with the release script
+      - name: Validate gated container inputs
+        env:
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          bash scripts/build.sh build linux x86_64
-          bash scripts/build.sh build linux arm64
-          mkdir -p build/docker/linux/amd64 build/docker/linux/arm64
-          install -m 0555 build/bin/octopus-linux-x86_64 build/docker/linux/amd64/octopus
-          install -m 0555 build/bin/octopus-linux-arm64 build/docker/linux/arm64/octopus
+          test "$(find build/docker -type f | wc -l)" -eq 5
+          test "$(cat build/docker/SOURCE_COMMIT)" = "${GATED_SHA}"
+          ! grep -q -- '-dirty$' build/docker/VERSION
+          (cd build/docker && sha256sum --check --strict SHA256SUMS)
+          test "$(od -An -tx1 -j18 -N2 build/docker/linux/amd64/octopus | tr -d ' \n')" = 3e00
+          test "$(od -An -tx1 -j18 -N2 build/docker/linux/arm64/octopus | tr -d ' \n')" = b700
+          chmod 0555 build/docker/linux/amd64/octopus build/docker/linux/arm64/octopus
 
-      - name: Compute image references
-        id: image
+      - name: Set immutable staging reference
+        id: staging
+        env:
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >>"${GITHUB_OUTPUT}"
-          echo "shortsha=$(git rev-parse --short "${{ github.event.workflow_run.head_sha }}")" >>"${GITHUB_OUTPUT}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          shortsha="$(git rev-parse --short "${GATED_SHA}")"
+          tag="${image}:dev-staging-${GATED_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}-${{ matrix.arch }}"
+          echo "image=${image}" >>"${GITHUB_OUTPUT}"
+          echo "shortsha=${shortsha}" >>"${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
 
-      - name: Set up QEMU
+      - name: Set up QEMU for arm64 runtime verification
+        if: ${{ matrix.arch == 'arm64' }}
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
@@ -82,38 +112,300 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Debian (distroless) dev image
+      - name: Build and push immutable platform image
+        id: build
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: .
-          file: scripts/dockerfiles/Dockerfile.debian
-          platforms: linux/amd64,linux/arm64
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:edge
-            ${{ steps.image.outputs.name }}:dev-${{ steps.image.outputs.shortsha }}
+          tags: ${{ steps.staging.outputs.tag }}
           labels: |
             org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.title=octopus
-            org.opencontainers.image.version=edge
+            org.opencontainers.image.version=dev-${{ steps.staging.outputs.shortsha }}
+          cache-from: type=gha,scope=dev-${{ matrix.variant }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=dev-${{ matrix.variant }}-${{ matrix.arch }}
           provenance: false
           sbom: false
 
-      - name: Build and push Alpine dev image
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+      - name: Runtime-smoke exact platform digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
+          IMAGE_NAME: ${{ steps.staging.outputs.image }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          scripts/test-container-smoke.sh \
+            "${IMAGE_NAME}@${DIGEST}" \
+            "${{ matrix.platform }}" \
+            "${GATED_SHA}" \
+            "$(cat build/docker/VERSION)"
+
+      - name: Record verified platform evidence and size
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
+          IMAGE_NAME: ${{ steps.staging.outputs.image }}
+          STAGING_TAG: ${{ steps.staging.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          manifest="$(docker buildx imagetools inspect --raw "${IMAGE_NAME}@${DIGEST}")"
+          compressed_bytes="$(jq -er '([.config.size] + [.layers[].size]) | add' <<<"${manifest}")"
+          test "${compressed_bytes}" -gt 0
+          mkdir -p build/dev-image-evidence
+          jq -n \
+            --arg digest "${DIGEST}" \
+            --arg image_name "${IMAGE_NAME}" \
+            --arg staging_tag "${STAGING_TAG}" \
+            --arg variant "${{ matrix.variant }}" \
+            --arg platform "${{ matrix.platform }}" \
+            --arg commit_sha "${GATED_SHA}" \
+            --arg gate_run_id "${{ github.event.workflow_run.id }}" \
+            --arg gate_run_attempt "${{ github.event.workflow_run.run_attempt }}" \
+            --arg dev_run_id "${GITHUB_RUN_ID}" \
+            --arg dev_run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --argjson compressed_bytes "${compressed_bytes}" \
+            '{
+              schema_version: 1,
+              digest: $digest,
+              image_name: $image_name,
+              staging_tag: $staging_tag,
+              variant: $variant,
+              platform: $platform,
+              commit_sha: $commit_sha,
+              gate_run_id: $gate_run_id,
+              gate_run_attempt: $gate_run_attempt,
+              dev_run_id: $dev_run_id,
+              dev_run_attempt: $dev_run_attempt,
+              compressed_bytes: $compressed_bytes,
+              runtime_smoke: true
+            }' >"build/dev-image-evidence/${{ matrix.variant }}-${{ matrix.arch }}.json"
+
+      - name: Upload verified platform evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          context: .
-          file: scripts/dockerfiles/Dockerfile.alpine
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:edge-alpine
-            ${{ steps.image.outputs.name }}:dev-${{ steps.image.outputs.shortsha }}-alpine
-          labels: |
-            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.title=octopus
-            org.opencontainers.image.version=edge
-          provenance: false
-          sbom: false
+          name: dev-image-evidence-${{ matrix.variant }}-${{ matrix.arch }}
+          path: build/dev-image-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Assemble and publish verified dev images
+    needs: build-platform
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout gated commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Download all verified platform evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: dev-image-evidence-*
+          path: build/dev-image-evidence
+          merge-multiple: true
+
+      - name: Set image reference
+        id: image
+        env:
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >>"${GITHUB_OUTPUT}"
+          echo "shortsha=$(git rev-parse --short "${GATED_SHA}")" >>"${GITHUB_OUTPUT}"
+
+      - name: Validate exact verified evidence set
+        id: inputs
+        env:
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          test "$(find build/dev-image-evidence -maxdepth 1 -type f -name '*.json' | wc -l)" -eq 4
+
+          validate_platform() {
+            local variant=$1
+            local arch=$2
+            local platform=$3
+            local evidence="build/dev-image-evidence/${variant}-${arch}.json"
+            local digest
+            local compressed_bytes
+            local expected_tag="${IMAGE_NAME}:dev-staging-${GATED_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${variant}-${arch}"
+
+            jq -e \
+              --arg image_name "${IMAGE_NAME}" \
+              --arg staging_tag "${expected_tag}" \
+              --arg variant "${variant}" \
+              --arg platform "${platform}" \
+              --arg commit_sha "${GATED_SHA}" \
+              --arg gate_run_id "${{ github.event.workflow_run.id }}" \
+              --arg gate_run_attempt "${{ github.event.workflow_run.run_attempt }}" \
+              --arg dev_run_id "${GITHUB_RUN_ID}" \
+              --arg dev_run_attempt "${GITHUB_RUN_ATTEMPT}" \
+              '.schema_version == 1 and
+               .image_name == $image_name and
+               .staging_tag == $staging_tag and
+               .variant == $variant and
+               .platform == $platform and
+               .commit_sha == $commit_sha and
+               .gate_run_id == $gate_run_id and
+               .gate_run_attempt == $gate_run_attempt and
+               .dev_run_id == $dev_run_id and
+               .dev_run_attempt == $dev_run_attempt and
+               .runtime_smoke == true and
+               (.compressed_bytes | type == "number" and . > 0)' \
+              "${evidence}" >/dev/null
+            digest="$(jq -er '.digest' "${evidence}")"
+            compressed_bytes="$(jq -er '.compressed_bytes' "${evidence}")"
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            echo "${variant}_${arch}=${digest}" >>"${GITHUB_OUTPUT}"
+            echo "${variant}_${arch}_bytes=${compressed_bytes}" >>"${GITHUB_OUTPUT}"
+          }
+
+          validate_platform debian amd64 linux/amd64
+          validate_platform debian arm64 linux/arm64
+          validate_platform alpine amd64 linux/amd64
+          validate_platform alpine arm64 linux/arm64
+          test "$(jq -r '.digest' build/dev-image-evidence/*.json | sort -u | wc -l)" -eq 4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble exact verified platform digests
+        id: assemble
+        env:
+          ALPINE_AMD64: ${{ steps.inputs.outputs.alpine_amd64 }}
+          ALPINE_ARM64: ${{ steps.inputs.outputs.alpine_arm64 }}
+          DEBIAN_AMD64: ${{ steps.inputs.outputs.debian_amd64 }}
+          DEBIAN_ARM64: ${{ steps.inputs.outputs.debian_arm64 }}
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+
+          assemble_index() {
+            local variant=$1
+            local amd64_digest=$2
+            local arm64_digest=$3
+            local staging_tag="${IMAGE_NAME}:dev-index-${GATED_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${variant}"
+            local index_digest
+
+            [[ "${amd64_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${arm64_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools create \
+              --tag "${staging_tag}" \
+              "${IMAGE_NAME}@${amd64_digest}" \
+              "${IMAGE_NAME}@${arm64_digest}"
+            index_digest="$(docker buildx imagetools inspect "${staging_tag}" | awk '$1 == "Digest:" { print $2; exit }')"
+            [[ "${index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools inspect --raw "${IMAGE_NAME}@${index_digest}" | \
+              jq -e \
+                --arg amd64 "${amd64_digest}" \
+                --arg arm64 "${arm64_digest}" \
+                '.schemaVersion == 2 and
+                 (.manifests | length) == 2 and
+                 ([.manifests[] |
+                   select(.digest == $amd64 and
+                          .platform.os == "linux" and
+                          .platform.architecture == "amd64")] | length) == 1 and
+                 ([.manifests[] |
+                   select(.digest == $arm64 and
+                          .platform.os == "linux" and
+                          .platform.architecture == "arm64")] | length) == 1' >/dev/null
+            echo "${variant}_digest=${index_digest}" >>"${GITHUB_OUTPUT}"
+          }
+
+          assemble_index debian "${DEBIAN_AMD64}" "${DEBIAN_ARM64}"
+          assemble_index alpine "${ALPINE_AMD64}" "${ALPINE_ARM64}"
+
+      - name: Promote verified indexes to dev tags
+        env:
+          ALPINE_DIGEST: ${{ steps.assemble.outputs.alpine_digest }}
+          DEBIAN_DIGEST: ${{ steps.assemble.outputs.debian_digest }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          SHORT_SHA: ${{ steps.image.outputs.shortsha }}
+        run: |
+          set -euo pipefail
+
+          promote_index() {
+            local digest=$1
+            shift
+            local tag
+            local promoted_digest
+            local -a tag_args=()
+
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            for tag in "$@"; do
+              case "${tag}" in
+              "${IMAGE_NAME}":*) ;;
+              *) return 1 ;;
+              esac
+              tag_args+=(--tag "${tag}")
+            done
+            test "${#tag_args[@]}" -eq 4
+            docker buildx imagetools create \
+              --prefer-index=false \
+              "${tag_args[@]}" \
+              "${IMAGE_NAME}@${digest}"
+            for tag in "$@"; do
+              promoted_digest="$(docker buildx imagetools inspect "${tag}" | awk '$1 == "Digest:" { print $2; exit }')"
+              test "${promoted_digest}" = "${digest}"
+            done
+          }
+
+          promote_index "${DEBIAN_DIGEST}" \
+            "${IMAGE_NAME}:edge" \
+            "${IMAGE_NAME}:dev-${SHORT_SHA}"
+          promote_index "${ALPINE_DIGEST}" \
+            "${IMAGE_NAME}:edge-alpine" \
+            "${IMAGE_NAME}:dev-${SHORT_SHA}-alpine"
+
+      - name: Publish image digests and sizes
+        env:
+          ALPINE_AMD64_BYTES: ${{ steps.inputs.outputs.alpine_amd64_bytes }}
+          ALPINE_ARM64_BYTES: ${{ steps.inputs.outputs.alpine_arm64_bytes }}
+          ALPINE_DIGEST: ${{ steps.assemble.outputs.alpine_digest }}
+          DEBIAN_AMD64_BYTES: ${{ steps.inputs.outputs.debian_amd64_bytes }}
+          DEBIAN_ARM64_BYTES: ${{ steps.inputs.outputs.debian_arm64_bytes }}
+          DEBIAN_DIGEST: ${{ steps.assemble.outputs.debian_digest }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          SHORT_SHA: ${{ steps.image.outputs.shortsha }}
+        run: |
+          set -euo pipefail
+          to_mib() {
+            awk -v bytes="$1" 'BEGIN { printf "%.2f", bytes / 1048576 }'
+          }
+          {
+            echo "## Verified development images"
+            echo
+            echo "All four platform images passed startup, health, persistence, hardening, and graceful-shutdown smoke checks before these tags moved."
+            echo
+            echo "| Tag | Platform | Compressed transfer size |"
+            echo "| --- | --- | ---: |"
+            echo "| \`${IMAGE_NAME}:dev-${SHORT_SHA}\` | linux/amd64 | $(to_mib "${DEBIAN_AMD64_BYTES}") MiB |"
+            echo "| \`${IMAGE_NAME}:dev-${SHORT_SHA}\` | linux/arm64 | $(to_mib "${DEBIAN_ARM64_BYTES}") MiB |"
+            echo "| \`${IMAGE_NAME}:dev-${SHORT_SHA}-alpine\` | linux/amd64 | $(to_mib "${ALPINE_AMD64_BYTES}") MiB |"
+            echo "| \`${IMAGE_NAME}:dev-${SHORT_SHA}-alpine\` | linux/arm64 | $(to_mib "${ALPINE_ARM64_BYTES}") MiB |"
+            echo
+            echo "- Debian/distroless index: \`${DEBIAN_DIGEST}\`"
+            echo "- Alpine index: \`${ALPINE_DIGEST}\`"
+          } >>"${GITHUB_STEP_SUMMARY}"
