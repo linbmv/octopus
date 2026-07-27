@@ -51,12 +51,14 @@ type Relay struct {
 	// StreamColdStartFirstEventTimeoutSeconds bounds the wait for the first
 	// stream event on channels without adaptive health samples when another
 	// failover candidate exists. Zero disables the cold-start override.
-	StreamColdStartFirstEventTimeoutSeconds int   `mapstructure:"stream_cold_start_first_event_timeout_seconds"`
-	MaxUpstreamAttempts                     int   `mapstructure:"max_upstream_attempts"`
-	StreamFirstEventBudgetSeconds           int   `mapstructure:"stream_first_event_budget_seconds"`
-	MaxJSONRequestBytes                     int64 `mapstructure:"max_json_request_bytes"`
-	MaxImageRequestBytes                    int64 `mapstructure:"max_image_request_bytes"`
-	MaxNonStreamResponseBytes               int64 `mapstructure:"max_non_stream_response_bytes"`
+	StreamColdStartFirstEventTimeoutSeconds int `mapstructure:"stream_cold_start_first_event_timeout_seconds"`
+	// MaxUpstreamAttempts is an optional cost guard across keys, base URLs, and
+	// channels. Zero lets the finite iterator and request time budgets decide.
+	MaxUpstreamAttempts           int   `mapstructure:"max_upstream_attempts"`
+	StreamFirstEventBudgetSeconds int   `mapstructure:"stream_first_event_budget_seconds"`
+	MaxJSONRequestBytes           int64 `mapstructure:"max_json_request_bytes"`
+	MaxImageRequestBytes          int64 `mapstructure:"max_image_request_bytes"`
+	MaxNonStreamResponseBytes     int64 `mapstructure:"max_non_stream_response_bytes"`
 	// DialTimeoutSeconds bounds the TCP+TLS handshake phase for establishing
 	// the upstream connection. Zero uses Go's default dialer timeout (30s).
 	DialTimeoutSeconds int `mapstructure:"dial_timeout_seconds"`
@@ -270,13 +272,16 @@ func setDefaultsFor(v *viper.Viper) {
 	v.SetDefault("relay.stream_idle_timeout_seconds", 600)
 	v.SetDefault("relay.non_stream_attempt_timeout_seconds", 60)
 	v.SetDefault("relay.stream_cold_start_first_event_timeout_seconds", 30)
-	v.SetDefault("relay.max_upstream_attempts", 8)
+	v.SetDefault("relay.max_upstream_attempts", 0)
 	v.SetDefault("relay.stream_first_event_budget_seconds", 120)
 	v.SetDefault("relay.max_json_request_bytes", 32<<20)
 	v.SetDefault("relay.max_image_request_bytes", 64<<20)
 	v.SetDefault("relay.max_non_stream_response_bytes", 64<<20)
 	v.SetDefault("relay.dial_timeout_seconds", 10)
-	v.SetDefault("relay.response_header_timeout_seconds", 30)
+	// Request-scoped relay guards distinguish early candidates from the last
+	// candidate and streaming from non-streaming requests. A global transport
+	// cap would override those policies and reject slow but healthy LLM relays.
+	v.SetDefault("relay.response_header_timeout_seconds", 0)
 	v.SetDefault("observability.metrics.enabled", false)
 	v.SetDefault("observability.metrics.host", "127.0.0.1")
 	v.SetDefault("observability.metrics.port", 9090)

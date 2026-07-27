@@ -563,17 +563,24 @@ func classify503Error(responseBody []byte) Classification {
 		}
 	}
 
-	// 识别上游返回的 model_not_found / invalid_model / model_not_supported 等权限相关错误
-	// 同时支持英文通用表述和中文错误信息
-	if strings.Contains(bodyLower, "model_not_found") ||
-		strings.Contains(bodyLower, "model not found") ||
-		strings.Contains(bodyLower, "invalid_model") ||
-		strings.Contains(bodyLower, "model_not_supported") ||
-		strings.Contains(bodyLower, "not available") ||
-		strings.Contains(bodyLower, "no available") ||
-		strings.Contains(bodyLower, "unavailable") ||
-		strings.Contains(bodyLower, "无可用") ||
-		strings.Contains(bodyLower, "不可用") {
+	// Only model/routing-specific unavailability is key-scoped. Generic phrases
+	// such as "service temporarily unavailable" describe the endpoint and must
+	// skip the remaining keys instead of multiplying the same 503 by key count.
+	modelUnavailable := (strings.Contains(bodyLower, "model") && bodyContainsAny(bodyLower,
+		"not available",
+		"unavailable",
+	)) || (strings.Contains(bodyLower, "模型") && bodyContainsAny(bodyLower,
+		"无可用",
+		"不可用",
+	))
+	if bodyContainsAny(bodyLower,
+		"model_not_found",
+		"model not found",
+		"invalid_model",
+		"model_not_supported",
+		"no available channel",
+		"无可用渠道",
+	) || modelUnavailable {
 		return Classification{
 			Level:  ErrorLevelKey,
 			Reason: "503 model permission error (treat as key-level)",

@@ -64,6 +64,16 @@ func TestClassify503EdgeCases(t *testing.T) {
 			responseBody: []byte(`{"error": "分组 Gemini 下模型 deepseek/deepseek-v4-flash 无可用渠道（distributor）"}`),
 			wantLevel:    ErrorLevelKey,
 		},
+		{
+			name:         "generic service temporarily unavailable",
+			responseBody: []byte(`{"error":{"message":"service temporarily unavailable"}}`),
+			wantLevel:    ErrorLevelChannel,
+		},
+		{
+			name:         "generic upstream unavailable",
+			responseBody: []byte(`{"error":{"message":"upstream unavailable"}}`),
+			wantLevel:    ErrorLevelChannel,
+		},
 	}
 
 	for _, tt := range tests {
@@ -571,7 +581,6 @@ func TestClassifyEmbeddedInvalidRequestError(t *testing.T) {
 		})
 	}
 }
-
 
 // TestHTTPDateParsing tests HTTP-date format in Retry-After header
 func TestHTTPDateParsing(t *testing.T) {

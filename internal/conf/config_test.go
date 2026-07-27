@@ -52,8 +52,11 @@ func TestLoadUsesDefaultValues(t *testing.T) {
 	if config.Relay.StreamColdStartFirstEventTimeoutSeconds != 30 {
 		t.Fatalf("Relay.StreamColdStartFirstEventTimeoutSeconds = %d, want 30", config.Relay.StreamColdStartFirstEventTimeoutSeconds)
 	}
-	if config.Relay.MaxUpstreamAttempts != 8 || config.Relay.StreamFirstEventBudgetSeconds != 120 {
-		t.Fatalf("Relay request budget defaults = %#v, want attempts=8 budget=120s", config.Relay)
+	if config.Relay.MaxUpstreamAttempts != 0 || config.Relay.StreamFirstEventBudgetSeconds != 120 {
+		t.Fatalf("Relay request budget defaults = %#v, want unlimited attempts and budget=120s", config.Relay)
+	}
+	if config.Relay.DialTimeoutSeconds != 10 || config.Relay.ResponseHeaderTimeoutSeconds != 0 {
+		t.Fatalf("Relay transport timeout defaults = %#v, want dial=10s and response-header disabled", config.Relay)
 	}
 	if config.Relay.MaxJSONRequestBytes != 32<<20 || config.Relay.MaxImageRequestBytes != 64<<20 || config.Relay.MaxNonStreamResponseBytes != 64<<20 {
 		t.Fatalf("Relay body limit defaults = %#v", config.Relay)
