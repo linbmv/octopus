@@ -307,6 +307,32 @@ jobs:
         run: |
           set -euo pipefail
 
+          retry_registry_command() {
+            local attempt=1
+            local max_attempts=5
+            local output
+            local status
+
+            while true; do
+              if output="$("$@" 2>&1)"; then
+                printf '%s\n' "${output}"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= max_attempts )); then
+                output="${output//'%'/'%25'}"
+                output="${output//$'\r'/'%0D'}"
+                output="${output//$'\n'/'%0A'}"
+                echo "::error title=Registry command failed::${output}" >&2
+                return "${status}"
+              fi
+              echo "Registry command failed on attempt ${attempt}/${max_attempts}; retrying" >&2
+              sleep $((attempt * 3))
+              attempt=$((attempt + 1))
+            done
+          }
+
           assemble_index() {
             local variant=$1
             local amd64_digest=$2
@@ -316,13 +342,14 @@ jobs:
 
             [[ "${amd64_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "${arm64_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker buildx imagetools create \
+            retry_registry_command docker buildx imagetools create \
               --tag "${staging_tag}" \
               "${IMAGE_NAME}@${amd64_digest}" \
               "${IMAGE_NAME}@${arm64_digest}"
-            index_digest="$(docker buildx imagetools inspect "${staging_tag}" | awk '$1 == "Digest:" { print $2; exit }')"
+            index_digest="$(retry_registry_command docker buildx imagetools inspect "${staging_tag}" | \
+              awk '$1 == "Digest:" { print $2; exit }')"
             [[ "${index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker buildx imagetools inspect --raw "${IMAGE_NAME}@${index_digest}" | \
+            retry_registry_command docker buildx imagetools inspect --raw "${IMAGE_NAME}@${index_digest}" | \
               jq -e \
                 --arg amd64 "${amd64_digest}" \
                 --arg arm64 "${arm64_digest}" \
@@ -351,6 +378,32 @@ jobs:
         run: |
           set -euo pipefail
 
+          retry_registry_command() {
+            local attempt=1
+            local max_attempts=5
+            local output
+            local status
+
+            while true; do
+              if output="$("$@" 2>&1)"; then
+                printf '%s\n' "${output}"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= max_attempts )); then
+                output="${output//'%'/'%25'}"
+                output="${output//$'\r'/'%0D'}"
+                output="${output//$'\n'/'%0A'}"
+                echo "::error title=Registry command failed::${output}" >&2
+                return "${status}"
+              fi
+              echo "Registry command failed on attempt ${attempt}/${max_attempts}; retrying" >&2
+              sleep $((attempt * 3))
+              attempt=$((attempt + 1))
+            done
+          }
+
           promote_index() {
             local digest=$1
             shift
@@ -367,12 +420,13 @@ jobs:
               tag_args+=(--tag "${tag}")
             done
             test "${#tag_args[@]}" -eq 4
-            docker buildx imagetools create \
+            retry_registry_command docker buildx imagetools create \
               --prefer-index=false \
               "${tag_args[@]}" \
               "${IMAGE_NAME}@${digest}"
             for tag in "$@"; do
-              promoted_digest="$(docker buildx imagetools inspect "${tag}" | awk '$1 == "Digest:" { print $2; exit }')"
+              promoted_digest="$(retry_registry_command docker buildx imagetools inspect "${tag}" | \
+                awk '$1 == "Digest:" { print $2; exit }')"
               test "${promoted_digest}" = "${digest}"
             done
           }
