@@ -28,7 +28,7 @@ Codex 要求的认证头、账户 ID、流式参数和 token 刷新。
 
 ```bash
 curl http://127.0.0.1:8080/v1/responses \
-  -H 'Authorization: Bearer OCTOPUS_API_KEY' \
+  -H "Authorization: Bearer ${OCTOPUS_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "gpt-5.3-codex",

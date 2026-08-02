@@ -2,7 +2,7 @@
 # moving either fixture causes Gitleaks to review it again.
 internal/server/middleware/logger_test.go:generic-api-key:12
 internal/op/user_init_test.go:generic-api-key:79
-internal/server/server_test.go:generic-api-key:216
+internal/server/server_test.go:generic-api-key:217
 
 # Historical false positives: a redacted logger fixture and a shell variable
 # reference in documentation.
