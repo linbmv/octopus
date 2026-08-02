@@ -48,7 +48,7 @@ func TestFetchCodexQuotaDoesNotExposeUpstreamBodyOnFailure(t *testing.T) {
 	defer server.Close()
 
 	_, _, _, _, _, err := fetchCodexQuota(context.Background(), server.Client(), &oauth.OAuthCredentials{AccessToken: "access-token"}, "", server.URL)
-	if err == nil || err.Error() != "Codex quota request failed with HTTP status 401" {
+	if err == nil || err.Error() != "codex quota request failed with HTTP status 401" {
 		t.Fatalf("error = %v", err)
 	}
 }

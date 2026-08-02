@@ -170,7 +170,7 @@ func putCodexQuota(keyID int, entry codexQuotaCacheEntry) {
 
 func fetchCodexQuota(ctx context.Context, client *http.Client, credentials *oauth.OAuthCredentials, accountID, endpoint string) (string, *CodexQuotaRateLimit, *CodexQuotaRateLimit, []CodexQuotaAdditionalRateLimit, *CodexQuotaCredits, error) {
 	if client == nil || credentials == nil || strings.TrimSpace(credentials.AccessToken) == "" {
-		return "", nil, nil, nil, nil, errors.New("Codex OAuth credentials are unavailable")
+		return "", nil, nil, nil, nil, errors.New("codex OAuth credentials are unavailable")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -194,10 +194,10 @@ func fetchCodexQuota(ctx context.Context, client *http.Client, credentials *oaut
 		return "", nil, nil, nil, nil, errors.New("read Codex quota response")
 	}
 	if len(body) > codexQuotaBodyLimit {
-		return "", nil, nil, nil, nil, errors.New("Codex quota response is too large")
+		return "", nil, nil, nil, nil, errors.New("codex quota response is too large")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", nil, nil, nil, nil, fmt.Errorf("Codex quota request failed with HTTP status %d", response.StatusCode)
+		return "", nil, nil, nil, nil, fmt.Errorf("codex quota request failed with HTTP status %d", response.StatusCode)
 	}
 	var decoded codexQuotaResponse
 	if err := json.Unmarshal(body, &decoded); err != nil {

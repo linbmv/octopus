@@ -41,11 +41,12 @@ export function ChannelOverview({
                     <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{t(`policyProfiles.${channel.policy_profile}`)}</Badge>
                 </div>
 
+                {/* Keep the remote Codex account status near the top of the detail view. */}
+                <ChannelQuotaPanel channel={channel} />
                 <ChannelErrorOverview channelId={channel.id} />
                 <ChannelCircuitPanel channelId={channel.id} />
                 <SelfHealingPanel channel={channel} />
                 <CapabilityEvidencePanel channel={channel} />
-                <ChannelQuotaPanel channel={channel} />
                 <MetricSection title={t('sections.requests')} icon={TrendingUp}>
                     <DetailMetric icon={CheckCircle2} label={t('metrics.successRequests')} value={stats.request_success.formatted.value} unit={stats.request_success.formatted.unit} color="text-accent" />
                     <DetailMetric icon={XCircle} label={t('metrics.failedRequests')} value={stats.request_failed.formatted.value} unit={stats.request_failed.formatted.unit} color="text-destructive" />
@@ -85,7 +86,7 @@ export function ChannelOverview({
 
 function ChannelQuotaPanel({ channel }: { channel: Channel }) {
     const t = useTranslations('channel.detail.quota');
-    const isCodex = channel.type === ChannelType.OpenAICodex;
+    const isCodex = isCodexChannel(channel);
     const { data: quotas, isLoading, isError } = useChannelQuota(channel.id, isCodex);
     const refresh = useRefreshChannelQuota(channel.id);
     if (!isCodex) return null;
@@ -129,6 +130,10 @@ function ChannelQuotaPanel({ channel }: { channel: Channel }) {
             </div>
         </section>
     );
+}
+
+function isCodexChannel(channel: Pick<Channel, 'type'>) {
+    return String(channel.type).trim().toLowerCase() === ChannelType.OpenAICodex;
 }
 
 function hasQuotaWindows(quota: CodexQuota) {
@@ -243,7 +248,7 @@ function RuntimeLists({ channel }: { channel: Channel }) {
                     {channel.keys?.map((key) => (
                         <div key={key.id} className="flex items-center gap-3 border-b p-3 transition-colors last:border-0 hover:bg-accent/5 sm:p-4">
                             <div className={cn('size-2 shrink-0 rounded-full', key.enabled ? 'bg-emerald-500' : 'bg-destructive')} />
-							<span className="min-w-0 flex-1 truncate font-mono text-sm">{channel.type === ChannelType.OpenAICodex ? t('codexOAuthMasked') : maskChannelKey(key.channel_key)}</span>
+                            <span className="min-w-0 flex-1 truncate font-mono text-sm">{isCodexChannel(channel) ? t('codexOAuthMasked') : maskChannelKey(key.channel_key)}</span>
                             {key.remark && <span className="max-w-24 truncate text-xs text-muted-foreground" title={key.remark}>{key.remark}</span>}
                             <div className="flex shrink-0 items-center gap-2">
                                 {key.last_use_time_stamp > 0 && <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline-block">{new Date(key.last_use_time_stamp * 1000).toLocaleString()}</span>}
