@@ -87,6 +87,9 @@ OpenAI Chat 入口调用时，Octopus 也会把 `messages[].content[]` 中的 `f
   同时替换渠道 JSON 时，后台刷新不会覆盖管理员的新值。
 - 刷新器不把含 refresh token 的请求交给通用调试日志层，也不会把 OAuth JSON
   放进请求诊断 artifact。
-- 模型列表来自 Codex 适配器的静态目录，不会把整份 OAuth JSON 发送到 `/models`。
+- 模型列表来自 Codex 适配器的静态目录，不会把整份 OAuth JSON 发送到 `/models`；如果
+  access token 包含 `chatgpt_plan_type`，目录会按账户套餐过滤，避免把上游明确不支持的模型
+  展示出来。当前已验证 Plus 凭据可使用 `gpt-5.6-sol`，而 Go/Free 凭据不应展示它；上游
+  仍是请求时的最终权威。已有手工创建的分组不会被静默改名，刷新渠道模型后请选择返回列表中的模型。
 - 数据库及其备份会包含这份 OAuth JSON，应按高敏感凭据保存；一旦泄露，请在
   OpenAI 侧撤销或轮换后再更新渠道。

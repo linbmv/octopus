@@ -27,6 +27,27 @@ func TestParseFlatCredential(t *testing.T) {
 	}
 }
 
+func TestParseExtractsPlanFromAccessToken(t *testing.T) {
+	claims := map[string]any{
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_plan_type": "go",
+		},
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+	document, err := Parse(`{"type":"codex","access_token":"` + token + `","refresh_token":"refresh"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.PlanType() != "go" {
+		t.Fatalf("plan type = %q, want go", document.PlanType())
+	}
+}
+
 func TestParseNestedCredentialAndJWTExpiration(t *testing.T) {
 	expiresAt := time.Now().Add(45 * time.Minute).UTC().Truncate(time.Second)
 	raw := `{"tokens":{"access_token":"` + testJWT(expiresAt) + `","refresh_token":"refresh"}}`

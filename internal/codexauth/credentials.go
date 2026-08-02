@@ -24,6 +24,7 @@ type Document struct {
 	nested      bool
 	credentials oauth.OAuthCredentials
 	accountID   string
+	planType    string
 	disabled    bool
 }
 
@@ -33,6 +34,7 @@ type flatCredential struct {
 	RefreshToken string `json:"refresh_token"`
 	IDToken      string `json:"id_token"`
 	AccountID    string `json:"account_id"`
+	PlanType     string `json:"plan_type"`
 	Expired      string `json:"expired"`
 	ExpiresAt    string `json:"expires_at"`
 	LastRefresh  string `json:"last_refresh"`
@@ -99,10 +101,19 @@ func Parse(raw string) (*Document, error) {
 			expiresAt = refreshedAt.Add(time.Hour)
 		}
 	}
+	planType := strings.TrimSpace(flat.PlanType)
+	if claims, err := jwtClaims(accessToken); err == nil {
+		if auth, ok := claims["https://api.openai.com/auth"].(map[string]any); ok {
+			if claimPlan := stringClaim(auth, "chatgpt_plan_type"); claimPlan != "" {
+				planType = claimPlan
+			}
+		}
+	}
 	return &Document{
 		root:      root,
 		nested:    nested,
 		accountID: strings.TrimSpace(flat.AccountID),
+		planType:  planType,
 		disabled:  flat.Disabled,
 		credentials: oauth.OAuthCredentials{
 			ClientID:     codex.ClientID,
@@ -130,6 +141,16 @@ func (d *Document) AccountID() string {
 		return ""
 	}
 	return d.accountID
+}
+
+// PlanType returns the account plan extracted from the OAuth access token or
+// the imported document metadata. It is used only to narrow model discovery;
+// the upstream remains authoritative at request time.
+func (d *Document) PlanType() string {
+	if d == nil {
+		return ""
+	}
+	return d.planType
 }
 
 // Disabled is preserved as import metadata. Octopus's ChannelKey.Enabled flag
@@ -234,27 +255,42 @@ func firstCredentialTime(values ...string) time.Time {
 }
 
 func jwtExpiration(token string) time.Time {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return time.Time{}
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	claims, err := jwtClaims(token)
 	if err != nil {
 		return time.Time{}
 	}
-	var claims struct {
-		ExpiresAt json.Number `json:"exp"`
-	}
-	decoder := json.NewDecoder(strings.NewReader(string(payload)))
-	decoder.UseNumber()
-	if err := decoder.Decode(&claims); err != nil || claims.ExpiresAt == "" {
+	expiresAt, ok := claims["exp"].(json.Number)
+	if !ok || expiresAt == "" {
 		return time.Time{}
 	}
-	unix, err := claims.ExpiresAt.Int64()
+	unix, err := expiresAt.Int64()
 	if err != nil || unix <= 0 {
 		return time.Time{}
 	}
 	return time.Unix(unix, 0)
+}
+
+func jwtClaims(token string) (map[string]any, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return nil, errors.New("invalid JWT")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, errors.New("invalid JWT payload")
+	}
+	var claims map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(payload)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&claims); err != nil || claims == nil {
+		return nil, errors.New("invalid JWT claims")
+	}
+	return claims, nil
+}
+
+func stringClaim(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func firstNonEmpty(values ...string) string {

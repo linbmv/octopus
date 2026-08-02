@@ -9,12 +9,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bestruirui/octopus/internal/codexauth"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/requestrewrite"
 	"github.com/bestruirui/octopus/internal/utils/bodylimit"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/transformer"
-	openaicodex "github.com/looplj/axonhub/llm/transformer/openai/codex"
 )
 
 const (
@@ -87,7 +87,22 @@ type fetchResult struct {
 
 func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 	if request.Type == model.ChannelTypeOpenAICodex {
-		models := append([]string(nil), openaicodex.DefaultModels()...)
+		planType := ""
+		bestRank := -1
+		for _, key := range request.Keys {
+			if !key.Enabled {
+				continue
+			}
+			document, err := codexauth.Parse(key.ChannelKey)
+			if err != nil {
+				continue
+			}
+			if rank := codexPlanRank(document.PlanType()); rank > bestRank {
+				bestRank = rank
+				planType = document.PlanType()
+			}
+		}
+		models := codexModelsForPlan(planType)
 		if request.MatchRegex != nil && *request.MatchRegex != "" {
 			return filterModels(models, *request.MatchRegex)
 		}
@@ -128,6 +143,21 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 		return filterModels(fetchModel, *request.MatchRegex)
 	}
 	return fetchModel, nil
+}
+
+func codexPlanRank(plan string) int {
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "pro":
+		return 7
+	case "team", "business", "enterprise", "edu", "education":
+		return 6
+	case "plus", "go", "prolite":
+		return 5
+	case "free", "free_workspace", "k12":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func mergeFetchedModels(results []fetchResult) ([]string, error) {
