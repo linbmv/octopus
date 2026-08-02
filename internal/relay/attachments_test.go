@@ -151,7 +151,7 @@ func TestPatchRelayAttachmentsDoesNotDuplicateExistingPart(t *testing.T) {
 func TestMiddlewareAppliesRelayAttachmentCompatibilityAtOutboundBoundary(t *testing.T) {
 	source := []byte(`{"messages":[{"role":"user","content":[{"type":"file","file":{"filename":"report.pdf","file_data":"data:application/pdf;base64,JVBERi0="}}]}]}`)
 	ra := newTestAttempt(&dbmodel.Channel{Type: llm.APIFormatOpenAIResponse})
-	ra.relayRun.internalRequest = &llm.Request{
+	ra.internalRequest = &llm.Request{
 		APIFormat: llm.APIFormatOpenAIChatCompletion,
 		RawRequest: &httpclient.Request{
 			Body: source,
