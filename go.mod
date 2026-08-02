@@ -14,7 +14,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/influxdata/tdigest v0.0.1
-	github.com/looplj/axonhub/llm v0.0.0-20260721085352-2664f4593566
+	github.com/looplj/axonhub/llm v0.0.0-20260802013930-ac70e652765b
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/samber/lo v1.52.0

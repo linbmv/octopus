@@ -150,6 +150,17 @@ func TestFinalAttemptReturnsLastFailedWhenNoSuccess(t *testing.T) {
 	}
 }
 
+func TestFinalAttemptKeepsFailedChannelWhenLaterCandidatesAreSkipped(t *testing.T) {
+	attempts := []dbmodel.ChannelAttempt{
+		{ChannelID: 41, ChannelName: "Linuxdo_Andrew", ChannelKeyID: 9, Status: dbmodel.AttemptFailed},
+		{ChannelID: 42, ChannelName: "Linuxdo_无名", Status: dbmodel.AttemptSkipped, Msg: "no available key"},
+	}
+	id, name, keyID, status := finalAttempt(attempts)
+	if id != 41 || name != "Linuxdo_Andrew" || keyID != 9 || status != dbmodel.AttemptFailed {
+		t.Fatalf("got id=%d name=%s key=%d status=%s, want the actual failed channel", id, name, keyID, status)
+	}
+}
+
 func TestFinalAttemptReturnsClientCanceledWhenNoSuccess(t *testing.T) {
 	attempts := []dbmodel.ChannelAttempt{
 		{ChannelID: 1, ChannelName: "a", ChannelKeyID: 11, Status: dbmodel.AttemptClientCancel},

@@ -240,17 +240,36 @@ func formatMillis(ms int) string {
 }
 
 func finalAttempt(attempts []model.ChannelAttempt) (int, string, int, model.AttemptStatus) {
-	var last model.ChannelAttempt
+	// Prefer the last real upstream outcome over a later routing decision. A
+	// failed request can be followed by skipped/circuit-broken candidates while
+	// the iterator exhausts the group. Those bookkeeping events must not replace
+	// the channel that actually produced the final error in the relay log.
 	for i := len(attempts) - 1; i >= 0; i-- {
 		a := attempts[i]
-		if a.Status == model.AttemptSuccess {
+		if isRealUpstreamAttempt(a.Status) {
 			return a.ChannelID, a.ChannelName, a.ChannelKeyID, a.Status
 		}
-		if last.Status == "" && (a.ChannelID > 0 || a.ChannelName != "" || a.Status != "") {
-			last = a
+	}
+
+	// If no request reached an upstream, retain the most recent routing
+	// decision as the best available attribution (for example, a circuit break
+	// or an unavailable channel).
+	for i := len(attempts) - 1; i >= 0; i-- {
+		a := attempts[i]
+		if a.ChannelID > 0 || a.ChannelName != "" || a.Status != "" {
+			return a.ChannelID, a.ChannelName, a.ChannelKeyID, a.Status
 		}
 	}
-	return last.ChannelID, last.ChannelName, last.ChannelKeyID, last.Status
+	return 0, "", 0, ""
+}
+
+func isRealUpstreamAttempt(status model.AttemptStatus) bool {
+	switch status {
+	case model.AttemptSuccess, model.AttemptFailed, model.AttemptClientCancel:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *RelayMetrics) saveLog(ctx context.Context, err error, duration time.Duration, attempts []model.ChannelAttempt, channelID int, channelName string) {
@@ -344,13 +363,53 @@ func (m *RelayMetrics) requestContent() string {
 	return string(finalJSON)
 }
 
-// filterRequestForLog 去掉 RawRequest 和图片二进制字段，避免 multipart 原始 body 或图片内容落库。
+// filterRequestForLog 去掉 RawRequest、附件正文和可携带凭据的附件 URL，
+// 避免 multipart 原始 body 或 JSON 多模态内容落库。
 func filterRequestForLog(req *llm.Request) *llm.Request {
 	if req == nil {
 		return nil
 	}
 	filtered := *req
 	filtered.RawRequest = nil
+	if len(req.Messages) > 0 {
+		filtered.Messages = append([]llm.Message(nil), req.Messages...)
+		for i := range filtered.Messages {
+			message := &filtered.Messages[i]
+			if len(message.Content.MultipleContent) == 0 {
+				continue
+			}
+			message.Content.MultipleContent = append([]llm.MessageContentPart(nil), message.Content.MultipleContent...)
+			for j := range message.Content.MultipleContent {
+				part := &message.Content.MultipleContent[j]
+				switch part.Type {
+				case "image_url":
+					if part.ImageURL != nil {
+						image := *part.ImageURL
+						image.URL = "[redacted attachment]"
+						part.ImageURL = &image
+					}
+				case "video_url":
+					if part.VideoURL != nil {
+						video := *part.VideoURL
+						video.URL = "[redacted attachment]"
+						part.VideoURL = &video
+					}
+				case "document":
+					if part.Document != nil {
+						document := *part.Document
+						document.URL = "[redacted attachment]"
+						part.Document = &document
+					}
+				case "input_audio":
+					if part.InputAudio != nil {
+						audio := *part.InputAudio
+						audio.Data = "[redacted attachment]"
+						part.InputAudio = &audio
+					}
+				}
+			}
+		}
+	}
 	if req.Image != nil {
 		img := *req.Image
 		if len(img.Images) > 0 {

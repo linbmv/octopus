@@ -49,6 +49,13 @@ func (m *relayPipelineMiddleware) OnOutboundRawRequest(ctx context.Context, requ
 			// Non-fatal: let the request proceed; upstream will reject if fields remain.
 		}
 	}
+	// AxonHub's common model intentionally covers the intersection of provider
+	// formats. Restore file/input_file parts at the final wire boundary so a
+	// Chat/Responses/Anthropic/Gemini conversion does not silently drop an
+	// attachment that the source protocol can represent.
+	if err := m.attempt.applyRelayAttachmentCompatibility(request); err != nil {
+		log.Warnf("failed to preserve outbound attachments: %v", err)
+	}
 	m.captureOutboundRequestArtifact(request)
 
 	return request, nil
