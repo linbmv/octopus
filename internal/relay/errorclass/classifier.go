@@ -265,6 +265,11 @@ func classifyEmbeddedError(statusCode int, responseBody []byte, allowPlainTextMa
 			"无可用渠道",
 			"distributor",
 			"is not supported by any configured account",
+			// Codex ChatGPT OAuth backend rejects models this specific account
+			// cannot serve. A different channel may still serve the model, so this
+			// is channel-scoped, not a client payload error.
+			"is not supported when using codex",
+			"not supported when using codex with a chatgpt account",
 			"模型不存在",
 			"model_not_supported",
 		) {
@@ -760,6 +765,8 @@ func classify400Error(responseBody []byte) Classification {
 		"model permission",
 		"model_permission",
 		"is not supported by any configured account",
+		"is not supported when using codex",
+		"not supported when using codex with a chatgpt account",
 		"distributor",
 		"无可用渠道",
 		"分组",

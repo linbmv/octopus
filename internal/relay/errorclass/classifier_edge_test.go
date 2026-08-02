@@ -554,6 +554,12 @@ func TestClassifyEmbeddedInvalidRequestError(t *testing.T) {
 			wantLevel:  ErrorLevelChannel,
 		},
 		{
+			name:       "codex chatgpt account model unsupported is channel",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"type":"invalid_request_error","message":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}}`,
+			wantLevel:  ErrorLevelChannel,
+		},
+		{
 			name:       "invalid_request with api key wording is key",
 			statusCode: http.StatusBadRequest,
 			body:       `{"error":{"type":"invalid_request_error","message":"Invalid api key"}}`,
