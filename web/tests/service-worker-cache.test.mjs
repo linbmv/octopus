@@ -86,6 +86,8 @@ describe('service worker cache boundary', () => {
             'octopus-static-v1',
             'octopus-app-v2',
             'octopus-static-v2',
+            'octopus-app-v3',
+            'octopus-static-v3',
             'octopus-font',
             'unrelated-cache',
         ]);
@@ -95,7 +97,7 @@ describe('service worker cache boundary', () => {
 
         expect(caches.delete).toHaveBeenCalledWith('octopus-app-v1');
         expect(caches.delete).toHaveBeenCalledWith('octopus-static-v1');
-        for (const retained of ['octopus-app-v2', 'octopus-static-v2', 'octopus-font', 'unrelated-cache']) {
+        for (const retained of ['octopus-app-v3', 'octopus-static-v3', 'octopus-font', 'unrelated-cache']) {
             expect(caches.delete).not.toHaveBeenCalledWith(retained);
         }
     });
