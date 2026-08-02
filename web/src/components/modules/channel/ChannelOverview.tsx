@@ -1,8 +1,8 @@
 'use client';
 
-import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, ShieldAlert, Trash2, TrendingUp, XCircle } from 'lucide-react';
+import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, RefreshCw, ShieldAlert, Trash2, TrendingUp, WalletCards, XCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { ChannelType, useChannelCircuit, useChannelRuntimeURLs, useResetChannelCircuit, type Channel } from '@/api/endpoints/channel';
+import { ChannelType, useChannelCircuit, useChannelQuota, useChannelRuntimeURLs, useRefreshChannelQuota, useResetChannelCircuit, type Channel, type CodexQuota, type CodexQuotaWindow } from '@/api/endpoints/channel';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { ChannelErrorOverview } from '@/components/modules/error-observability';
 import { Badge } from '@/components/ui/badge';
@@ -45,6 +45,7 @@ export function ChannelOverview({
                 <ChannelCircuitPanel channelId={channel.id} />
                 <SelfHealingPanel channel={channel} />
                 <CapabilityEvidencePanel channel={channel} />
+                <ChannelQuotaPanel channel={channel} />
                 <MetricSection title={t('sections.requests')} icon={TrendingUp}>
                     <DetailMetric icon={CheckCircle2} label={t('metrics.successRequests')} value={stats.request_success.formatted.value} unit={stats.request_success.formatted.unit} color="text-accent" />
                     <DetailMetric icon={XCircle} label={t('metrics.failedRequests')} value={stats.request_failed.formatted.value} unit={stats.request_failed.formatted.unit} color="text-destructive" />
@@ -79,6 +80,97 @@ export function ChannelOverview({
                 </Button>
             </div>
         </>
+    );
+}
+
+function ChannelQuotaPanel({ channel }: { channel: Channel }) {
+    const t = useTranslations('channel.detail.quota');
+    const isCodex = channel.type === ChannelType.OpenAICodex;
+    const { data: quotas, isLoading, isError } = useChannelQuota(channel.id, isCodex);
+    const refresh = useRefreshChannelQuota(channel.id);
+    if (!isCodex) return null;
+
+    return (
+        <section className="space-y-3">
+            <div className="flex items-center justify-between">
+                <SectionTitle icon={WalletCards}>{t('title')}</SectionTitle>
+                <Button size="sm" variant="outline" className="h-7 rounded-xl px-2 text-xs" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+                    <RefreshCw className={cn('mr-1.5 size-3.5', refresh.isPending && 'animate-spin')} />
+                    {refresh.isPending ? t('refreshing') : t('refresh')}
+                </Button>
+            </div>
+            {isLoading && <div className="rounded-2xl border bg-card p-4 text-sm text-muted-foreground">{t('loading')}</div>}
+            {isError && <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{t('loadFailed')}</div>}
+            {!isLoading && !isError && !quotas?.length && <div className="rounded-2xl border bg-card p-4 text-sm text-muted-foreground">{t('empty')}</div>}
+            <div className="space-y-2">
+                {quotas?.map((quota) => (
+                    <div key={quota.channel_key_id} className="rounded-2xl border bg-card p-3 transition-colors hover:bg-accent/5 sm:p-4">
+                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                                {quota.key_remark || t('key', { id: quota.channel_key_id })}
+                            </span>
+                            {quota.plan_type && <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{quota.plan_type}</Badge>}
+                            {quota.rate_limit?.limit_reached || quota.rate_limit?.allowed === false ? (
+                                <Badge variant="secondary" className="h-5 bg-red-500/15 px-1.5 text-[10px] text-red-700 dark:text-red-400">{t('limited')}</Badge>
+                            ) : quota.rate_limit && (
+                                <Badge variant="secondary" className="h-5 bg-emerald-500/15 px-1.5 text-[10px] text-emerald-700 dark:text-emerald-400">{t('available')}</Badge>
+                            )}
+                        </div>
+                        {quota.error ? (
+                            <p className="text-xs text-destructive">{quota.error}</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {quotaWindowRows(quota, t)}
+                                {!hasQuotaWindows(quota) && <p className="text-xs text-muted-foreground">{t('unavailable')}</p>}
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </section>
+    );
+}
+
+function hasQuotaWindows(quota: CodexQuota) {
+    return Boolean(
+        quota.rate_limit?.primary_window || quota.rate_limit?.secondary_window ||
+        quota.code_review_rate_limit?.primary_window || quota.code_review_rate_limit?.secondary_window ||
+        quota.additional_rate_limits?.some((item) => item.rate_limit?.primary_window || item.rate_limit?.secondary_window),
+    );
+}
+
+function quotaWindowRows(quota: CodexQuota, t: ReturnType<typeof useTranslations>) {
+    const groups = [
+        { label: '', rateLimit: quota.rate_limit },
+        { label: t('codeReview'), rateLimit: quota.code_review_rate_limit },
+        ...(quota.additional_rate_limits ?? []).map((item, index) => ({
+            label: item.limit_name || item.metered_feature || t('additional', { id: index + 1 }),
+            rateLimit: item.rate_limit,
+        })),
+    ];
+    return groups.flatMap((group, groupIndex) => [
+        group.rateLimit?.primary_window ? <QuotaWindowRow key={`${groupIndex}-primary`} window={group.rateLimit.primary_window} t={t} prefix={group.label} /> : null,
+        group.rateLimit?.secondary_window ? <QuotaWindowRow key={`${groupIndex}-secondary`} window={group.rateLimit.secondary_window} t={t} prefix={group.label} /> : null,
+    ]);
+}
+
+function QuotaWindowRow({ window, t, prefix }: { window: CodexQuotaWindow; t: ReturnType<typeof useTranslations>; prefix?: string }) {
+    const used = Math.max(0, Math.min(100, window.used_percent));
+    const remaining = 100 - used;
+    const windowLabel = window.limit_window_seconds === 18_000
+        ? t('fiveHours')
+        : window.limit_window_seconds === 604_800
+            ? t('sevenDays')
+            : t('windowDays', { count: Math.max(1, Math.round(window.limit_window_seconds / 86_400)) });
+    const reset = window.reset_at > 0 ? new Date(window.reset_at * 1000).toLocaleString() : t('unknown');
+    return (
+        <div className="grid gap-1 text-xs sm:grid-cols-[minmax(80px,auto)_1fr_auto] sm:items-center sm:gap-3">
+            <span className="font-medium text-muted-foreground">{prefix ? `${prefix} · ` : ''}{windowLabel}</span>
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div className={cn('h-full rounded-full transition-all', used >= 90 ? 'bg-destructive' : used >= 70 ? 'bg-orange-500' : 'bg-emerald-500')} style={{ width: `${used}%` }} />
+            </div>
+            <span className="whitespace-nowrap text-muted-foreground">{t('usage', { used, remaining })} · {t('reset', { time: reset })}</span>
+        </div>
     );
 }
 

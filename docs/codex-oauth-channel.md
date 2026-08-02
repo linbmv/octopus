@@ -91,5 +91,10 @@ OpenAI Chat 入口调用时，Octopus 也会把 `messages[].content[]` 中的 `f
   access token 包含 `chatgpt_plan_type`，目录会按账户套餐过滤，避免把上游明确不支持的模型
   展示出来。当前已验证 Plus 凭据可使用 `gpt-5.6-sol`，而 Go/Free 凭据不应展示它；上游
   仍是请求时的最终权威。已有手工创建的分组不会被静默改名，刷新渠道模型后请选择返回列表中的模型。
+- Codex 渠道详情中的 **远端额度** 查询对应 ChatGPT 的
+  `GET https://chatgpt.com/backend-api/wham/usage`，不会把账号邮箱、账户 ID 或 OAuth
+  token 返回给前端。普通打开详情页使用 2 分钟内存缓存，**刷新额度** 会绕过缓存；每个
+  凭据独立查询，显示套餐、上游返回的额度窗口、已用/剩余百分比和重置时间。额度查询会
+  复用请求路径的 token provider，因此访问额度时也会按现有规则自动刷新即将过期的 access token。
 - 数据库及其备份会包含这份 OAuth JSON，应按高敏感凭据保存；一旦泄露，请在
   OpenAI 侧撤销或轮换后再更新渠道。

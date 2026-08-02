@@ -466,6 +466,72 @@ export function useChannelRuntimeURLs(channelId: number, enabled: boolean = true
     });
 }
 
+export type CodexQuotaWindow = {
+    used_percent: number;
+    limit_window_seconds: number;
+    reset_after_seconds: number;
+    reset_at: number;
+};
+
+export type CodexQuota = {
+    channel_key_id: number;
+    key_remark?: string;
+    plan_type?: string;
+    rate_limit?: {
+        allowed: boolean;
+        limit_reached: boolean;
+        primary_window?: CodexQuotaWindow;
+        secondary_window?: CodexQuotaWindow;
+    };
+    code_review_rate_limit?: {
+        allowed: boolean;
+        limit_reached: boolean;
+        primary_window?: CodexQuotaWindow;
+        secondary_window?: CodexQuotaWindow;
+    };
+    additional_rate_limits?: Array<{
+        limit_name?: string;
+        metered_feature?: string;
+        rate_limit?: {
+            allowed: boolean;
+            limit_reached: boolean;
+            primary_window?: CodexQuotaWindow;
+            secondary_window?: CodexQuotaWindow;
+        };
+    }>;
+    credits?: {
+        has_credits: boolean;
+        unlimited: boolean;
+        overage_limit_reached: boolean;
+        balance: string;
+    };
+    fetched_at: string;
+    error?: string;
+};
+
+export function useChannelQuota(channelId: number, enabled: boolean = true) {
+    return useQuery({
+        queryKey: ['channels', channelId, 'quota'],
+        queryFn: async () => apiClient.get<CodexQuota[]>(`/api/v1/channel/${channelId}/quota`),
+        enabled: enabled && channelId > 0,
+        staleTime: 60_000,
+        refetchInterval: 300_000,
+    });
+}
+
+export function useRefreshChannelQuota(channelId: number) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async () => apiClient.post<CodexQuota[]>(`/api/v1/channel/${channelId}/quota/refresh`, {}),
+        onSuccess: (data) => {
+            queryClient.setQueryData(['channels', channelId, 'quota'], data);
+        },
+        onError: (error) => {
+            logger.error('Codex quota refresh failed:', error);
+        },
+    });
+}
+
 /**
  * 手动清除渠道熔断 Hook：被冻结的模型无需等待冷却即可重新投入使用。
  * 可选 model 参数精确到单个模型；缺省清除整个渠道。
