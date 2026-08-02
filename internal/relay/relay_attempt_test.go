@@ -811,6 +811,7 @@ func TestBuildRealAttemptSkipsCircuitBrokenKeyWithinChannel(t *testing.T) {
 	}
 	if attempt == nil {
 		t.Fatal("buildRealAttempt returned nil, want attempt with second key")
+		return
 	}
 	if attempt.usedKey.ID != secondKeyID || attempt.keyIndex != 1 {
 		t.Fatalf("selected key = %d at index %d, want key %d at index 1", attempt.usedKey.ID, attempt.keyIndex, secondKeyID)

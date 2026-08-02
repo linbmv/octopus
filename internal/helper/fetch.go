@@ -14,6 +14,7 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/bodylimit"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/transformer"
+	openaicodex "github.com/looplj/axonhub/llm/transformer/openai/codex"
 )
 
 const (
@@ -85,6 +86,13 @@ type fetchResult struct {
 }
 
 func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
+	if request.Type == model.ChannelTypeOpenAICodex {
+		models := append([]string(nil), openaicodex.DefaultModels()...)
+		if request.MatchRegex != nil && *request.MatchRegex != "" {
+			return filterModels(models, *request.MatchRegex)
+		}
+		return models, nil
+	}
 	client, err := ChannelHttpClient(&request)
 	if err != nil {
 		return nil, err

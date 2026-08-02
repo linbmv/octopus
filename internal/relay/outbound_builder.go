@@ -51,7 +51,7 @@ func BuildFinalOutboundRequest(
 		}
 		attemptRequest.RawRequest = &rawCopy
 	}
-	outbound, err := newOutbound(channel.Type, attemptRequest, baseURL, key.ChannelKey)
+	outbound, err := newChannelOutbound(channel, attemptRequest, baseURL, key)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +72,9 @@ func BuildFinalOutboundRequest(
 		if err := attempt.stripCodexFieldsFromRequestBody(request); err != nil {
 			return nil, fmt.Errorf("clean cross-format diagnostic request: %w", err)
 		}
+	}
+	if err := attempt.applyRelayAttachmentCompatibility(request); err != nil {
+		return nil, fmt.Errorf("preserve diagnostic outbound attachments: %w", err)
 	}
 	rewrite := requestartifact.RewriteSummary{}
 	if summary := metrics.OutboundRequestSummary; summary != nil {

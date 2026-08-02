@@ -690,6 +690,7 @@
             },
             "noBaseUrls": "No Base URLs",
             "noKeys": "No Keys",
+			"codexOAuthMasked": "Codex OAuth JSON ••••••",
             "policyProfile": "Reliability profile",
             "policyProfiles": {
                 "standard": "Standard",
@@ -912,6 +913,19 @@
                 "untrusted_proxy": "Untrusted proxy"
             },
             "apiKey": "API Key",
+			"codexOAuthCredential": "Codex OAuth JSON",
+			"codexOAuthCredentialHint": "Paste or import the complete Codex credential JSON. Octopus refreshes it automatically before expiry and writes rotated tokens back to this channel key.",
+			"codexOAuthCredentialPlaceholder": "Paste the complete credential JSON here",
+			"codexOAuthImport": "Import JSON",
+			"codexOAuthImportLimit": "Up to 8 KiB; read locally in your browser",
+			"codexOAuthImportErrors": {
+				"empty": "The selected JSON file is empty.",
+				"tooLarge": "The credential JSON exceeds the 8 KiB limit.",
+				"invalidJson": "The selected file must contain one JSON object.",
+				"invalidType": "The credential type must be codex.",
+				"missingAccessToken": "The credential JSON must contain access_token or tokens.access_token.",
+				"readFailed": "The selected file could not be read."
+			},
             "customHeader": "Custom Headers",
             "customHeaderKey": "Header Key",
             "customHeaderValue": "Header Value",
@@ -956,6 +970,7 @@
             "modelClearAll": "Clear All",
             "typeOpenAIChat": "OpenAI Chat",
             "typeOpenAIResponse": "OpenAI Response",
+			"typeOpenAICodex": "Codex OAuth",
             "typeOpenAIEmbedding": "OpenAI Embedding",
             "typeAnthropic": "Anthropic",
             "typeGemini": "Gemini",

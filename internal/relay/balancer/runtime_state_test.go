@@ -25,6 +25,7 @@ func TestStickyNormalizesRequestModel(t *testing.T) {
 	entry := GetSticky(7, "gpt-4o", time.Minute)
 	if entry == nil {
 		t.Fatal("GetSticky() = nil, want normalized model hit")
+		return
 	}
 	if entry.ChannelID != 11 || entry.ChannelKeyID != 101 {
 		t.Fatalf("sticky entry = (%d, %d), want (11, 101)", entry.ChannelID, entry.ChannelKeyID)

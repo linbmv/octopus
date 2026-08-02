@@ -16,7 +16,10 @@ const (
 	AutoGroupTypeRegex AutoGroupType = 3 //正则匹配
 )
 
-const ChannelTypeDoubao llm.APIFormat = "doubao"
+const (
+	ChannelTypeDoubao      llm.APIFormat = "doubao"
+	ChannelTypeOpenAICodex llm.APIFormat = "openai/codex"
+)
 
 type ChannelPolicyProfile string
 

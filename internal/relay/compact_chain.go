@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
 )
@@ -15,7 +16,8 @@ func isCompactOpenAIChannel(channelType llm.APIFormat, request *llm.Request) boo
 	}
 	switch channelType {
 	case llm.APIFormatOpenAIResponse,
-		llm.APIFormatOpenAIResponseCompact:
+		llm.APIFormatOpenAIResponseCompact,
+		dbmodel.ChannelTypeOpenAICodex:
 		return true
 	default:
 		return false

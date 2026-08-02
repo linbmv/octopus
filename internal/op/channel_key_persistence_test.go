@@ -154,6 +154,58 @@ func TestSaveCacheReturnsChannelKeyPersistenceError(t *testing.T) {
 	assertDirtyChannelKeyIDs(t, pending.ID)
 }
 
+func TestChannelKeyCredentialReplacePersistsAndRefreshesCaches(t *testing.T) {
+	setupChannelKeyPersistenceTest(t)
+	channel, keys := createChannelKeyPersistenceFixture(t, 1)
+	key := keys[0]
+	const next = `{"type":"codex","access_token":"new","refresh_token":"rotated"}`
+
+	if err := ChannelKeyCredentialReplace(context.Background(), channel.ID, key.ID, key.ChannelKey, next); err != nil {
+		t.Fatalf("ChannelKeyCredentialReplace() error = %v", err)
+	}
+	var persisted model.ChannelKey
+	if err := db.GetDB().First(&persisted, key.ID).Error; err != nil {
+		t.Fatalf("read persisted key: %v", err)
+	}
+	if persisted.ChannelKey != next {
+		t.Fatal("rotated credential was not persisted")
+	}
+	cachedKey, ok := channelKeyCache.Get(key.ID)
+	if !ok || cachedKey.ChannelKey != next {
+		t.Fatal("channel key cache did not receive rotated credential")
+	}
+	cachedChannel, ok := channelCache.Get(channel.ID)
+	if !ok || len(cachedChannel.Keys) != 1 || cachedChannel.Keys[0].ChannelKey != next {
+		t.Fatal("channel cache did not receive rotated credential")
+	}
+}
+
+func TestChannelKeyCredentialReplaceRejectsConcurrentAdministratorChange(t *testing.T) {
+	setupChannelKeyPersistenceTest(t)
+	channel, keys := createChannelKeyPersistenceFixture(t, 1)
+	key := keys[0]
+	const administratorValue = "administrator-replacement"
+	if err := db.GetDB().Model(&model.ChannelKey{}).Where("id = ?", key.ID).Update("channel_key", administratorValue).Error; err != nil {
+		t.Fatalf("replace key directly: %v", err)
+	}
+
+	err := ChannelKeyCredentialReplace(context.Background(), channel.ID, key.ID, key.ChannelKey, "oauth-refresh-value")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("ChannelKeyCredentialReplace() error = %v, want conflict", err)
+	}
+	var persisted model.ChannelKey
+	if err := db.GetDB().First(&persisted, key.ID).Error; err != nil {
+		t.Fatalf("read persisted key: %v", err)
+	}
+	if persisted.ChannelKey != administratorValue {
+		t.Fatal("OAuth refresh overwrote the administrator credential")
+	}
+	cached, ok := channelKeyCache.Get(key.ID)
+	if !ok || cached.ChannelKey != key.ChannelKey {
+		t.Fatal("failed compare-and-swap changed the cache")
+	}
+}
+
 func setupChannelKeyPersistenceTest(t *testing.T) {
 	t.Helper()
 	initTestDB(t)

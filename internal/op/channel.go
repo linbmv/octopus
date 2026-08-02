@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
@@ -18,6 +20,7 @@ var channelCache = cache.New[int, model.Channel](16)
 var channelKeyCache = cache.New[int, model.ChannelKey](16)
 var channelKeyCacheNeedUpdate = newDirtySet()
 var channelService = NewChannelService(channelCache, channelKeyCache)
+var channelKeyPersistenceMu sync.Mutex
 
 type ChannelService struct {
 	channels    cache.Cache[int, model.Channel]
@@ -96,6 +99,49 @@ func ChannelKeyUpdate(key model.ChannelKey) error {
 	channelKeyCacheNeedUpdate.mark(key.ID)
 	return nil
 }
+
+// ChannelKeyCredentialReplace durably persists a rotated credential before it
+// updates the in-memory caches. The compare-and-swap predicate prevents an
+// OAuth refresh from overwriting a concurrent administrator key replacement.
+func ChannelKeyCredentialReplace(ctx context.Context, channelID, keyID int, previous, next string) error {
+	previous = strings.TrimSpace(previous)
+	next = strings.TrimSpace(next)
+	if channelID <= 0 || keyID <= 0 || previous == "" || next == "" || len(next) > model.MaxChannelKeyBytes {
+		return fmt.Errorf("%w: invalid channel credential replacement", ErrInvalidInput)
+	}
+	if previous == next {
+		return nil
+	}
+	channelKeyPersistenceMu.Lock()
+	defer channelKeyPersistenceMu.Unlock()
+
+	result := db.GetDB().WithContext(ctx).Model(&model.ChannelKey{}).
+		Where("id = ? AND channel_id = ? AND channel_key = ?", keyID, channelID, previous).
+		Update("channel_key", next)
+	if result.Error != nil {
+		return fmt.Errorf("persist refreshed channel credential: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: channel credential changed concurrently", ErrConflict)
+	}
+
+	if cached, ok := channelKeyCache.Get(keyID); ok && cached.ChannelID == channelID && cached.ChannelKey == previous {
+		cached.ChannelKey = next
+		channelKeyCache.Set(keyID, cached)
+	}
+	if channel, ok := channelCache.Get(channelID); ok {
+		keys := append([]model.ChannelKey(nil), channel.Keys...)
+		for i := range keys {
+			if keys[i].ID == keyID && keys[i].ChannelKey == previous {
+				keys[i].ChannelKey = next
+				channel.Keys = keys
+				channelCache.Set(channelID, channel)
+				break
+			}
+		}
+	}
+	return nil
+}
 func ChannelBaseUrlUpdate(channelID int, baseUrl []model.BaseUrl) error {
 	ch, ok := channelCache.Get(channelID)
 	if !ok {
@@ -115,6 +161,8 @@ func ChannelBaseUrlUpdate(channelID int, baseUrl []model.BaseUrl) error {
 
 // ChannelKeySaveDB 将运行时更新过的 ChannelKey 缓存写入数据库。
 func ChannelKeySaveDB(ctx context.Context) error {
+	channelKeyPersistenceMu.Lock()
+	defer channelKeyPersistenceMu.Unlock()
 	// Snapshot versions are acknowledged only after every write succeeds. A
 	// concurrent ChannelKeyUpdate advances its version and therefore survives
 	// clearUnchanged for the next retry.
@@ -156,9 +204,12 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 	if err := model.ValidateChannelUpdate(req); err != nil {
 		return nil, fmt.Errorf("%w: invalid channel update: %v", ErrInvalidInput, err)
 	}
-	_, ok := channelCache.Get(req.ID)
+	currentChannel, ok := channelCache.Get(req.ID)
 	if !ok {
 		return nil, fmt.Errorf("%w: channel not found", ErrNotFound)
+	}
+	if err := validateChannelAuthenticationUpdate(currentChannel, req); err != nil {
+		return nil, fmt.Errorf("%w: invalid channel update: %v", ErrInvalidInput, err)
 	}
 	if req.Name != nil {
 		for id, existing := range channelCache.GetAll() {
@@ -236,6 +287,43 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 
 	channel, _ := channelCache.Get(req.ID)
 	return &channel, nil
+}
+
+func validateChannelAuthenticationUpdate(current model.Channel, req *model.ChannelUpdateRequest) error {
+	channelType := current.Type
+	if req.Type != nil {
+		channelType = *req.Type
+	}
+	baseURLs := current.BaseUrls
+	if req.BaseUrls != nil {
+		baseURLs = *req.BaseUrls
+	}
+
+	keysByID := make(map[int]model.ChannelKey, len(current.Keys))
+	for _, key := range current.Keys {
+		keysByID[key.ID] = key
+	}
+	for _, id := range req.KeysToDelete {
+		delete(keysByID, id)
+	}
+	for _, update := range req.KeysToUpdate {
+		key, exists := keysByID[update.ID]
+		if !exists {
+			continue
+		}
+		if update.ChannelKey != nil {
+			key.ChannelKey = strings.TrimSpace(*update.ChannelKey)
+		}
+		keysByID[update.ID] = key
+	}
+	keys := make([]model.ChannelKey, 0, len(keysByID)+len(req.KeysToAdd))
+	for _, key := range keysByID {
+		keys = append(keys, key)
+	}
+	for _, key := range req.KeysToAdd {
+		keys = append(keys, model.ChannelKey{Enabled: key.Enabled, ChannelKey: strings.TrimSpace(key.ChannelKey), Remark: key.Remark})
+	}
+	return model.ValidateChannelAuthentication(channelType, baseURLs, keys)
 }
 
 func applyChannelPatchTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {

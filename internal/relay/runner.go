@@ -296,7 +296,7 @@ func (r *relayRun) buildRealAttempt(
 		if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {
 			continue
 		}
-		outAdapter, err := newOutbound(channel.Type, r.internalRequest, baseURL, usedKey.ChannelKey)
+		outAdapter, err := newChannelOutbound(channel, r.internalRequest, baseURL, usedKey)
 		if err != nil {
 			// SkipCircuitBreak 通过时可能已把该 key 置为半开试探者；此处未发出
 			// 真实请求即放弃，必须归还试探名额，否则半开态会滞留到租约超时。

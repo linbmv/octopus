@@ -13,7 +13,7 @@ const (
 // compact strategies per channel type.
 func CompactStrategyOrder(format llm.APIFormat) []CompactStrategy {
 	switch format {
-	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
+	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact, ChannelTypeOpenAICodex:
 		return []CompactStrategy{CompactStrategyOfficial}
 	default:
 		return nil

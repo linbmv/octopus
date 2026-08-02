@@ -679,6 +679,7 @@ func TestMiddlewareCapturesRedactedFinalRequestArtifact(t *testing.T) {
 	artifact := ra.metrics.OutboundRequestArtifact
 	if artifact == nil {
 		t.Fatal("final request artifact was not captured")
+		return
 	}
 	if artifact.Protocol != string(llm.APIFormatOpenAIResponse) || artifact.Model != "test-model" {
 		t.Fatalf("artifact metadata = %#v", artifact)

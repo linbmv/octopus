@@ -265,6 +265,7 @@ func TestApplyRawPassthroughRecordsOutboundSummary(t *testing.T) {
 	s := ra.metrics.OutboundRequestSummary
 	if s == nil {
 		t.Fatal("raw passthrough 生效时应记录出站摘要")
+		return
 	}
 	if !s.RawPassthrough {
 		t.Fatal("摘要应标记 raw_passthrough=true")

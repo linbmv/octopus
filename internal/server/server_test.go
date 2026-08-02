@@ -201,6 +201,7 @@ func TestStartAndClose(t *testing.T) {
 	httpSrvMu.Unlock()
 	if srv == nil {
 		t.Fatal("Start() did not retain the HTTP server")
+		return
 	}
 	if srv.ReadHeaderTimeout != 5*time.Second || srv.IdleTimeout != 120*time.Second || srv.MaxHeaderBytes != 1<<20 {
 		t.Fatalf("HTTP limits = read-header %s, idle %s, max-header %d", srv.ReadHeaderTimeout, srv.IdleTimeout, srv.MaxHeaderBytes)
@@ -296,6 +297,7 @@ func TestStartExposesMetricsOnlyOnAuthenticatedDedicatedListener(t *testing.T) {
 	httpSrvMu.Unlock()
 	if metricsServer == nil {
 		t.Fatal("dedicated metrics server was not retained")
+		return
 	}
 	if metricsServer.ReadHeaderTimeout != 5*time.Second || metricsServer.IdleTimeout != 120*time.Second || metricsServer.MaxHeaderBytes != 1<<20 {
 		t.Fatalf("metrics HTTP limits = read-header %s, idle %s, max-header %d", metricsServer.ReadHeaderTimeout, metricsServer.IdleTimeout, metricsServer.MaxHeaderBytes)

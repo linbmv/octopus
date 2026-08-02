@@ -213,6 +213,7 @@ func TestSetStickyStoresActualModel(t *testing.T) {
 	entry := GetSticky(11, "octopus-model", 60*time.Second)
 	if entry == nil {
 		t.Fatal("GetSticky() = nil, want entry")
+		return
 	}
 	if entry.ModelName != "upstream-z" {
 		t.Fatalf("entry.ModelName = %q, want upstream-z", entry.ModelName)

@@ -2,7 +2,7 @@
 
 import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, ShieldAlert, Trash2, TrendingUp, XCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useChannelCircuit, useChannelRuntimeURLs, useResetChannelCircuit, type Channel } from '@/api/endpoints/channel';
+import { ChannelType, useChannelCircuit, useChannelRuntimeURLs, useResetChannelCircuit, type Channel } from '@/api/endpoints/channel';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { ChannelErrorOverview } from '@/components/modules/error-observability';
 import { Badge } from '@/components/ui/badge';
@@ -151,7 +151,7 @@ function RuntimeLists({ channel }: { channel: Channel }) {
                     {channel.keys?.map((key) => (
                         <div key={key.id} className="flex items-center gap-3 border-b p-3 transition-colors last:border-0 hover:bg-accent/5 sm:p-4">
                             <div className={cn('size-2 shrink-0 rounded-full', key.enabled ? 'bg-emerald-500' : 'bg-destructive')} />
-                            <span className="min-w-0 flex-1 truncate font-mono text-sm">{maskChannelKey(key.channel_key)}</span>
+							<span className="min-w-0 flex-1 truncate font-mono text-sm">{channel.type === ChannelType.OpenAICodex ? t('codexOAuthMasked') : maskChannelKey(key.channel_key)}</span>
                             {key.remark && <span className="max-w-24 truncate text-xs text-muted-foreground" title={key.remark}>{key.remark}</span>}
                             <div className="flex shrink-0 items-center gap-2">
                                 {key.last_use_time_stamp > 0 && <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline-block">{new Date(key.last_use_time_stamp * 1000).toLocaleString()}</span>}

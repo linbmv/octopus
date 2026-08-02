@@ -228,6 +228,7 @@ func assertDatabaseMatrixSchemaAndMigrations(t *testing.T, dbType string) {
 	conn := db.GetDB()
 	if conn == nil {
 		t.Fatal("database connection is nil")
+		return
 	}
 	wantDialect := dbType
 	if wantDialect == "postgresql" {

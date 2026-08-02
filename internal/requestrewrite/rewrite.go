@@ -25,7 +25,7 @@ func IsProtectedHeader(name string) bool {
 	case "authorization", "proxy-authorization", "authentication",
 		"x-api-key", "x-goog-api-key", "api-key", "apikey",
 		"token", "x-auth-token", "x-access-token", "access-token",
-		"x-amz-security-token", "cookie", "set-cookie":
+		"x-amz-security-token", "cookie", "set-cookie", "chatgpt-account-id":
 		return true
 	}
 	return strings.Contains(name, "authorization") ||

@@ -77,6 +77,7 @@ func TestChannelLLMListFallbacksEmptyChannelName(t *testing.T) {
 
 	if found == nil {
 		t.Fatalf("未找到 channel_id=%d 的 LLMChannel", emptyNameChannel.ID)
+		return
 	}
 
 	// 验证 fallback 逻辑：空 name 应该被替换为 "Channel {ID}"
@@ -120,6 +121,7 @@ func TestChannelLLMListPreservesNonEmptyChannelName(t *testing.T) {
 
 	if found == nil {
 		t.Fatalf("未找到 channel_id=%d 的 LLMChannel", normalChannel.ID)
+		return
 	}
 
 	// 正常名称应该原样保留

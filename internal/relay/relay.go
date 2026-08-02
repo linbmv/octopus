@@ -395,7 +395,7 @@ func (ra *relayAttempt) switchToNextBaseURL() bool {
 		if nextBaseURL == "" || nextBaseURL == ra.baseURL {
 			continue
 		}
-		outAdapter, err := newOutbound(ra.channel.Type, ra.internalRequest, nextBaseURL, ra.usedKey.ChannelKey)
+		outAdapter, err := newChannelOutbound(ra.channel, ra.internalRequest, nextBaseURL, ra.usedKey)
 		if err != nil {
 			continue
 		}
@@ -423,7 +423,7 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		if ra.iter != nil && ra.iter.SkipCircuitBreak(ra.channel.ID, nextKey.ID, ra.channel.Name, nextKeyRemark) {
 			continue
 		}
-		outAdapter, err := newOutbound(ra.channel.Type, ra.internalRequest, ra.baseURL, nextKey.ChannelKey)
+		outAdapter, err := newChannelOutbound(ra.channel, ra.internalRequest, ra.baseURL, nextKey)
 		if err != nil {
 			// 同 buildRealAttempt：刚被授予的半开试探名额必须归还。
 			balancer.RecordProbeAbort(ra.channel.ID, nextKey.ID, ra.internalRequest.Model)

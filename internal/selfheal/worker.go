@@ -503,7 +503,7 @@ func minimalDiagnosticRequest(protocol llm.APIFormat, modelName string) *llm.Req
 	quotedModel := strconv.Quote(modelName)
 	var rawBody []byte
 	switch protocol {
-	case llm.APIFormatOpenAIResponse:
+	case llm.APIFormatOpenAIResponse, model.ChannelTypeOpenAICodex:
 		rawBody = []byte(fmt.Sprintf(`{"model":%s,"input":"Reply with OK.","max_output_tokens":8,"stream":false}`, quotedModel))
 	case llm.APIFormatAnthropicMessage:
 		rawBody = []byte(fmt.Sprintf(`{"model":%s,"messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":8,"stream":false}`, quotedModel))

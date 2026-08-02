@@ -7,7 +7,7 @@ import (
 )
 
 func TestProtectedAuthenticationHeaders(t *testing.T) {
-	for _, name := range []string{"Authorization", "Proxy-Authorization", "x-api-key", "X-Goog-Api-Key", "X-Auth-Token", "X-Session-Token", "X-Amz-Credential", "Cookie"} {
+	for _, name := range []string{"Authorization", "Proxy-Authorization", "x-api-key", "X-Goog-Api-Key", "X-Auth-Token", "X-Session-Token", "X-Amz-Credential", "Cookie", "Chatgpt-Account-Id"} {
 		if !IsProtectedHeader(name) {
 			t.Fatalf("IsProtectedHeader(%q) = false", name)
 		}

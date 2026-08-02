@@ -212,7 +212,7 @@ func userAgentCandidates(channel *model.Channel, protocol llm.APIFormat) []strin
 	case llm.APIFormatAnthropicMessage:
 		add("claude-cli")
 		add("claude-code")
-	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
+	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact, model.ChannelTypeOpenAICodex:
 		add("codex-tui/0.144.6")
 		add("codex-cli")
 	default:
@@ -254,7 +254,7 @@ func headerCandidates(channel *model.Channel, protocol llm.APIFormat) []Variant 
 	switch protocol {
 	case llm.APIFormatAnthropicMessage:
 		add(Variant{Description: "add Anthropic beta client header", HeaderSet: map[string]string{"anthropic-beta": "prompt-caching-2024-07-31"}})
-	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
+	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact, model.ChannelTypeOpenAICodex:
 		add(Variant{Description: "add Codex originator header", HeaderSet: map[string]string{"originator": "codex-tui"}})
 		add(Variant{Description: "add Codex beta feature header", HeaderSet: map[string]string{"x-codex-beta-features": "remote_compaction_v2"}})
 	}
@@ -276,7 +276,7 @@ func bodyCandidates(protocol llm.APIFormat) []Variant {
 	}
 	add("enable streaming field", map[string]any{"stream": true}, nil)
 	add("remove store field", nil, []string{"store"})
-	if protocol == llm.APIFormatOpenAIResponse || protocol == llm.APIFormatOpenAIResponseCompact {
+	if protocol == llm.APIFormatOpenAIResponse || protocol == llm.APIFormatOpenAIResponseCompact || protocol == model.ChannelTypeOpenAICodex {
 		add("remove reasoning field", nil, []string{"reasoning"})
 		add("remove include field", nil, []string{"include"})
 		add("remove instructions field", nil, []string{"instructions"})

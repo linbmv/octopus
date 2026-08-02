@@ -28,6 +28,7 @@ export type ChannelRuntimeURLStatus = {
 export enum ChannelType {
     OpenAIChat = 'openai/chat_completions',
     OpenAIResponse = 'openai/responses',
+    OpenAICodex = 'openai/codex',
     Anthropic = 'anthropic/messages',
     Gemini = 'gemini/contents',
     Volcengine = 'doubao',

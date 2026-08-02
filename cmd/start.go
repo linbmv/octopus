@@ -97,6 +97,9 @@ var startCmd = &cobra.Command{
 		if err := runtimeManager.Register("health_persistence", relay.DefaultHealthPersistenceWorker()); err != nil {
 			return fmt.Errorf("register health persistence worker: %w", err)
 		}
+		if err := runtimeManager.Register("codex_oauth_refresh", relay.DefaultCodexOAuthRefreshWorker()); err != nil {
+			return fmt.Errorf("register Codex OAuth refresh worker: %w", err)
+		}
 		if err := runtimeManager.Register("scheduled_tasks", task.DefaultRuntimeWorker()); err != nil {
 			return fmt.Errorf("register scheduled workers: %w", err)
 		}

@@ -15,6 +15,8 @@ import { useEffect } from 'react';
 import { BaseUrlsSection, ChannelKeysSection, ChannelModelSection } from './FormSections';
 import { ChannelAdvancedSection } from './FormAdvancedSection';
 
+const CODEX_OAUTH_BASE_URL = 'https://chatgpt.com/backend-api/codex';
+
 export interface ChannelKeyFormItem {
     id?: number;
     enabled: boolean;
@@ -78,6 +80,11 @@ export function ChannelForm({
     // Ensure the form always shows at least 1 row for base_urls / keys / custom_header.
     // This avoids "empty list" UI and also keeps URL + APIKEY layout consistent.
     useEffect(() => {
+		if (formData.type === ChannelType.OpenAICodex &&
+			(formData.base_urls?.length !== 1 || formData.base_urls[0]?.url.trim() !== CODEX_OAUTH_BASE_URL)) {
+			onFormDataChange({ ...formData, base_urls: [{ url: CODEX_OAUTH_BASE_URL, delay: 0 }] });
+			return;
+		}
         if (!formData.base_urls || formData.base_urls.length === 0) {
             onFormDataChange({ ...formData, base_urls: [{ url: '', delay: 0 }] });
             return;
@@ -234,7 +241,16 @@ export function ChannelForm({
                     </label>
                     <Select
                         value={String(formData.type)}
-                        onValueChange={(value) => onFormDataChange({ ...formData, type: value as ChannelType })}
+                        onValueChange={(value) => {
+							const type = value as ChannelType;
+							onFormDataChange({
+								...formData,
+								type,
+								...(type === ChannelType.OpenAICodex
+									? { base_urls: [{ url: CODEX_OAUTH_BASE_URL, delay: 0 }] }
+									: {}),
+							});
+						}}
                     >
                         <SelectTrigger id={`${idPrefix}-type`} className="rounded-xl w-full border border-border px-4 py-2 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                             <SelectValue />
@@ -242,6 +258,7 @@ export function ChannelForm({
                         <SelectContent className='rounded-xl'>
                             <SelectItem className='rounded-xl' value={String(ChannelType.OpenAIChat)}>{t('typeOpenAIChat')}</SelectItem>
                             <SelectItem className='rounded-xl' value={String(ChannelType.OpenAIResponse)}>{t('typeOpenAIResponse')}</SelectItem>
+							<SelectItem className='rounded-xl' value={String(ChannelType.OpenAICodex)}>{t('typeOpenAICodex')}</SelectItem>
                             <SelectItem className='rounded-xl' value={String(ChannelType.Anthropic)}>{t('typeAnthropic')}</SelectItem>
                             <SelectItem className='rounded-xl' value={String(ChannelType.Gemini)}>{t('typeGemini')}</SelectItem>
                             <SelectItem className='rounded-xl' value={String(ChannelType.Volcengine)}>{t('typeVolcengine')}</SelectItem>
@@ -257,6 +274,7 @@ export function ChannelForm({
                 onAdd={handleAddBaseUrl}
                 onUpdate={handleUpdateBaseUrl}
                 onRemove={handleRemoveBaseUrl}
+				locked={formData.type === ChannelType.OpenAICodex}
             />
 
             <ChannelKeysSection
@@ -264,6 +282,7 @@ export function ChannelForm({
                 onAdd={handleAddKey}
                 onUpdate={handleUpdateKey}
                 onRemove={handleRemoveKey}
+				codexOAuth={formData.type === ChannelType.OpenAICodex}
             />
 
             <ChannelModelSection

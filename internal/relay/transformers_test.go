@@ -236,6 +236,7 @@ func TestRequestForOutboundPipelineKeepsCompactForChatChannel(t *testing.T) {
 	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
 	if got == nil {
 		t.Fatal("requestForOutboundPipeline returned nil")
+		return
 	}
 	if got == req {
 		t.Fatal("requestForOutboundPipeline 应返回当前 attempt 的请求副本")
@@ -253,6 +254,7 @@ func TestRequestForOutboundPipelineKeepsCompactForResponseChannel(t *testing.T) 
 	got := requestForOutboundPipeline(llm.APIFormatOpenAIResponse, req)
 	if got == nil {
 		t.Fatal("requestForOutboundPipeline returned nil")
+		return
 	}
 	if got.RequestType != llm.RequestTypeCompact {
 		t.Fatalf("OpenAI Response Compact 请求副本 RequestType = %q，期望保持 Compact", got.RequestType)
@@ -267,6 +269,7 @@ func TestRequestForOutboundPipelineKeepsCompactForResponseCompactChannel(t *test
 	got := requestForOutboundPipeline(llm.APIFormatOpenAIResponseCompact, req)
 	if got == nil {
 		t.Fatal("requestForOutboundPipeline returned nil")
+		return
 	}
 	if got.RequestType != llm.RequestTypeCompact {
 		t.Fatalf("OpenAI Response Compact 请求副本 RequestType = %q，期望保持 Compact", got.RequestType)
@@ -292,6 +295,7 @@ func TestRequestForOutboundPipelineDoesNotFallbackCompactToChat(t *testing.T) {
 	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
 	if got == nil {
 		t.Fatal("requestForOutboundPipeline returned nil")
+		return
 	}
 	if got.RequestType != llm.RequestTypeCompact {
 		t.Fatalf("RequestType = %q, 期望保持 Compact", got.RequestType)
@@ -329,6 +333,7 @@ func TestRequestForOutboundPipelineDeepCopiesStreamPointer(t *testing.T) {
 
 	if copy1 == nil || copy2 == nil {
 		t.Fatal("requestForOutboundPipeline returned nil")
+		return
 	}
 
 	// 验证副本的 Stream 指针不同于原始请求
@@ -364,6 +369,7 @@ func TestRequestForOutboundPipelineHandlesNilStream(t *testing.T) {
 	got := requestForOutboundPipeline(llm.APIFormatOpenAIChatCompletion, req)
 	if got == nil {
 		t.Fatal("requestForOutboundPipeline returned nil")
+		return
 	}
 	if got.Stream != nil {
 		t.Fatalf("Stream 应保持 nil，got %v", got.Stream)

@@ -378,11 +378,17 @@ Relay 会在解压前拒绝除空值/`identity` 以外的 `Content-Encoding`（4
 |----------|-------------|----------|-----------------|
 | OpenAI Chat | `/chat/completions` | `https://api.openai.com/v1` | `https://api.openai.com/v1/chat/completions` |
 | OpenAI Responses | `/responses` | `https://api.openai.com/v1` | `https://api.openai.com/v1/responses` |
+| Codex OAuth | `/responses` | `https://chatgpt.com/backend-api/codex`（固定） | `https://chatgpt.com/backend-api/codex/responses` |
 | OpenAI Images | `/images/generations`、`/images/edits`、`/images/variations` | `https://api.openai.com/v1` | `https://api.openai.com/v1/images/generations` |
 | Anthropic | `/messages` | `https://api.anthropic.com/v1` | `https://api.anthropic.com/v1/messages` |
 | Gemini | `/models/:model:generateContent` | `https://generativelanguage.googleapis.com/v1beta` | `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent` |
 
 > 💡 **提示**：填写 Base URL 时无需包含具体的 API 端点路径，程序会自动处理。
+
+Codex OAuth 渠道不是普通 OpenAI API Key 渠道。新建渠道时选择 **Codex OAuth**，导入本机
+JSON 文件或将完整内容粘贴到 **Codex OAuth JSON** 字段；Octopus 会在到期前自动刷新并
+原子写回轮换后的 token。附件请求格式、凭据字段兼容范围和安全边界见
+[Codex OAuth 渠道使用说明](docs/codex-oauth-channel.md)。
 
 ---
 

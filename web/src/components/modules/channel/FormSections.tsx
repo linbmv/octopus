@@ -1,4 +1,4 @@
-import { X, Plus, RefreshCw } from 'lucide-react';
+import { X, Plus, RefreshCw, Upload } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { isProtectedAuthenticationHeader } from './request-rewrite';
 import { useRef, useState } from 'react';
@@ -8,6 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import type { Channel } from '@/api/endpoints/channel';
 import type { ChannelKeyFormItem } from './Form';
+import {
+    MAX_CODEX_OAUTH_CREDENTIAL_BYTES,
+    parseCodexOAuthCredentialImport,
+    type CodexOAuthImportError,
+} from './codex-oauth-import';
 
 export function ChannelModelSection({
     idPrefix,
@@ -152,12 +157,14 @@ export function BaseUrlsSection({
     onAdd,
     onUpdate,
     onRemove,
+	locked = false,
 }: {
     idPrefix: string;
     baseUrls: Channel['base_urls'];
     onAdd: () => void;
     onUpdate: (idx: number, patch: Partial<Channel['base_urls'][number]>) => void;
     onRemove: (idx: number) => void;
+	locked?: boolean;
 }) {
     const t = useTranslations('channel.form');
 
@@ -167,7 +174,7 @@ export function BaseUrlsSection({
                 <label className="text-sm font-medium text-card-foreground">
                     {t('baseUrls')} {baseUrls.length > 0 ? `(${baseUrls.length})` : ''}
                 </label>
-                <Button
+				{!locked && <Button
                     type="button"
                     variant="ghost"
                     size="sm"
@@ -176,7 +183,7 @@ export function BaseUrlsSection({
                 >
                     <Plus className="h-3 w-3 mr-1" />
                     {t('add')}
-                </Button>
+                </Button>}
             </div>
             <div className="space-y-2">
                 {(baseUrls ?? []).map((u, idx) => (
@@ -188,9 +195,10 @@ export function BaseUrlsSection({
                             onChange={(e) => onUpdate(idx, { url: e.target.value })}
                             placeholder={t('baseUrlUrl')}
                             required={idx === 0}
+							readOnly={locked}
                             className="rounded-xl flex-1"
                         />
-                        <Button
+						{!locked && <Button
                             type="button"
                             variant="ghost"
                             size="sm"
@@ -200,7 +208,7 @@ export function BaseUrlsSection({
                             title="Remove"
                         >
                             <X className="h-4 w-4" />
-                        </Button>
+                        </Button>}
                     </div>
                 ))}
             </div>
@@ -213,19 +221,47 @@ export function ChannelKeysSection({
     onAdd,
     onUpdate,
     onRemove,
+	codexOAuth = false,
 }: {
     keys: ChannelKeyFormItem[];
     onAdd: () => void;
     onUpdate: (idx: number, patch: Partial<ChannelKeyFormItem>) => void;
     onRemove: (idx: number) => void;
+	codexOAuth?: boolean;
 }) {
     const t = useTranslations('channel.form');
+    const credentialFileInputs = useRef<Array<HTMLInputElement | null>>([]);
+    const [credentialImportErrors, setCredentialImportErrors] = useState<Record<number, CodexOAuthImportError | 'readFailed'>>({});
+
+    const handleCredentialImport = async (idx: number, file: File | undefined) => {
+        if (!file) return;
+        if (file.size > MAX_CODEX_OAUTH_CREDENTIAL_BYTES) {
+            setCredentialImportErrors((current) => ({ ...current, [idx]: 'tooLarge' }));
+            return;
+        }
+
+        try {
+            const result = parseCodexOAuthCredentialImport(await file.text());
+            if (!result.ok) {
+                setCredentialImportErrors((current) => ({ ...current, [idx]: result.error }));
+                return;
+            }
+            onUpdate(idx, { channel_key: result.value });
+            setCredentialImportErrors((current) => {
+                const next = { ...current };
+                delete next[idx];
+                return next;
+            });
+        } catch {
+            setCredentialImportErrors((current) => ({ ...current, [idx]: 'readFailed' }));
+        }
+    };
 
     return (
         <div className="space-y-2">
             <div className="flex items-center justify-between">
                 <label className="text-sm font-medium text-card-foreground">
-                    {t('apiKey')} {keys.length > 0 ? `(${keys.length})` : ''}
+					{t(codexOAuth ? 'codexOAuthCredential' : 'apiKey')} {keys.length > 0 ? `(${keys.length})` : ''}
                 </label>
                 <Button
                     type="button"
@@ -238,17 +274,62 @@ export function ChannelKeysSection({
                     {t('add')}
                 </Button>
             </div>
+			{codexOAuth && <p className="text-xs text-muted-foreground">{t('codexOAuthCredentialHint')}</p>}
             <div className="space-y-2">
                 {(keys ?? []).map((k, idx) => (
-                    <div key={k.id ?? `new-${idx}`} className="flex items-center gap-2">
-                        <Input
+					<div key={k.id ?? `new-${idx}`} className={`flex gap-2 ${codexOAuth ? 'items-start' : 'items-center'}`}>
+						{codexOAuth ? <div className="min-w-0 flex-1 space-y-2">
+                            <textarea
+                                value={k.channel_key}
+                                onChange={(e) => onUpdate(idx, { channel_key: e.target.value })}
+                                placeholder={t('codexOAuthCredentialPlaceholder')}
+                                required={idx === 0}
+                                rows={6}
+                                spellCheck={false}
+                                autoComplete="off"
+                                aria-label={t('codexOAuthCredential')}
+                                aria-invalid={credentialImportErrors[idx] !== undefined}
+                                className="min-h-32 w-full resize-y rounded-xl border border-input bg-transparent px-3 py-2 font-mono text-xs text-foreground shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive"
+                            />
+                            <div className="flex items-center gap-2">
+                                <input
+                                    ref={(element) => { credentialFileInputs.current[idx] = element; }}
+                                    type="file"
+                                    accept=".json,application/json"
+                                    className="sr-only"
+                                    aria-label={t('codexOAuthImport')}
+                                    onChange={(event) => {
+                                        const input = event.currentTarget;
+                                        void handleCredentialImport(idx, input.files?.[0]).finally(() => {
+                                            input.value = '';
+                                        });
+                                    }}
+                                />
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => credentialFileInputs.current[idx]?.click()}
+                                    className="h-8 rounded-xl text-xs"
+                                >
+                                    <Upload className="mr-1 h-3.5 w-3.5" />
+                                    {t('codexOAuthImport')}
+                                </Button>
+                                <span className="text-xs text-muted-foreground">{t('codexOAuthImportLimit')}</span>
+                            </div>
+                            {credentialImportErrors[idx] && (
+                                <p role="alert" className="text-xs text-destructive">
+                                    {t(`codexOAuthImportErrors.${credentialImportErrors[idx]}`)}
+                                </p>
+                            )}
+						</div> : <Input
                             type="text"
                             value={k.channel_key}
                             onChange={(e) => onUpdate(idx, { channel_key: e.target.value })}
                             placeholder={t('apiKey')}
                             required={idx === 0}
                             className="rounded-xl flex-1"
-                        />
+                        />}
                         <Input
                             type="text"
                             value={k.remark ?? ''}

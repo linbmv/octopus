@@ -690,6 +690,7 @@
             },
             "noBaseUrls": "暂无 Base URL",
             "noKeys": "暂无密钥",
+			"codexOAuthMasked": "Codex OAuth JSON ••••••",
             "policyProfile": "可靠性档案",
             "policyProfiles": {
                 "standard": "标准",
@@ -912,6 +913,19 @@
                 "untrusted_proxy": "非可信中转"
             },
             "apiKey": "API Key",
+			"codexOAuthCredential": "Codex OAuth JSON",
+			"codexOAuthCredentialHint": "粘贴或导入完整的 Codex 凭据 JSON。Octopus 会在 token 到期前自动刷新，并将轮换后的 token 写回这条渠道密钥。",
+			"codexOAuthCredentialPlaceholder": "在此粘贴完整的凭据 JSON",
+			"codexOAuthImport": "导入 JSON",
+			"codexOAuthImportLimit": "最大 8 KiB，仅在浏览器本地读取",
+			"codexOAuthImportErrors": {
+				"empty": "所选 JSON 文件为空。",
+				"tooLarge": "凭据 JSON 超过 8 KiB 限制。",
+				"invalidJson": "所选文件必须包含一个 JSON 对象。",
+				"invalidType": "凭据 type 必须为 codex。",
+				"missingAccessToken": "凭据 JSON 必须包含 access_token 或 tokens.access_token。",
+				"readFailed": "无法读取所选文件。"
+			},
             "customHeader": "自定义 Header",
             "customHeaderKey": "Header Key",
             "customHeaderValue": "Header Value",
@@ -956,6 +970,7 @@
             "modelClearAll": "清除全部",
             "typeOpenAIChat": "OpenAI Chat",
             "typeOpenAIResponse": "OpenAI Response",
+			"typeOpenAICodex": "Codex OAuth",
             "typeOpenAIEmbedding": "OpenAI Embedding",
             "typeAnthropic": "Anthropic",
             "typeGemini": "Gemini",

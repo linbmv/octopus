@@ -39,6 +39,12 @@ func newInbound(format llm.APIFormat) transformer.Inbound {
 }
 
 func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key string) (transformer.Outbound, error) {
+	if channelType == dbmodel.ChannelTypeOpenAICodex {
+		return newCodexOAuthOutbound(
+			&dbmodel.Channel{Type: channelType}, request, baseURL,
+			dbmodel.ChannelKey{ChannelKey: key},
+		)
+	}
 	requestType := llm.RequestTypeChat
 	if request != nil && request.RequestType != "" {
 		requestType = request.RequestType

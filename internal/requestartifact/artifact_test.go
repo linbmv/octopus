@@ -27,6 +27,7 @@ func TestBuildRedactsCredentialsAndRetainsProtocolFingerprint(t *testing.T) {
 
 	if artifact == nil {
 		t.Fatal("Build returned nil")
+		return
 	}
 	if artifact.Method != "POST" || artifact.Protocol != "openai/responses" {
 		t.Fatalf("basic request metadata = %#v", artifact)
