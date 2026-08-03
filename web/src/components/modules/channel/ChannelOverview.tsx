@@ -30,6 +30,15 @@ export function ChannelOverview({
     const t = useTranslations('channel.detail');
     return (
         <>
+            <div className="mb-2 flex justify-end gap-2">
+                <Button onClick={onEdit} variant={confirmingDelete ? 'secondary' : 'outline'} className="h-8 rounded-lg px-3 text-xs">
+                    {confirmingDelete ? t('actions.cancel') : t('actions.edit')}
+                </Button>
+                <Button onClick={onDelete} disabled={deletePending} variant="destructive" className="h-8 rounded-lg px-3 text-xs">
+                    <Trash2 className="mr-1.5 size-3.5" />
+                    {deletePending ? t('actions.deleting') : confirmingDelete ? t('actions.confirmDelete') : t('actions.delete')}
+                </Button>
+            </div>
             <div className="max-h-[68vh] space-y-4 overflow-y-auto sm:max-h-[72vh] sm:space-y-5">
                 <ChannelQuotaPanel channel={channel} />
                 {!isCodexChannel(channel) && <>
@@ -73,15 +82,6 @@ export function ChannelOverview({
                 </dl>
                 </>}
             </div>
-            {!isCodexChannel(channel) && <div className="grid gap-3 pt-2 sm:grid-cols-2">
-                <Button onClick={onEdit} variant={confirmingDelete ? 'secondary' : 'default'} className="h-12 w-full rounded-2xl">
-                    {confirmingDelete ? t('actions.cancel') : t('actions.edit')}
-                </Button>
-                <Button onClick={onDelete} disabled={deletePending} variant="destructive" className="h-12 w-full rounded-2xl">
-                    <Trash2 className={`size-4 transition-transform ${confirmingDelete ? 'scale-110' : ''}`} />
-                    {deletePending ? t('actions.deleting') : confirmingDelete ? t('actions.confirmDelete') : t('actions.delete')}
-                </Button>
-            </div>}
         </>
     );
 }
