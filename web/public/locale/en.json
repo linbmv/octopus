@@ -63,6 +63,25 @@
         "expired": "Expired",
         "supportedModels": "Supported Models"
     },
+    "codexQuota": {
+        "title": "Codex quota overview",
+        "description": "Live usage across all Codex OAuth channels",
+        "refresh": "Refresh all",
+        "refreshing": "Refreshing...",
+        "loading": "Loading remote quota...",
+        "loadFailed": "Unable to load Codex quota",
+        "available": "Available",
+        "limited": "Limited",
+        "key": "Key #{id}",
+        "codeReview": "Code Review",
+        "additional": "Additional quota #{id}",
+        "fiveHours": "5 hours",
+        "sevenDays": "7 days",
+        "windowDays": "{count} days",
+        "usage": "Used {used}% · {remaining}% remaining",
+        "reset": "Reset: {time}",
+        "unknown": "Unknown"
+    },
     "navbar": {
         "home": "Home",
         "channel": "Channel",

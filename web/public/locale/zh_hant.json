@@ -63,6 +63,25 @@
         "expired": "已過期",
         "supportedModels": "支援的模型"
     },
+    "codexQuota": {
+        "title": "Codex 全域額度",
+        "description": "所有 Codex OAuth 供應源的即時使用情況",
+        "refresh": "重新整理全部",
+        "refreshing": "重新整理中...",
+        "loading": "正在載入遠端額度...",
+        "loadFailed": "Codex 額度載入失敗",
+        "available": "可用",
+        "limited": "已限額",
+        "key": "金鑰 #{id}",
+        "codeReview": "Code Review",
+        "additional": "附加額度 #{id}",
+        "fiveHours": "5 小時",
+        "sevenDays": "7 天",
+        "windowDays": "{count} 天",
+        "usage": "已用 {used}% · 剩餘 {remaining}%",
+        "reset": "重設：{time}",
+        "unknown": "未知"
+    },
     "navbar": {
         "home": "主頁",
         "channel": "供應源",

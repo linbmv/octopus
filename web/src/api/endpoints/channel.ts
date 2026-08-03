@@ -474,6 +474,8 @@ export type CodexQuotaWindow = {
 };
 
 export type CodexQuota = {
+    channel_id: number;
+    channel_name?: string;
     channel_key_id: number;
     key_remark?: string;
     plan_type?: string;
@@ -528,6 +530,37 @@ export function useRefreshChannelQuota(channelId: number) {
         },
         onError: (error) => {
             logger.error('Codex quota refresh failed:', error);
+        },
+    });
+}
+
+export function useGlobalCodexQuota() {
+    return useQuery({
+        queryKey: ['channels', 'codex-quota', 'global'],
+        queryFn: async () => apiClient.get<CodexQuota[]>('/api/v1/channel/quota'),
+        staleTime: 60_000,
+        refetchInterval: 300_000,
+    });
+}
+
+export function useRefreshGlobalCodexQuota() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async () => apiClient.post<CodexQuota[]>('/api/v1/channel/quota/refresh', {}),
+        onSuccess: (data) => {
+            queryClient.setQueryData(['channels', 'codex-quota', 'global'], data);
+            const byChannel = new Map<number, CodexQuota[]>();
+            for (const quota of data) {
+                const channelQuotas = byChannel.get(quota.channel_id) ?? [];
+                channelQuotas.push(quota);
+                byChannel.set(quota.channel_id, channelQuotas);
+            }
+            for (const [channelID, quotas] of byChannel) {
+                queryClient.setQueryData(['channels', channelID, 'quota'], quotas);
+            }
+        },
+        onError: (error) => {
+            logger.error('Global Codex quota refresh failed:', error);
         },
     });
 }

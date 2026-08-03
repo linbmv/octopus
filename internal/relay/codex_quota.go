@@ -58,6 +58,8 @@ type CodexQuotaCredits struct {
 // also contains account identifiers and email addresses, which must not be
 // copied into an administrator API response unnecessarily.
 type CodexQuota struct {
+	ChannelID            int                             `json:"channel_id"`
+	ChannelName          string                          `json:"channel_name,omitempty"`
 	ChannelKeyID         int                             `json:"channel_key_id"`
 	KeyRemark            string                          `json:"key_remark,omitempty"`
 	PlanType             string                          `json:"plan_type,omitempty"`
@@ -107,7 +109,7 @@ func QueryCodexQuota(ctx context.Context, channel *dbmodel.Channel, force bool) 
 }
 
 func queryCodexQuotaForKey(ctx context.Context, channel *dbmodel.Channel, key dbmodel.ChannelKey, force bool) CodexQuota {
-	result := CodexQuota{ChannelKeyID: key.ID, KeyRemark: key.Remark}
+	result := CodexQuota{ChannelID: channel.ID, ChannelName: channel.Name, ChannelKeyID: key.ID, KeyRemark: key.Remark}
 	signature := codexProviderSignature(channel, key.ChannelKey)
 	if !force {
 		if cached, ok := getCodexQuota(key.ID, signature, time.Now()); ok {
