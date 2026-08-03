@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	codexQuotaEndpoint  = "https://chatgpt.com/backend-api/wham/usage"
-	codexQuotaUserAgent = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
-	codexQuotaBodyLimit = 1 << 20
-	codexQuotaCacheTTL  = 2 * time.Minute
-	codexQuotaErrorTTL  = 15 * time.Second
+	codexQuotaEndpoint       = "https://chatgpt.com/backend-api/wham/usage"
+	codexQuotaUserAgent      = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
+	codexQuotaBodyLimit      = 1 << 20
+	codexQuotaCacheTTL       = 2 * time.Minute
+	codexQuotaErrorTTL       = 15 * time.Second
+	codexQuotaKeyConcurrency = 8
 )
 
 // CodexQuotaWindow is one upstream rate-limit window. The upstream currently
@@ -90,6 +91,8 @@ var codexQuotaCache = struct {
 	entries map[int]codexQuotaCacheEntry
 }{entries: make(map[int]codexQuotaCacheEntry)}
 
+var codexQuotaSemaphore = make(chan struct{}, codexQuotaKeyConcurrency)
+
 // QueryCodexQuota returns one quota result per enabled Codex OAuth key. A
 // normal read uses a short in-memory cache; force bypasses it for the manual
 // refresh action. Each key is isolated so one expired/broken credential does
@@ -98,13 +101,32 @@ func QueryCodexQuota(ctx context.Context, channel *dbmodel.Channel, force bool) 
 	if channel == nil || channel.Type != dbmodel.ChannelTypeOpenAICodex {
 		return nil
 	}
-	results := make([]CodexQuota, 0, len(channel.Keys))
+	keys := make([]dbmodel.ChannelKey, 0, len(channel.Keys))
 	for _, key := range channel.Keys {
 		if !key.Enabled || strings.TrimSpace(key.ChannelKey) == "" {
 			continue
 		}
-		results = append(results, queryCodexQuotaForKey(ctx, channel, key, force))
+		keys = append(keys, key)
 	}
+	if len(keys) == 0 {
+		return nil
+	}
+
+	// A global quota request already runs one job per channel. Query the keys
+	// within each channel concurrently as well, while sharing a small bound so
+	// a manual refresh cannot create an unbounded burst to the provider.
+	results := make([]CodexQuota, len(keys))
+	var waitGroup sync.WaitGroup
+	for index, key := range keys {
+		waitGroup.Add(1)
+		go func(index int, key dbmodel.ChannelKey) {
+			defer waitGroup.Done()
+			codexQuotaSemaphore <- struct{}{}
+			results[index] = queryCodexQuotaForKey(ctx, channel, key, force)
+			<-codexQuotaSemaphore
+		}(index, key)
+	}
+	waitGroup.Wait()
 	return results
 }
 
