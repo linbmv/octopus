@@ -1,12 +1,12 @@
 'use client';
 
-import { Activity, Gauge, RefreshCw, WalletCards } from 'lucide-react';
+import { RefreshCw, WalletCards } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { ChannelType, useChannelList, useGlobalCodexQuota, useRefreshGlobalCodexQuota, type CodexQuota } from '@/api/endpoints/channel';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import { CodexQuotaCard, countCodexQuotaWindows } from './CodexQuotaCard';
+import { CodexQuotaCard } from './CodexQuotaCard';
 
 /**
  * The quota surface is deliberately rendered in a portal-backed overlay. It
@@ -36,7 +36,7 @@ export function GlobalCodexQuota() {
                     {quotaQuery.isLoading || channelsQuery.isLoading ? <RefreshCw className="size-3.5 animate-spin text-muted-foreground" /> : <span className={cn('font-semibold tabular-nums', summary.maxUsed >= 90 ? 'text-destructive' : summary.maxUsed >= 70 ? 'text-orange-600 dark:text-orange-400' : 'text-emerald-600 dark:text-emerald-400')}>{summary.maxUsed}%</span>}
                 </Button>
             </PopoverTrigger>
-            <PopoverContent align="end" sideOffset={10} className="w-[min(calc(100vw-1rem),64rem)] overflow-hidden p-0">
+            <PopoverContent align="end" sideOffset={10} className="w-[min(calc(100vw-1rem),36rem)] overflow-hidden p-0">
                 <div className="flex max-h-[min(88vh,56rem)] flex-col">
                     <header className="flex shrink-0 items-start gap-3 border-b border-border/70 bg-card/95 p-4">
                         <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"><WalletCards className="size-4" /></span>
@@ -46,10 +46,7 @@ export function GlobalCodexQuota() {
 
                     {quotaQuery.isError && <p className="p-4 text-xs text-destructive">{t('loadFailed')}</p>}
                     {channelsQuery.isLoading || quotaQuery.isLoading ? <p className="p-4 text-xs text-muted-foreground">{t('loading')}</p> : items.length ? (
-                        <>
-                            <div className="grid shrink-0 grid-cols-3 gap-2 border-b border-border/60 bg-muted/20 p-3"><SummaryTile icon={WalletCards} label={t('credentials')} value={items.length} /><SummaryTile icon={Gauge} label={t('highestUsage')} value={`${summary.maxUsed}%`} tone={summary.maxUsed >= 90 ? 'danger' : summary.maxUsed >= 70 ? 'warning' : 'success'} /><SummaryTile icon={Activity} label={t('limitedAccounts')} value={summary.limited} tone={summary.limited ? 'warning' : 'success'} /></div>
-                            <div className="min-h-0 space-y-3 overflow-y-auto bg-muted/10 p-3"><div className="grid gap-3 md:grid-cols-2">{items.map(({ channel, key, quota }) => <CodexQuotaCard key={`${channel.id}-${key.id}`} channel={channel} keyData={key} quota={quota} t={t} />)}</div></div>
-                        </>
+                        <div className="min-h-0 space-y-3 overflow-y-auto bg-muted/10 p-3">{items.map(({ channel, key, quota }) => <CodexQuotaCard key={`${channel.id}-${key.id}`} channel={channel} keyData={key} quota={quota} />)}</div>
                     ) : <p className="p-4 text-xs text-muted-foreground">{t('empty')}</p>}
                 </div>
             </PopoverContent>
@@ -58,15 +55,10 @@ export function GlobalCodexQuota() {
 }
 
 function summarize(quotas: CodexQuota[]) {
-    const windows = quotas.reduce((count, quota) => count + countCodexQuotaWindows(quota), 0);
     const maxUsed = quotas.flatMap((quota) => quotaWindows(quota)).reduce((max, value) => Math.max(max, Math.max(0, Math.min(100, Math.round(value)))), 0);
-    return { limited: quotas.filter((quota) => Boolean(quota.error || quota.rate_limit?.limit_reached || quota.rate_limit?.allowed === false || quota.code_review_rate_limit?.limit_reached || quota.code_review_rate_limit?.allowed === false || quota.credits?.overage_limit_reached)).length, maxUsed, windows };
+    return { limited: quotas.filter((quota) => Boolean(quota.error || quota.rate_limit?.limit_reached || quota.rate_limit?.allowed === false || quota.code_review_rate_limit?.limit_reached || quota.code_review_rate_limit?.allowed === false || quota.credits?.overage_limit_reached)).length, maxUsed };
 }
 
 function quotaWindows(quota: CodexQuota) {
     return [quota.rate_limit?.primary_window, quota.rate_limit?.secondary_window, quota.code_review_rate_limit?.primary_window, quota.code_review_rate_limit?.secondary_window, ...(quota.additional_rate_limits ?? []).flatMap((item) => [item.rate_limit?.primary_window, item.rate_limit?.secondary_window])].filter((window): window is NonNullable<typeof window> => Boolean(window)).map((window) => window.used_percent);
-}
-
-function SummaryTile({ icon: Icon, label, value, tone = 'default' }: { icon: typeof WalletCards; label: string; value: string | number; tone?: 'default' | 'success' | 'warning' | 'danger' }) {
-    return <div className="min-w-0 rounded-lg border border-border/60 bg-background/60 px-2 py-2"><div className="flex items-center gap-1 text-[10px] text-muted-foreground"><Icon className="size-3" /><span className="truncate">{label}</span></div><div className={cn('mt-1 text-sm font-semibold tabular-nums', tone === 'success' && 'text-emerald-600 dark:text-emerald-400', tone === 'warning' && 'text-orange-600 dark:text-orange-400', tone === 'danger' && 'text-destructive')}>{value}</div></div>;
 }

@@ -1,33 +1,34 @@
 'use client';
 
-import { Download, KeyRound, RefreshCw } from 'lucide-react';
+import { Download, Info, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { useUpdateChannel, type Channel, type ChannelKey, type CodexQuota, type CodexQuotaWindow } from '@/api/endpoints/channel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { cn, formatMoney } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
 type QuotaCardTranslator = ReturnType<typeof useTranslations>;
+type QuotaRow = { label: string; kind: 'primary' | 'secondary'; window: CodexQuotaWindow };
 
 export function CodexQuotaCard({
     channel,
     keyData,
     quota,
-    t,
 }: {
     channel: Channel;
     keyData: ChannelKey;
     quota?: CodexQuota;
-    t: QuotaCardTranslator;
 }) {
+    const t = useTranslations('codexQuota');
     const updateChannel = useUpdateChannel();
     const [pending, setPending] = useState(false);
-    const rows = quota ? quotaWindowRows(quota, t) : [];
     const displayName = credentialFileName(channel, keyData);
-    const limited = Boolean(quota?.error || quota?.rate_limit?.limit_reached || quota?.rate_limit?.allowed === false || quota?.code_review_rate_limit?.limit_reached || quota?.code_review_rate_limit?.allowed === false || quota?.additional_rate_limits?.some((item) => item.rate_limit?.limit_reached || item.rate_limit?.allowed === false) || quota?.credits?.overage_limit_reached);
-    const statusClass = keyData.status_code === 200 ? 'text-emerald-600 dark:text-emerald-400' : keyData.status_code >= 400 ? 'text-destructive' : 'text-muted-foreground';
+    const rows = quota ? quotaWindowRows(quota, t) : [];
+    const health = healthState(keyData.status_code, t);
+    const resetCount = rows.filter((row) => row.window.reset_at > 0).length;
+    const credits = quota?.credits?.unlimited ? t('unlimited') : quota?.credits?.balance ?? '—';
 
     const toggleKey = (enabled: boolean) => {
         setPending(true);
@@ -38,51 +39,60 @@ export function CodexQuotaCard({
     };
 
     return (
-        <article className="overflow-hidden rounded-2xl border border-border/70 bg-card text-card-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent/[0.03]">
-            <header className="flex items-start gap-3 p-3 pb-2.5 sm:p-4 sm:pb-3">
-                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><KeyRound className="size-4" /></span>
+        <article className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white text-slate-700 shadow-sm dark:border-border dark:bg-card dark:text-card-foreground">
+            <header className="flex items-start gap-3 px-4 pb-2 pt-4">
+                <span className="mt-0.5 size-8 shrink-0 rounded-lg border border-sky-100 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/30" aria-hidden="true" />
                 <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge className="h-5 bg-indigo-500/10 px-1.5 text-[10px] text-indigo-700 hover:bg-indigo-500/10 dark:text-indigo-300">Codex</Badge>
-                        <Badge variant="outline" className={cn('h-5 px-1.5 text-[10px]', keyData.enabled ? 'border-emerald-500/30 text-emerald-700 dark:text-emerald-400' : 'border-muted-foreground/30 text-muted-foreground')}>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Badge className="h-6 rounded-lg bg-indigo-100 px-2 text-xs font-semibold text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:text-indigo-300">Codex</Badge>
+                        <Badge variant="outline" className={cn('h-6 rounded-lg px-2 text-xs font-semibold', keyData.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300' : 'border-slate-200 bg-slate-50 text-slate-400 dark:border-border dark:bg-muted dark:text-muted-foreground')}>
                             {keyData.enabled ? t('enabled') : t('disabled')}
                         </Badge>
-                        {quota?.plan_type && <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{quota.plan_type}</Badge>}
-                        {quota && <Badge variant="secondary" className={cn('h-5 px-1.5 text-[10px]', limited ? 'bg-orange-500/15 text-orange-700 dark:text-orange-400' : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400')}>{limited ? t('limited') : t('available')}</Badge>}
                     </div>
-                    <h3 className="mt-2 break-all text-sm font-semibold leading-5" title={displayName}>{displayName}</h3>
-                    <p className="mt-1 truncate text-[11px] text-muted-foreground" title={channel.name}>{channel.name}{keyData.remark && keyData.remark !== displayName ? ` · ${keyData.remark}` : ''}</p>
+                    <h3 className="mt-2 break-all text-lg font-bold leading-6 text-slate-700 dark:text-foreground" title={displayName}>{displayName}</h3>
                 </div>
             </header>
 
-            <div className="grid grid-cols-3 gap-2 px-3 text-[11px] sm:px-4">
-                <CredentialMeta label={t('size')} value={formatBytes(keyData.channel_key.length)} />
-                <CredentialMeta label={t('lastUse')} value={keyData.last_use_time_stamp > 0 ? formatDate(keyData.last_use_time_stamp * 1000) : t('never')} />
-                <CredentialMeta label={t('statusCode')} value={keyData.status_code > 0 ? String(keyData.status_code) : '—'} valueClass={statusClass} />
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 px-4 text-sm text-slate-500 dark:text-muted-foreground">
+                <span><span className="font-medium">{t('size')}:</span> <strong className="text-slate-700 dark:text-foreground">{formatBytes(keyData.channel_key.length)}</strong></span>
+                <span><span className="font-medium">{t('modified')}:</span> <strong className="text-slate-700 dark:text-foreground">{keyData.last_use_time_stamp > 0 ? formatDate(keyData.last_use_time_stamp * 1000) : t('never')}</strong></span>
             </div>
 
-            <div className="mx-3 mt-3 border-t border-border/60 sm:mx-4" />
-            <div className="space-y-2.5 p-3 sm:p-4 sm:pt-3">
-                <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold text-muted-foreground">{t('healthStatus')}</span>
-                    <span className={cn('font-semibold', statusClass)}>{statusLabel(keyData.status_code, t)}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-muted" aria-label={t('healthStatus')}><div className={cn('h-full rounded-full', keyData.status_code === 200 ? 'w-full bg-emerald-500' : keyData.status_code >= 400 ? 'w-1/4 bg-destructive' : 'w-1/2 bg-muted-foreground/40')} /></div>
-
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    <span>{t('credits')}: <strong className="text-foreground">{quota?.credits?.unlimited ? t('unlimited') : quota?.credits?.balance ?? '—'}</strong></span>
-                    <span>{t('cost')}: <strong className="text-foreground">{formatMoney(keyData.total_cost).formatted.value}{formatMoney(keyData.total_cost).formatted.unit}</strong></span>
-                    {quota?.fetched_at && <span>{t('updatedAt', { time: formatDate(new Date(quota.fetched_at).getTime()) })}</span>}
-                </div>
-
-                {quota?.error ? <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-2 text-xs text-destructive">{quota.error}</div> : rows.length ? <div className="grid gap-2 sm:grid-cols-2">{rows.map((row) => <QuotaWindow key={`${row.label}-${row.kind}-${row.window.reset_at}`} row={row} t={t} />)}</div> : <div className="rounded-lg border border-border/60 bg-muted/20 p-2 text-xs text-muted-foreground">{keyData.enabled ? t('unavailable') : t('disabledHint')}</div>}
+            <div className="flex items-center gap-2 px-4 pb-3 pt-2 text-xs font-semibold">
+                <Badge variant="secondary" className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-600 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-300">{t('success')} {formatCount(channel.stats?.request_success)}</Badge>
+                <Badge variant="secondary" className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-500 hover:bg-rose-50 dark:bg-rose-950/30 dark:text-rose-300">{t('failed')} {formatCount(channel.stats?.request_failed)}</Badge>
             </div>
 
-            <footer className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-3 py-2.5 sm:px-4">
-                <Button type="button" variant="outline" size="icon" className="size-8 rounded-lg" aria-label={t('download')} title={t('download')} onClick={() => downloadCredential(channel, keyData)}>
-                    <Download className="size-4" />
+            <section className="border-t border-slate-100 px-4 py-3 dark:border-border">
+                <div className="flex items-center justify-between gap-3 text-sm font-semibold">
+                    <span>{t('healthStatus')}</span>
+                    <span className={cn('rounded-full px-3 py-1 text-xs', health.pillClass)}>{health.label}</span>
+                </div>
+                <div className="mt-3 flex gap-1" aria-label={t('healthStatus')}>
+                    {Array.from({ length: 18 }, (_, index) => <span key={index} className={cn('h-2 flex-1 rounded-full', index < health.filled ? health.segmentClass : health.emptyClass)} />)}
+                </div>
+            </section>
+
+            <section className="px-4 pb-4 pt-1">
+                <div className="flex flex-wrap items-center gap-x-2 text-sm text-slate-600 dark:text-muted-foreground">
+                    <span>{t('plan')} <strong className="text-slate-700 dark:text-foreground">{quota?.plan_type || '—'}</strong></span>
+                    <span aria-hidden="true">|</span>
+                    <span>{t('resetCount')} <strong className="text-slate-700 dark:text-foreground">{resetCount}</strong></span>
+                    <span className="ml-auto">{t('credits')} <strong className="text-slate-700 dark:text-foreground">{credits}</strong></span>
+                </div>
+
+                {quota?.error ? <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-2 text-xs text-destructive">{quota.error}</div> : rows.length ? (
+                    <div className="mt-3 space-y-3">
+                        {rows.map((row) => <QuotaWindow key={`${row.label}-${row.kind}-${row.window.reset_at}`} row={row} t={t} />)}
+                    </div>
+                ) : <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-500 dark:bg-muted/40 dark:text-muted-foreground">{keyData.enabled ? t('unavailable') : t('disabledHint')}</div>}
+            </section>
+
+            <footer className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-4 py-2.5 dark:border-border dark:bg-muted/20">
+                <Button type="button" variant="ghost" className="h-8 rounded-lg px-2 text-xs text-slate-600 hover:bg-white dark:text-muted-foreground dark:hover:bg-muted" aria-label={t('download')} title={t('download')} onClick={() => downloadCredential(channel, keyData)}>
+                    <Download className="mr-1.5 size-3.5" />{t('downloadShort')}
                 </Button>
-                <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-muted-foreground">
                     <span>{keyData.enabled ? t('enabled') : t('disabled')}</span>
                     {pending ? <RefreshCw className="size-4 animate-spin" /> : <Switch checked={keyData.enabled} disabled={pending || updateChannel.isPending} onCheckedChange={toggleKey} aria-label={t('toggleEnable')} />}
                 </label>
@@ -91,40 +101,40 @@ export function CodexQuotaCard({
     );
 }
 
-type QuotaRow = { label: string; kind: 'primary' | 'secondary'; window: CodexQuotaWindow };
-
 function quotaWindowRows(quota: CodexQuota, t: QuotaCardTranslator): QuotaRow[] {
     const rows: QuotaRow[] = [];
     const add = (label: string, rateLimit?: CodexQuota['rate_limit']) => {
         if (rateLimit?.primary_window) rows.push({ label, kind: 'primary', window: rateLimit.primary_window });
         if (rateLimit?.secondary_window) rows.push({ label, kind: 'secondary', window: rateLimit.secondary_window });
     };
-    add('', quota.rate_limit);
+    add(t('monthlyLimit'), quota.rate_limit);
     add(t('codeReview'), quota.code_review_rate_limit);
     for (const [index, item] of (quota.additional_rate_limits ?? []).entries()) add(item.limit_name || item.metered_feature || t('additional', { id: index + 1 }), item.rate_limit);
     return rows;
 }
 
-export function countCodexQuotaWindows(quota: CodexQuota) {
-    return [quota.rate_limit, quota.code_review_rate_limit, ...(quota.additional_rate_limits ?? []).map((item) => item.rate_limit)].reduce((count, rateLimit) => count + Number(Boolean(rateLimit?.primary_window)) + Number(Boolean(rateLimit?.secondary_window)), 0);
-}
-
 function QuotaWindow({ row, t }: { row: QuotaRow; t: QuotaCardTranslator }) {
     const used = clampPercent(row.window.used_percent);
     const label = row.window.limit_window_seconds === 18_000 ? t('fiveHours') : row.window.limit_window_seconds === 604_800 ? t('sevenDays') : t('windowDays', { count: Math.max(1, Math.round(row.window.limit_window_seconds / 86_400)) });
-    const reset = row.window.reset_at > 0 ? formatDate(row.window.reset_at * 1000) : t('unknown');
+    const reset = row.window.reset_at > 0 ? formatResetTime(row.window.reset_at * 1000) : t('unknown');
     return (
-        <div className="rounded-lg border border-border/60 bg-background/60 p-2.5">
-            <div className="flex items-center justify-between gap-2"><span className="truncate text-[11px] font-semibold">{row.label ? `${row.label} · ` : ''}{label}</span><span className={cn('text-sm font-bold tabular-nums', used >= 90 ? 'text-destructive' : used >= 70 ? 'text-orange-600 dark:text-orange-400' : 'text-emerald-600 dark:text-emerald-400')}>{used}%</span></div>
-            <span className="text-[10px] text-muted-foreground">{row.kind === 'primary' ? t('primaryWindow') : t('secondaryWindow')}</span>
-            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"><div className={cn('h-full rounded-full', used >= 90 ? 'bg-destructive' : used >= 70 ? 'bg-orange-500' : 'bg-emerald-500')} style={{ width: `${used}%` }} /></div>
-            <div className="mt-1 flex justify-between gap-2 text-[10px] text-muted-foreground"><span>{t('remaining', { remaining: 100 - used })}</span><span className="truncate">{t('reset', { time: reset })}</span></div>
+        <div>
+            <div className="flex items-center gap-2 text-sm font-bold">
+                <span>{row.label || label}</span>
+                <Info className="size-3.5 text-slate-400" aria-hidden="true" />
+                <span className="ml-auto text-base text-slate-500 dark:text-muted-foreground">{used}%</span>
+                <span className="text-xs font-normal text-slate-400">{reset}</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-muted"><div className={cn('h-full rounded-full transition-all', used >= 90 ? 'bg-rose-400' : used >= 70 ? 'bg-amber-400' : 'bg-lime-400')} style={{ width: `${used}%` }} /></div>
+            <div className="mt-1 text-[10px] text-slate-400">{label} · {row.kind === 'primary' ? t('primaryWindow') : t('secondaryWindow')}</div>
         </div>
     );
 }
 
-function CredentialMeta({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
-    return <div className="min-w-0"><div className="text-muted-foreground">{label}</div><div className={cn('mt-0.5 truncate font-semibold', valueClass)} title={value}>{value}</div></div>;
+function healthState(status: number, t: QuotaCardTranslator) {
+    if (status === 200) return { label: t('healthy'), filled: 18, segmentClass: 'bg-lime-400', emptyClass: 'bg-slate-100', pillClass: 'bg-lime-50 text-lime-600 dark:bg-lime-950/30 dark:text-lime-300' };
+    if (status >= 400) return { label: t('failed'), filled: 4, segmentClass: 'bg-rose-300', emptyClass: 'bg-slate-100', pillClass: 'bg-rose-50 text-rose-500 dark:bg-rose-950/30 dark:text-rose-300' };
+    return { label: t('healthUnknown'), filled: 0, segmentClass: 'bg-slate-200', emptyClass: 'bg-sky-100', pillClass: 'bg-slate-50 text-slate-400 dark:bg-muted dark:text-muted-foreground' };
 }
 
 function credentialFileName(channel: Channel, key: ChannelKey) {
@@ -150,17 +160,19 @@ function formatBytes(bytes: number) {
     return `${(bytes / 1024).toFixed(2)} KB`;
 }
 
+function formatCount(value?: number) {
+    return (value ?? 0).toLocaleString();
+}
+
 function formatDate(timestamp: number) {
     if (!Number.isFinite(timestamp) || timestamp <= 0) return '—';
-    return new Date(timestamp).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return new Date(timestamp).toLocaleString([], { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+function formatResetTime(timestamp: number) {
+    return new Date(timestamp).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function clampPercent(value: number) {
     return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function statusLabel(status: number, t: QuotaCardTranslator) {
-    if (status === 200) return t('healthy');
-    if (status >= 400) return t('failed');
-    return t('unknown');
 }
