@@ -8,6 +8,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	immutableStaticCacheControl = "public, max-age=31536000, immutable"
+	revalidateCacheControl      = "no-cache"
+)
+
 func StaticEmbed(urlPrefix string, embedFS fs.FS) gin.HandlerFunc {
 	fs := http.FS(embedFS)
 	return static(urlPrefix, fs)
@@ -24,9 +29,16 @@ func static(urlPrefix string, fileSystem http.FileSystem) gin.HandlerFunc {
 			return
 		}
 		if _, err := fileSystem.Open(c.Request.URL.Path); err == nil {
-			c.Header("Cache-Control", "public, max-age=31536000, immutable")
+			c.Header("Cache-Control", staticCacheControl(c.Request.URL.Path))
 			fileserver.ServeHTTP(c.Writer, c.Request)
 			c.Abort()
 		}
 	}
+}
+
+func staticCacheControl(path string) string {
+	if strings.HasPrefix(path, "/_next/static/") {
+		return immutableStaticCacheControl
+	}
+	return revalidateCacheControl
 }

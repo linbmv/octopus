@@ -47,18 +47,39 @@ func TestAuditLogIncludesContextAndDetails(t *testing.T) {
 
 func TestStaticEmbedServesFilesAndSkipsAPIPaths(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	files := fstest.MapFS{"asset.txt": {Data: []byte("asset body")}}
+	files := fstest.MapFS{
+		"asset.txt":                         {Data: []byte("asset body")},
+		"index.html":                        {Data: []byte("app shell")},
+		"locale/zh_hans.json":               {Data: []byte("locale catalog")},
+		"sw.js":                             {Data: []byte("service worker")},
+		"_next/static/chunks/app-abc123.js": {Data: []byte("hashed chunk")},
+	}
 	router := gin.New()
 	router.Use(StaticEmbed("", files))
 	router.GET("/api/ping", func(c *gin.Context) { c.String(http.StatusOK, "api") })
 
-	asset := httptest.NewRecorder()
-	router.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/asset.txt", nil))
-	if asset.Code != http.StatusOK || asset.Body.String() != "asset body" {
-		t.Fatalf("asset response = %d %q", asset.Code, asset.Body.String())
+	tests := []struct {
+		path         string
+		body         string
+		cacheControl string
+	}{
+		{path: "/", body: "app shell", cacheControl: revalidateCacheControl},
+		{path: "/asset.txt", body: "asset body", cacheControl: revalidateCacheControl},
+		{path: "/locale/zh_hans.json", body: "locale catalog", cacheControl: revalidateCacheControl},
+		{path: "/sw.js", body: "service worker", cacheControl: revalidateCacheControl},
+		{path: "/_next/static/chunks/app-abc123.js", body: "hashed chunk", cacheControl: immutableStaticCacheControl},
 	}
-	if got := asset.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
-		t.Fatalf("Cache-Control = %q", got)
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+			if response.Code != http.StatusOK || response.Body.String() != test.body {
+				t.Fatalf("response = %d %q", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Cache-Control"); got != test.cacheControl {
+				t.Fatalf("Cache-Control = %q, want %q", got, test.cacheControl)
+			}
+		})
 	}
 
 	api := httptest.NewRecorder()

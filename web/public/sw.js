@@ -8,7 +8,7 @@
  * - FONT cache is version-independent (fonts persist across updates)
  */
 const CACHE_PREFIX = 'octopus';
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const CACHE_NAMES = {
     static: `${CACHE_PREFIX}-static-${CACHE_VERSION}`,
     app: `${CACHE_PREFIX}-app-${CACHE_VERSION}`,
@@ -36,9 +36,12 @@ function isNetworkOnlyPath(pathname) {
     return NETWORK_ONLY_PATHS.has(pathname) || NETWORK_ONLY_PREFIXES.some((prefix) => pathMatchesPrefix(pathname, prefix));
 }
 
+function isLocaleMessagesPath(pathname) {
+    return pathname.startsWith('/locale/') && pathname.endsWith('.json');
+}
+
 function isExplicitStaticAsset(pathname) {
     if (pathname === '/manifest.json') return true;
-    if (pathname.startsWith('/locale/') && pathname.endsWith('.json')) return true;
     return /\.(?:avif|bmp|css|gif|ico|jpe?g|js|map|png|svg|webmanifest|webp|woff2?|ttf)$/i.test(pathname);
 }
 
@@ -91,6 +94,13 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
+    // Locale files are not content-hashed. Fetch them before consulting Cache
+    // Storage so a deployment cannot render raw keys from an older catalog.
+    if (isLocaleMessagesPath(url.pathname)) {
+        event.respondWith(networkFirst(request, CACHE_NAMES.app));
+        return;
+    }
+
     // 字体资源：Cache First（永久缓存，跨版本持久化）
     if (url.pathname.endsWith('.woff2') || url.pathname.endsWith('.woff') || url.pathname.endsWith('.ttf')) {
         event.respondWith(cacheFirst(request, CACHE_NAMES.font));
@@ -140,7 +150,10 @@ async function cacheFirst(request, cacheName) {
 async function networkFirst(request, cacheName, { fallbackUrl = null } = {}) {
     const cache = await caches.open(cacheName);
     try {
-        const response = await fetch(request);
+        // Earlier Octopus versions marked the app shell and locale catalogs as
+        // immutable for one year. Force revalidation so those browser HTTP
+        // cache entries cannot outlive the deployment that created them.
+        const response = await fetch(request, { cache: 'no-cache' });
         if (response.ok) {
             cache.put(request, response.clone());
         }

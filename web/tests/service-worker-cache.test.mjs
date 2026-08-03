@@ -80,7 +80,18 @@ describe('service worker cache boundary', () => {
         await vi.waitFor(() => expect(caches.open).toHaveBeenCalled());
     });
 
-    it('bumps the cache namespace and deletes the old API-contaminated cache on activation', async () => {
+    it('uses the network response before a cached locale catalog', async () => {
+        const { cache, fetch, onFetch } = await loadServiceWorker();
+        cache.match.mockResolvedValue(new Response('stale locale', { status: 200 }));
+
+        const respondWith = dispatch(onFetch, '/locale/zh_hans.json');
+        const response = await respondWith.mock.calls[0][0];
+
+        expect(await response.text()).toBe('ok');
+        expect(fetch).toHaveBeenCalledWith(expect.anything(), { cache: 'no-cache' });
+    });
+
+    it('bumps the cache namespace and deletes caches from older workers on activation', async () => {
         const { caches, onActivate } = await loadServiceWorker([
             'octopus-app-v1',
             'octopus-static-v1',
@@ -88,6 +99,8 @@ describe('service worker cache boundary', () => {
             'octopus-static-v2',
             'octopus-app-v3',
             'octopus-static-v3',
+            'octopus-app-v4',
+            'octopus-static-v4',
             'octopus-font',
             'unrelated-cache',
         ]);
@@ -95,9 +108,17 @@ describe('service worker cache boundary', () => {
         onActivate({ waitUntil: (promise) => { activation = promise; } });
         await activation;
 
-        expect(caches.delete).toHaveBeenCalledWith('octopus-app-v1');
-        expect(caches.delete).toHaveBeenCalledWith('octopus-static-v1');
-        for (const retained of ['octopus-app-v3', 'octopus-static-v3', 'octopus-font', 'unrelated-cache']) {
+        for (const retired of [
+            'octopus-app-v1',
+            'octopus-static-v1',
+            'octopus-app-v2',
+            'octopus-static-v2',
+            'octopus-app-v3',
+            'octopus-static-v3',
+        ]) {
+            expect(caches.delete).toHaveBeenCalledWith(retired);
+        }
+        for (const retained of ['octopus-app-v4', 'octopus-static-v4', 'octopus-font', 'unrelated-cache']) {
             expect(caches.delete).not.toHaveBeenCalledWith(retained);
         }
     });
