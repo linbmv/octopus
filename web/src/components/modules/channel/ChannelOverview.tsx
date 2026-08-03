@@ -1,14 +1,15 @@
 'use client';
 
-import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, RefreshCw, ShieldAlert, Trash2, TrendingUp, WalletCards, XCircle } from 'lucide-react';
+import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, ShieldAlert, Trash2, TrendingUp, WalletCards, XCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { ChannelType, useChannelCircuit, useChannelQuota, useChannelRuntimeURLs, useRefreshChannelQuota, useResetChannelCircuit, type Channel, type CodexQuota, type CodexQuotaWindow } from '@/api/endpoints/channel';
+import { ChannelType, useChannelCircuit, useChannelQuota, useChannelRuntimeURLs, useResetChannelCircuit, type Channel, type CodexQuota } from '@/api/endpoints/channel';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { ChannelErrorOverview } from '@/components/modules/error-observability';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn, formatMoney } from '@/lib/utils';
 import { CapabilityEvidencePanel } from './CapabilityEvidence';
+import { CodexQuotaCard, countCodexQuotaWindows } from './CodexQuotaCard';
 import { SelfHealingPanel } from './SelfHealing';
 
 export function ChannelOverview({
@@ -29,7 +30,9 @@ export function ChannelOverview({
     const t = useTranslations('channel.detail');
     return (
         <>
-            <div className="max-h-[60vh] space-y-4 overflow-y-auto sm:space-y-5">
+            <div className="max-h-[68vh] space-y-4 overflow-y-auto sm:max-h-[72vh] sm:space-y-5">
+                <ChannelQuotaPanel channel={channel} />
+                {!isCodexChannel(channel) && <>
                 <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <SummaryMetric icon={Activity} label={t('metrics.totalRequests')} value={stats.request_count.formatted.value} unit={stats.request_count.formatted.unit} color="text-chart-1" />
                     <SummaryMetric icon={FileText} label={t('metrics.totalToken')} value={stats.total_token.formatted.value} unit={stats.total_token.formatted.unit} color="text-chart-3" />
@@ -41,8 +44,6 @@ export function ChannelOverview({
                     <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{t(`policyProfiles.${channel.policy_profile}`)}</Badge>
                 </div>
 
-                {/* Keep the remote Codex account status near the top of the detail view. */}
-                <ChannelQuotaPanel channel={channel} />
                 <ChannelErrorOverview channelId={channel.id} />
                 <ChannelCircuitPanel channelId={channel.id} />
                 <SelfHealingPanel channel={channel} />
@@ -70,8 +71,9 @@ export function ChannelOverview({
                     <dt className="mb-2 flex items-center gap-2 text-xs text-muted-foreground"><Clock className="size-4 text-primary" />{t('metrics.avgWaitTime')}</dt>
                     <dd className="text-2xl font-bold text-primary">{stats.wait_time.formatted.value}<span className="ml-1 text-sm font-normal text-muted-foreground">{stats.wait_time.formatted.unit}</span></dd>
                 </dl>
+                </>}
             </div>
-            <div className="grid gap-3 pt-2 sm:grid-cols-2">
+            {!isCodexChannel(channel) && <div className="grid gap-3 pt-2 sm:grid-cols-2">
                 <Button onClick={onEdit} variant={confirmingDelete ? 'secondary' : 'default'} className="h-12 w-full rounded-2xl">
                     {confirmingDelete ? t('actions.cancel') : t('actions.edit')}
                 </Button>
@@ -79,7 +81,7 @@ export function ChannelOverview({
                     <Trash2 className={`size-4 transition-transform ${confirmingDelete ? 'scale-110' : ''}`} />
                     {deletePending ? t('actions.deleting') : confirmingDelete ? t('actions.confirmDelete') : t('actions.delete')}
                 </Button>
-            </div>
+            </div>}
         </>
     );
 }
@@ -88,46 +90,41 @@ function ChannelQuotaPanel({ channel }: { channel: Channel }) {
     const t = useTranslations('channel.detail.quota');
     const isCodex = isCodexChannel(channel);
     const { data: quotas, isLoading, isError } = useChannelQuota(channel.id, isCodex);
-    const refresh = useRefreshChannelQuota(channel.id);
     if (!isCodex) return null;
 
+    const limited = quotas?.filter(isQuotaLimited).length ?? 0;
+    const quotaByKey = new Map((quotas ?? []).map((quota) => [quota.channel_key_id, quota]));
+    const windows = quotas?.reduce((count, quota) => count + countCodexQuotaWindows(quota), 0) ?? 0;
+
     return (
-        <section className="space-y-3">
-            <div className="flex items-center justify-between">
-                <SectionTitle icon={WalletCards}>{t('title')}</SectionTitle>
-                <Button size="sm" variant="outline" className="h-7 rounded-xl px-2 text-xs" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
-                    <RefreshCw className={cn('mr-1.5 size-3.5', refresh.isPending && 'animate-spin')} />
-                    {refresh.isPending ? t('refreshing') : t('refresh')}
-                </Button>
-            </div>
+        <section className="overflow-hidden rounded-3xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-card to-card p-3 shadow-sm sm:p-4">
+            <header className="flex items-start gap-3">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+                    <WalletCards className="size-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <SectionTitle icon={WalletCards}>{t('title')}</SectionTitle>
+                        {!isLoading && !isError && channel.keys?.length ? <Badge variant="outline" className="h-5 border-primary/25 bg-primary/5 px-1.5 text-[10px]">{t('credentialCount', { count: channel.keys.length })}</Badge> : null}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('description')}</p>
+                </div>
+            </header>
             {isLoading && <div className="rounded-2xl border bg-card p-4 text-sm text-muted-foreground">{t('loading')}</div>}
             {isError && <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{t('loadFailed')}</div>}
-            {!isLoading && !isError && !quotas?.length && <div className="rounded-2xl border bg-card p-4 text-sm text-muted-foreground">{t('empty')}</div>}
-            <div className="space-y-2">
-                {quotas?.map((quota) => (
-                    <div key={quota.channel_key_id} className="rounded-2xl border bg-card p-3 transition-colors hover:bg-accent/5 sm:p-4">
-                        <div className="mb-3 flex flex-wrap items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate text-sm font-semibold">
-                                {quota.key_remark || t('key', { id: quota.channel_key_id })}
-                            </span>
-                            {quota.plan_type && <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{quota.plan_type}</Badge>}
-                            {quota.rate_limit?.limit_reached || quota.rate_limit?.allowed === false ? (
-                                <Badge variant="secondary" className="h-5 bg-red-500/15 px-1.5 text-[10px] text-red-700 dark:text-red-400">{t('limited')}</Badge>
-                            ) : quota.rate_limit && (
-                                <Badge variant="secondary" className="h-5 bg-emerald-500/15 px-1.5 text-[10px] text-emerald-700 dark:text-emerald-400">{t('available')}</Badge>
-                            )}
-                        </div>
-                        {quota.error ? (
-                            <p className="text-xs text-destructive">{quota.error}</p>
-                        ) : (
-                            <div className="space-y-2">
-                                {quotaWindowRows(quota, t)}
-                                {!hasQuotaWindows(quota) && <p className="text-xs text-muted-foreground">{t('unavailable')}</p>}
-                            </div>
-                        )}
+            {!isLoading && !isError && !channel.keys?.length && <div className="rounded-2xl border bg-card p-4 text-sm text-muted-foreground">{t('empty')}</div>}
+            {!isLoading && !isError && channel.keys?.length ? (
+                <div className="mt-3 space-y-3">
+                    <div className="grid grid-cols-3 gap-2">
+                        <QuotaSummary label={t('credentials')} value={channel.keys.length} />
+                        <QuotaSummary label={t('windows')} value={windows} />
+                        <QuotaSummary label={t('limitedAccounts')} value={limited} tone={limited ? 'warning' : 'success'} />
                     </div>
-                ))}
-            </div>
+                    <div className="space-y-2">
+                        {channel.keys.map((key) => <CodexQuotaCard key={key.id} channel={channel} keyData={key} quota={quotaByKey.get(key.id)} t={t} />)}
+                    </div>
+                </div>
+            ) : null}
         </section>
     );
 }
@@ -136,47 +133,12 @@ function isCodexChannel(channel: Pick<Channel, 'type'>) {
     return String(channel.type).trim().toLowerCase() === ChannelType.OpenAICodex;
 }
 
-function hasQuotaWindows(quota: CodexQuota) {
-    return Boolean(
-        quota.rate_limit?.primary_window || quota.rate_limit?.secondary_window ||
-        quota.code_review_rate_limit?.primary_window || quota.code_review_rate_limit?.secondary_window ||
-        quota.additional_rate_limits?.some((item) => item.rate_limit?.primary_window || item.rate_limit?.secondary_window),
-    );
+function isQuotaLimited(quota: CodexQuota) {
+    return Boolean(quota.error || quota.rate_limit?.limit_reached || quota.rate_limit?.allowed === false || quota.code_review_rate_limit?.limit_reached || quota.code_review_rate_limit?.allowed === false || quota.additional_rate_limits?.some((item) => item.rate_limit?.limit_reached || item.rate_limit?.allowed === false) || quota.credits?.overage_limit_reached);
 }
 
-function quotaWindowRows(quota: CodexQuota, t: ReturnType<typeof useTranslations>) {
-    const groups = [
-        { label: '', rateLimit: quota.rate_limit },
-        { label: t('codeReview'), rateLimit: quota.code_review_rate_limit },
-        ...(quota.additional_rate_limits ?? []).map((item, index) => ({
-            label: item.limit_name || item.metered_feature || t('additional', { id: index + 1 }),
-            rateLimit: item.rate_limit,
-        })),
-    ];
-    return groups.flatMap((group, groupIndex) => [
-        group.rateLimit?.primary_window ? <QuotaWindowRow key={`${groupIndex}-primary`} window={group.rateLimit.primary_window} t={t} prefix={group.label} /> : null,
-        group.rateLimit?.secondary_window ? <QuotaWindowRow key={`${groupIndex}-secondary`} window={group.rateLimit.secondary_window} t={t} prefix={group.label} /> : null,
-    ]);
-}
-
-function QuotaWindowRow({ window, t, prefix }: { window: CodexQuotaWindow; t: ReturnType<typeof useTranslations>; prefix?: string }) {
-    const used = Math.max(0, Math.min(100, window.used_percent));
-    const remaining = 100 - used;
-    const windowLabel = window.limit_window_seconds === 18_000
-        ? t('fiveHours')
-        : window.limit_window_seconds === 604_800
-            ? t('sevenDays')
-            : t('windowDays', { count: Math.max(1, Math.round(window.limit_window_seconds / 86_400)) });
-    const reset = window.reset_at > 0 ? new Date(window.reset_at * 1000).toLocaleString() : t('unknown');
-    return (
-        <div className="grid gap-1 text-xs sm:grid-cols-[minmax(80px,auto)_1fr_auto] sm:items-center sm:gap-3">
-            <span className="font-medium text-muted-foreground">{prefix ? `${prefix} · ` : ''}{windowLabel}</span>
-            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                <div className={cn('h-full rounded-full transition-all', used >= 90 ? 'bg-destructive' : used >= 70 ? 'bg-orange-500' : 'bg-emerald-500')} style={{ width: `${used}%` }} />
-            </div>
-            <span className="whitespace-nowrap text-muted-foreground">{t('usage', { used, remaining })} · {t('reset', { time: reset })}</span>
-        </div>
-    );
+function QuotaSummary({ label, value, tone = 'default' }: { label: string; value: string | number; tone?: 'default' | 'success' | 'warning' }) {
+    return <div className="rounded-xl border border-border/60 bg-card/70 px-2.5 py-2"><div className="truncate text-[10px] text-muted-foreground">{label}</div><div className={cn('mt-0.5 text-base font-semibold tabular-nums', tone === 'success' && 'text-emerald-600 dark:text-emerald-400', tone === 'warning' && 'text-orange-600 dark:text-orange-400')}>{value}</div></div>;
 }
 
 // ChannelCircuitPanel 展示当前被熔断冻结的 key×模型条目及剩余冷却，

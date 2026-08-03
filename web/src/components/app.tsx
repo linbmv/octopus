@@ -260,11 +260,11 @@ export function AppContainer() {
                             </motion.div>
                         </AnimatePresence>
                     </div>
+                    <GlobalCodexQuota />
                     <div className="ml-auto">
                         <Toolbar />
                     </div>
                 </header>
-                <GlobalCodexQuota />
                 <AnimatePresence mode="wait" initial={false}>
                     <motion.div
                         key={activeItem}
