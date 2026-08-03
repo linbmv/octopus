@@ -67,6 +67,8 @@
         "title": "Codex 全域額度",
         "shortTitle": "Codex 額度",
         "openPanel": "開啟 Codex 全域額度面板",
+        "details": "憑據詳情",
+        "back": "返回憑據列表",
         "description": "所有 Codex OAuth 供應源的即時使用情況",
         "refresh": "重新整理全部",
         "refreshing": "重新整理中...",

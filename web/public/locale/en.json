@@ -67,6 +67,8 @@
         "title": "Codex quota overview",
         "shortTitle": "Codex quota",
         "openPanel": "Open global Codex quota panel",
+        "details": "Credential details",
+        "back": "Back to credential list",
         "description": "Live usage across all Codex OAuth channels",
         "refresh": "Refresh all",
         "refreshing": "Refreshing...",

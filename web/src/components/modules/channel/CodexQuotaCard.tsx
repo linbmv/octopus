@@ -89,7 +89,7 @@ export function CodexQuotaCard({
             </section>
 
             <footer className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-4 py-2.5 dark:border-border dark:bg-muted/20">
-                <Button type="button" variant="ghost" className="h-8 rounded-lg px-2 text-xs text-slate-600 hover:bg-white dark:text-muted-foreground dark:hover:bg-muted" aria-label={t('download')} title={t('download')} onClick={() => downloadCredential(channel, keyData)}>
+                <Button type="button" variant="ghost" className="h-7 rounded-md px-1.5 text-[11px] text-slate-600 hover:bg-white dark:text-muted-foreground dark:hover:bg-muted" aria-label={t('download')} title={t('download')} onClick={() => downloadCredential(channel, keyData)}>
                     <Download className="mr-1.5 size-3.5" />{t('downloadShort')}
                 </Button>
                 <label className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-muted-foreground">
@@ -115,18 +115,17 @@ function quotaWindowRows(quota: CodexQuota, t: QuotaCardTranslator): QuotaRow[] 
 
 function QuotaWindow({ row, t }: { row: QuotaRow; t: QuotaCardTranslator }) {
     const used = clampPercent(row.window.used_percent);
-    const label = row.window.limit_window_seconds === 18_000 ? t('fiveHours') : row.window.limit_window_seconds === 604_800 ? t('sevenDays') : t('windowDays', { count: Math.max(1, Math.round(row.window.limit_window_seconds / 86_400)) });
+    const period = row.window.limit_window_seconds === 18_000 ? t('fiveHours') : row.window.limit_window_seconds === 604_800 ? t('sevenDays') : t('windowDays', { count: Math.max(1, Math.round(row.window.limit_window_seconds / 86_400)) });
     const reset = row.window.reset_at > 0 ? formatResetTime(row.window.reset_at * 1000) : t('unknown');
     return (
         <div>
             <div className="flex items-center gap-2 text-sm font-bold">
-                <span>{row.label || label}</span>
+                <span>{row.label || period}</span>
                 <Info className="size-3.5 text-slate-400" aria-hidden="true" />
                 <span className="ml-auto text-base text-slate-500 dark:text-muted-foreground">{used}%</span>
                 <span className="text-xs font-normal text-slate-400">{reset}</span>
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-muted"><div className={cn('h-full rounded-full transition-all', used >= 90 ? 'bg-rose-400' : used >= 70 ? 'bg-amber-400' : 'bg-lime-400')} style={{ width: `${used}%` }} /></div>
-            <div className="mt-1 text-[10px] text-slate-400">{label} · {row.kind === 'primary' ? t('primaryWindow') : t('secondaryWindow')}</div>
         </div>
     );
 }
