@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/channelstate"
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -115,12 +116,14 @@ func syncSingleChannel(channel *model.Channel, ctx context.Context) ([]string, e
 
 func updateChannelModels(channel *model.Channel, newModels []string, ctx context.Context) error {
 	fetchModelStr := strings.Join(newModels, ",")
-	if _, err := op.ChannelUpdate(&model.ChannelUpdateRequest{
+	updated, err := op.ChannelUpdate(&model.ChannelUpdateRequest{
 		ID:    channel.ID,
 		Model: &fetchModelStr,
-	}, ctx); err != nil {
+	}, ctx)
+	if err != nil {
 		return fmt.Errorf("update channel models: %w", err)
 	}
+	channelstate.Invalidate(channel.ID, channel, updated)
 	channel.Model = fetchModelStr
 	return nil
 }

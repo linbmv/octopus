@@ -103,7 +103,7 @@ func isFirstTokenTimeoutError(err error) bool {
 //   - release 在本次尝试结束时调用，停止计时并释放 context 资源。
 //
 // 计时器回调与 stop 通过同一个 settled CAS 互斥决断：谁先成功谁生效，
-// 消除"首事件已到但尚未处理时计时器误触发取消"的竞态（误切通道/截断流）。
+// 消除"首个语义事件已到但尚未处理时计时器误触发取消"的竞态（误切通道/截断流）。
 func newFirstTokenGuard(parent context.Context, timeout time.Duration) (ctx context.Context, stop func(), release func()) {
 	cctx, cancel := context.WithCancelCause(parent)
 	var settled atomic.Bool
@@ -271,6 +271,25 @@ func (ra *relayAttempt) recordShadowFirstTokenTimeout(timeout firstTokenTimeoutC
 func (ra *relayAttempt) isAdaptiveFirstTokenTimeout(err error) bool {
 	var timeoutErr *firstTokenTimeoutError
 	return errors.As(err, &timeoutErr) && timeoutErr.config.Source == firstTokenTimeoutAdaptive
+}
+
+// isNonPunitiveFirstTokenTimeout identifies timeouts used only to schedule
+// failover within the current request. They are valid reasons to try another
+// candidate, but are not proof that a slow upstream is globally unhealthy.
+func isNonPunitiveFirstTokenTimeout(err error) bool {
+	var timeoutErr *firstTokenTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		return false
+	}
+	switch timeoutErr.config.Source {
+	case firstTokenTimeoutAdaptive,
+		firstTokenTimeoutColdStart,
+		firstTokenTimeoutNonStreamAttempt,
+		firstTokenTimeoutBudget:
+		return true
+	default:
+		return false
+	}
 }
 
 func isFirstTokenBudgetTimeout(err error) bool {

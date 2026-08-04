@@ -33,8 +33,8 @@ func (e *streamSoftError) Body() []byte {
 	return e.body
 }
 
-// writeStream 把 pipeline 输出的客户端格式流写回请求方，并保留首 token 超时切换通道的行为。
-// stopFirstTokenGuard 在收到首个 token 后调用,停止 forward 阶段建立的首字超时计时器。
+// writeStream 把 pipeline 输出的客户端格式流写回请求方，并保留首个语义输出超时切换通道的行为。
+// stopFirstTokenGuard 在 reader 收到首个语义输出或正常终止时调用，停止 forward 阶段的守卫。
 func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard func(), firstTokenTimeout firstTokenTimeoutConfig, clientStream streams.Stream[*httpclient.StreamEvent]) error {
 	if clientStream == nil {
 		return fmt.Errorf("empty pipeline stream")
@@ -70,13 +70,23 @@ func (ra *relayAttempt) writeStream(ctx context.Context, stopFirstTokenGuard fun
 	results := ra.startStreamReader(ctx, clientStream, stopFirstTokenGuard, closeStream)
 
 	// 主事件处理循环
-	idleTimeout := time.Duration(conf.Current().Relay.StreamIdleTimeoutSeconds) * time.Second
+	idleTimeout := boundedStreamIdleTimeout(conf.Current().Relay)
 	return ra.processStreamEvents(ctx, results, &firstToken, responseLog, firstTokenTimeout, stopFirstTokenGuard, closeStream, idleTimeout, ra.streamActivity)
 }
 
+func boundedStreamIdleTimeout(config conf.Relay) time.Duration {
+	seconds := boundedInitialResponseTimeoutSeconds(
+		config.StreamIdleTimeoutSeconds,
+		config.InitialResponseTimeoutSeconds,
+	)
+	return time.Duration(seconds) * time.Second
+}
+
 type sseReadResult struct {
-	event *httpclient.StreamEvent
-	err   error
+	event           *httpclient.StreamEvent
+	err             error
+	semanticOutput  bool
+	semanticChecked bool
 }
 
 // startStreamReader 启动异步读取协程，从 clientStream 读取事件并发送到 results channel
@@ -97,19 +107,33 @@ func readStream(ctx context.Context, clientStream streams.Stream[*httpclient.Str
 		}
 	}()
 
-	readerFirst := true
+	boundaryCommitted := false
 	for clientStream.Next() {
 		event := clientStream.Current()
-		if readerFirst && event != nil && len(event.Data) > 0 {
-			stopFirstTokenGuard()
-			readerFirst = false
+		// Stop the timeout/routing guard before enqueueing real model output. This
+		// preserves the event-arrival boundary even when the consumer is briefly
+		// delayed, while lifecycle events such as response.created remain guarded.
+		result := sseReadResult{event: event}
+		if !boundaryCommitted {
+			result.semanticOutput = streamEventHasSemanticOutput(event)
+			result.semanticChecked = true
+			if result.semanticOutput || isSuccessfulTerminalStreamEvent(event) {
+				stopFirstTokenGuard()
+				boundaryCommitted = true
+			}
 		}
-		if !sendStreamResult(ctx, results, sseReadResult{event: event}) {
+		if !sendStreamResult(ctx, results, result) {
 			return
 		}
 	}
 	if err := clientStream.Err(); err != nil {
 		sendStreamResult(ctx, results, sseReadResult{err: err})
+		return
+	}
+	if ctx.Err() == nil {
+		// A clean EOF is a completed control-only or empty response. Commit it
+		// before closing results so the first-event timeout cannot win the race.
+		stopFirstTokenGuard()
 	}
 }
 
@@ -124,9 +148,17 @@ func sendStreamResult(ctx context.Context, results chan<- sseReadResult, result 
 
 // processStreamEvents 处理流事件的主循环
 func (ra *relayAttempt) processStreamEvents(ctx context.Context, results chan sseReadResult, firstToken *bool, responseLog *streamLogCollector, firstTokenTimeout firstTokenTimeoutConfig, stopFirstTokenGuard func(), closeStream func(), idleTimeout time.Duration, rawActivity <-chan struct{}) error {
+	pending := &preSemanticStreamBuffer{}
+	commitPendingControls := func() {
+		if *firstToken {
+			stopFirstTokenGuard()
+			pending.flush(ra.writeEventToClient)
+		}
+	}
 	finishCompleted := func() error {
 		log.Infof("terminal stream event received; treating stream as complete")
 		closeStream()
+		commitPendingControls()
 		return ra.handleStreamEnd(context.WithoutCancel(ctx), responseLog)
 	}
 	var idleTimer *time.Timer
@@ -158,8 +190,8 @@ func (ra *relayAttempt) processStreamEvents(ctx context.Context, results chan ss
 		select {
 		case <-rawActivity:
 			// This includes raw SSE comment heartbeats that a decoder may consume
-			// without yielding a StreamEvent. The guard remains unarmed until the
-			// first non-empty event has reached the relay.
+			// without yielding a StreamEvent. The guard remains armed until actual
+			// model output has reached the relay.
 			if !*firstToken {
 				resetIdleTimer()
 			}
@@ -188,6 +220,9 @@ func (ra *relayAttempt) processStreamEvents(ctx context.Context, results chan ss
 				if ctx.Err() != nil {
 					return ra.handleContextDone(ctx, *firstToken, firstTokenTimeout, closeStream)
 				}
+				// A clean EOF commits a control-only response. Routing changes and
+				// read errors take the branches above and still discard this buffer.
+				commitPendingControls()
 				return ra.handleStreamEnd(ctx, responseLog)
 			}
 			if r.err != nil {
@@ -203,6 +238,9 @@ func (ra *relayAttempt) processStreamEvents(ctx context.Context, results chan ss
 			if r.event == nil {
 				continue
 			}
+			if ctx.Err() != nil {
+				return ra.handleContextDone(ctx, *firstToken, firstTokenTimeout, closeStream)
+			}
 			if !*firstToken {
 				resetIdleTimer()
 			}
@@ -210,6 +248,9 @@ func (ra *relayAttempt) processStreamEvents(ctx context.Context, results chan ss
 			// 保存事件到日志收集器
 			responseLog.Add(r.event)
 			if len(r.event.Data) == 0 {
+				if *firstToken && responseLog.Completed() {
+					return finishCompleted()
+				}
 				continue
 			}
 			if body, isError := streamErrorEventBody(r.event); isError {
@@ -222,15 +263,35 @@ func (ra *relayAttempt) processStreamEvents(ctx context.Context, results chan ss
 				return &streamSoftError{body: body}
 			}
 
-			// 处理首 token
+			// Protocol setup events are held until semantic output commits this
+			// attempt. Before that boundary, routing changes and retryable failures
+			// can safely discard the pending events and switch candidates.
 			if *firstToken {
+				hasSemanticOutput := r.semanticOutput
+				if !r.semanticChecked {
+					hasSemanticOutput = streamEventHasSemanticOutput(r.event)
+				}
+				if !hasSemanticOutput {
+					if err := pending.add(r.event); err != nil {
+						closeStream()
+						return err
+					}
+					if responseLog.Completed() {
+						return finishCompleted()
+					}
+					continue
+				}
 				ra.handleFirstToken(stopFirstTokenGuard)
 				*firstToken = false
 				resetIdleTimer()
+				pending.flush(ra.writeEventToClient)
 			}
 
 			// 写入客户端
 			ra.writeEventToClient(r.event)
+			if responseLog.Completed() {
+				return finishCompleted()
+			}
 		}
 	}
 }

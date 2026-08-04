@@ -83,6 +83,15 @@ func (l *channelRPMLimiter) reserve(channelID int, limit int) channelRPMReservat
 	return channelRPMReservation{Allowed: true}
 }
 
+func (l *channelRPMLimiter) clear() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	clear(l.requests)
+	l.mu.Unlock()
+}
+
 type channelConcurrencyLimiter struct {
 	mu     sync.Mutex
 	active map[int]int

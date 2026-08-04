@@ -318,6 +318,17 @@ func (m *HealthManager) InvalidateChannel(channelID int, model string) {
 	}
 }
 
+// InvalidateAll drops adaptive evidence whose channel/key IDs may have been
+// rebound by a full database restore.
+func (m *HealthManager) InvalidateAll() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	clear(m.states)
+	m.mu.Unlock()
+}
+
 // Enable 启用健康系统
 func (m *HealthManager) Enable() {
 	m.mu.Lock()

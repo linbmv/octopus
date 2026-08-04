@@ -43,3 +43,13 @@ func Invalidate(channelID int, channels ...*model.Channel) {
 	}
 	routingstate.Notify()
 }
+
+// InvalidateAll is the bulk-write counterpart to Invalidate. Database restore
+// can replace every channel and key identity, so all derived runtime evidence
+// must be dropped before waking in-flight requests.
+func InvalidateAll() {
+	balancer.InvalidateAll()
+	relay.InvalidateAllRuntimeState()
+	client.InvalidateAllCustomProxyClients()
+	routingstate.Notify()
+}

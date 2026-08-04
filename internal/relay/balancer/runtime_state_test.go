@@ -188,6 +188,29 @@ func TestRuntimeStateInvalidationByAPIKeyAndGroup(t *testing.T) {
 	}
 }
 
+func TestInvalidateAllClearsAffinityCircuitAndBalancerState(t *testing.T) {
+	resetBalancerRuntimeState()
+	defer resetBalancerRuntimeState()
+
+	SetSticky(1, "model-a", 10, 100, "model-a")
+	RecordFailure(10, 100, "model-a")
+	RecordFailure(10, 100, "model-a")
+	(&Weighted{}).Candidates([]model.GroupItem{
+		{ID: 1, ChannelID: 10, ModelName: "a", Weight: 1},
+		{ID: 2, ChannelID: 11, ModelName: "b", Weight: 1},
+	})
+	if tripped, _ := IsTripped(10, 100, "model-a"); !tripped {
+		t.Fatal("circuit precondition was not established")
+	}
+
+	InvalidateAll()
+	if globalSession.len() != 0 || globalBreaker.len() != 0 ||
+		smoothWeightedState.len() != 0 || smoothRoundRobinState.len() != 0 {
+		t.Fatalf("global invalidation left state: sticky=%d circuit=%d weighted=%d round_robin=%d",
+			globalSession.len(), globalBreaker.len(), smoothWeightedState.len(), smoothRoundRobinState.len())
+	}
+}
+
 func TestRuntimeStateConcurrentAccessAndInvalidation(t *testing.T) {
 	resetBalancerRuntimeState()
 	defer resetBalancerRuntimeState()

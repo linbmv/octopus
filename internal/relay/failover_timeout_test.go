@@ -10,6 +10,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/conf"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
@@ -203,6 +204,51 @@ func TestRoutingChangeInterruptsHungLastCandidateImmediately(t *testing.T) {
 	}
 }
 
+func TestRelayAttemptClientCancellationDoesNotTryNextEndpoint(t *testing.T) {
+	ra := newNonStreamAttempt(t, "https://primary.invalid", 1)
+	item := dbmodel.GroupItem{
+		ID: 1, Type: dbmodel.GroupItemTypeChannel, ChannelID: ra.channel.ID,
+		ModelName: ra.internalRequest.Model,
+	}
+	group := dbmodel.Group{Mode: dbmodel.GroupModeFailover, Items: []dbmodel.GroupItem{item}}
+	iter := newRelayIterator(group, 1, ra.internalRequest, ra.c.Request.Context())
+	if !iter.Next() {
+		t.Fatal("test iterator should contain the current channel")
+	}
+
+	primaryURL := "https://primary.invalid/v1"
+	ra.channel.ConfigVersion = 1
+	ra.channel.BaseUrls = []dbmodel.BaseUrl{{URL: primaryURL}, {URL: "https://backup.invalid/v1"}}
+	ra.group = group
+	ra.iter = iter
+	ra.iterStack = []*relayIteratorFrame{{group: group, iter: iter}}
+	ra.iterHistory = []*balancer.Iterator{iter}
+	ra.groupItem = item
+	ra.baseURL = primaryURL
+	ra.baseURLOptions = []string{primaryURL, "https://backup.invalid/v1"}
+	ra.baseURLIndex = 0
+	ra.maxUpstreamAttempts = 5
+	ra.failoverState = newRequestFailoverState()
+	if !ra.selectRequestCandidate(ra) {
+		t.Fatal("initial request candidate should be selectable")
+	}
+
+	canceled, cancel := context.WithCancel(ra.c.Request.Context())
+	cancel()
+	ra.c.Request = ra.c.Request.WithContext(canceled)
+
+	written, err := ra.run()
+	if !errors.Is(err, context.Canceled) || written {
+		t.Fatalf("run() = written:%t err:%v, want unwritten context cancellation", written, err)
+	}
+	if ra.baseURL != primaryURL || ra.baseURLIndex != 0 {
+		t.Fatalf("client cancellation switched endpoint to %q at index %d", ra.baseURL, ra.baseURLIndex)
+	}
+	if ra.upstreamAttempts != 1 || ra.failoverState.switches != 0 {
+		t.Fatalf("client cancellation attempts=%d switches=%d, want 1/0", ra.upstreamAttempts, ra.failoverState.switches)
+	}
+}
+
 func TestHasFailoverAlternative(t *testing.T) {
 	ra := &relayAttempt{relayRun: &relayRun{}}
 	if ra.hasFailoverAlternative() {
@@ -234,11 +280,39 @@ func TestShouldRecordURLFailureFiltersByErrorClass(t *testing.T) {
 		t.Fatalf("通道级错误应记 URL 冷却, classification=%+v", channelLevel.Classification)
 	}
 
-	// 非流式 attempt 超时（挂死端点）→ 通道级：应记 URL 冷却。
+	// 非流式 attempt 超时仍按通道级分类以驱动本次请求切换；是否写入
+	// 全局冷却由 runtimeFailurePenalties 进一步判断。
 	timeoutErr := firstTokenTimeoutConfig{Duration: time.Second, Source: firstTokenTimeoutNonStreamAttempt}.
 		Error(firstTokenTimeoutPhaseWaitingHeaders)
 	timeoutDecision := decideRelayError(0, nil, nil, timeoutErr)
 	if !shouldRecordURLFailure(timeoutDecision) {
-		t.Fatalf("attempt 超时应记 URL 冷却, classification=%+v", timeoutDecision.Classification)
+		t.Fatalf("attempt 超时应保持通道级分类, classification=%+v", timeoutDecision.Classification)
+	}
+}
+
+func TestRequestLocalSchedulingTimeoutsDoNotApplyGlobalPenalties(t *testing.T) {
+	for _, source := range []firstTokenTimeoutSource{
+		firstTokenTimeoutAdaptive,
+		firstTokenTimeoutColdStart,
+		firstTokenTimeoutNonStreamAttempt,
+		firstTokenTimeoutBudget,
+	} {
+		err := firstTokenTimeoutConfig{Duration: time.Second, Source: source}.
+			Error(firstTokenTimeoutPhaseWaitingHeaders)
+		decision := decideRelayError(0, nil, nil, err)
+		recordURL, recordHealth := runtimeFailurePenalties(decision, err, false)
+		if recordURL || recordHealth {
+			t.Fatalf("source %v penalties = (url=%t health=%t), want both false", source, recordURL, recordHealth)
+		}
+	}
+
+	for _, source := range []firstTokenTimeoutSource{firstTokenTimeoutManual, firstTokenTimeoutGlobal} {
+		err := firstTokenTimeoutConfig{Duration: time.Second, Source: source}.
+			Error(firstTokenTimeoutPhaseWaitingHeaders)
+		decision := decideRelayError(0, nil, nil, err)
+		recordURL, recordHealth := runtimeFailurePenalties(decision, err, false)
+		if !recordURL || !recordHealth {
+			t.Fatalf("source %v penalties = (url=%t health=%t), want both true", source, recordURL, recordHealth)
+		}
 	}
 }

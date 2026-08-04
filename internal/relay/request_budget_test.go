@@ -1,11 +1,15 @@
 package relay
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 )
 
@@ -48,6 +52,28 @@ func TestBoundedInitialResponseTimeoutCannotBeDisabledOrRaisedAboveHardLimit(t *
 		t.Run(test.name, func(t *testing.T) {
 			if got := boundedInitialResponseTimeoutSeconds(test.configured, test.ceiling); got != test.want {
 				t.Fatalf("bounded timeout = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestStreamIdleTimeoutCannotBeDisabledOrRaisedAboveHardWaitLimit(t *testing.T) {
+	config := conf.Default().Relay
+	config.InitialResponseTimeoutSeconds = 90
+
+	for _, test := range []struct {
+		name       string
+		configured int
+		want       time.Duration
+	}{
+		{name: "shorter configured idle", configured: 30, want: 30 * time.Second},
+		{name: "oversized configured idle", configured: 600, want: 90 * time.Second},
+		{name: "disabled configured idle", configured: 0, want: 90 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config.StreamIdleTimeoutSeconds = test.configured
+			if got := boundedStreamIdleTimeout(config); got != test.want {
+				t.Fatalf("bounded stream idle timeout = %v, want %v", got, test.want)
 			}
 		})
 	}
@@ -98,5 +124,61 @@ func TestStreamFirstEventBudgetCountsSuccessfulFirstTokenWait(t *testing.T) {
 	run.recordStreamFirstEventWait(span, nil)
 	if run.streamFirstEventSpent < 40*time.Millisecond || run.streamFirstEventSpent > 200*time.Millisecond {
 		t.Fatalf("successful first token wait = %v, want approximately 50ms", run.streamFirstEventSpent)
+	}
+}
+
+func TestBudgetExhaustionStopsWithoutMarkingUnattemptedCandidatesFailed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	items := []model.GroupItem{
+		{ID: 1, Type: model.GroupItemTypeChannel, ChannelID: 10, ModelName: "m", Priority: 1},
+		{ID: 2, Type: model.GroupItemTypeChannel, ChannelID: 11, ModelName: "m", Priority: 2},
+	}
+	group := model.Group{Name: "m", Mode: model.GroupModeFailover, Items: items}
+	iter := balancer.NewIterator(group, 1, "m")
+	run := &relayRun{
+		c: ginCtx, internalRequest: &llm.Request{Model: "m"},
+		metrics:       &RelayMetrics{StartTime: time.Now(), APIKeyID: 1, RequestModel: "m", ActualModel: "m"},
+		group:         group,
+		iter:          iter,
+		iterStack:     []*relayIteratorFrame{{group: group, iter: iter}},
+		iterHistory:   []*balancer.Iterator{iter},
+		failoverState: newRequestFailoverState(),
+	}
+	run.attachIteratorTimeline(iter)
+	run.resolveGroupItemFunc = func(item model.GroupItem, _ bool, _ int) (*relayAttempt, error) {
+		return &relayAttempt{
+			relayRun:  run,
+			channel:   &model.Channel{ID: item.ChannelID, ConfigVersion: 1, Type: llm.APIFormatOpenAIResponse},
+			groupItem: item,
+			usedKey:   model.ChannelKey{ID: item.ChannelID, ChannelKey: "not-a-real-key"},
+			baseURL:   "https://provider.example/v1",
+		}, nil
+	}
+
+	attempted := make([]int, 0, len(items))
+	run.runAttemptFunc = func(attempt *relayAttempt) (bool, error) {
+		attempted = append(attempted, attempt.channel.ID)
+		return false, newTerminalRelayError(http.StatusGatewayTimeout, errStreamFirstEventBudget)
+	}
+
+	run.run()
+	if len(attempted) != 1 || attempted[0] != 10 {
+		t.Fatalf("attempted channels = %v, want only the first candidate", attempted)
+	}
+	unattempted := newRequestCandidateID(
+		&model.Channel{ID: 11, ConfigVersion: 1},
+		model.ChannelKey{ID: 11},
+		"m",
+		"https://provider.example/v1",
+	)
+	if !run.failoverState.allows(unattempted) {
+		t.Fatal("budget exhaustion incorrectly marked the unattempted candidate as failed")
+	}
+	if recorder.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusGatewayTimeout)
 	}
 }

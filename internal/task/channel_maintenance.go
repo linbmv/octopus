@@ -91,10 +91,6 @@ func runChannelMaintenance(parent context.Context, channel model.Channel) error 
 	if ctx.Err() != nil {
 		return context.Cause(ctx)
 	}
-	helper.ChannelAutoGroup(&channel, ctx)
-	if ctx.Err() != nil {
-		return context.Cause(ctx)
-	}
 	return result
 }
 

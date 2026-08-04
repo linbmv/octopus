@@ -46,8 +46,8 @@ func TestLoadUsesDefaultValues(t *testing.T) {
 	if config.Relay.NonStreamTimeoutSeconds != 120 {
 		t.Fatalf("Relay.NonStreamTimeoutSeconds = %d, want 120", config.Relay.NonStreamTimeoutSeconds)
 	}
-	if config.Relay.StreamFirstEventTimeoutSeconds != 120 || config.Relay.StreamIdleTimeoutSeconds != 600 {
-		t.Fatalf("Relay stream timeout defaults = %#v, want first-event=120s idle=600s", config.Relay)
+	if config.Relay.StreamFirstEventTimeoutSeconds != 120 || config.Relay.StreamIdleTimeoutSeconds != 120 {
+		t.Fatalf("Relay stream timeout defaults = %#v, want first-event=120s idle=120s", config.Relay)
 	}
 	if config.Relay.NonStreamAttemptTimeoutSeconds != 60 {
 		t.Fatalf("Relay.NonStreamAttemptTimeoutSeconds = %d, want 60", config.Relay.NonStreamAttemptTimeoutSeconds)

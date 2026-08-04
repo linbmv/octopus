@@ -37,9 +37,9 @@ type circuitEntry struct {
 	// HalfOpenProbes 记录当前在途试探数。试探者可能在到达上游前被跳过或被
 	// 客户端取消（不会走到 RecordSuccess/RecordFailure），必须通过
 	// RecordProbeAbort 或租约超时归还名额，否则条目会永久卡在 HalfOpen。
-	HalfOpenProbes     int
-	HalfOpenLastProbe  time.Time
-	mu                 sync.Mutex
+	HalfOpenProbes    int
+	HalfOpenLastProbe time.Time
+	mu                sync.Mutex
 }
 
 type breakerKey struct {
@@ -341,8 +341,9 @@ func RecordSuccess(channelID, keyID int, modelName string) {
 
 // RecordProbeAbort 归还一个半开试探名额但不给出成败结论。
 // 用于试探请求未到达上游即终止的路径：出站适配器构造失败、渠道限流预留失败、
-// 客户端取消、client 级错误、自适应首字超时等。这些情况不能证明通道恢复或
-// 仍然故障，但必须释放名额，否则半开态会在租约期内拒绝后续试探。
+// 客户端取消、client 级错误、自适应/冷启动/单次调度首字超时等。这些情况
+// 不能证明通道恢复或仍然故障，但必须释放名额，否则半开态会在租约期内拒绝
+// 后续试探。
 func RecordProbeAbort(channelID, keyID int, modelName string) {
 	key := circuitKey(channelID, keyID, modelName)
 	entry := globalBreaker.get(key)
@@ -410,7 +411,7 @@ func (s *breakerState) stateCounts(now time.Time) (closed, open, halfOpen int) {
 }
 
 // CircuitSnapshotForChannel 返回指定渠道当前所有非 Closed 的熔断条目
-//（含冻结剩余冷却），供渠道详情 UI 展示"哪些模型被冻结、还剩多久"。
+// （含冻结剩余冷却），供渠道详情 UI 展示"哪些模型被冻结、还剩多久"。
 func CircuitSnapshotForChannel(channelID int) []model.ChannelCircuitStatus {
 	return globalBreaker.snapshotForChannel(channelID, circuitNow())
 }

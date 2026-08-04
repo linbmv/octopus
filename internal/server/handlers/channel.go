@@ -295,6 +295,13 @@ func createChannel(c *gin.Context) {
 		respondOperationError(c, err)
 		return
 	}
+	if helper.ReconcileChannelAutoGroup(&channel, c.Request.Context()) {
+		balancer.InvalidateGroups()
+	}
+	// Creation is a routing change even when automatic grouping is disabled.
+	// When it is enabled, reconciliation above makes the channel visible before
+	// this notification and before the create response is returned.
+	invalidateChannelRuntimeState(channel.ID, &channel)
 	middleware.AuditLog(c, middleware.EventChannelCreate, map[string]interface{}{
 		"channel_id":   channel.ID,
 		"channel_name": channel.Name,
@@ -325,6 +332,9 @@ func updateChannel(c *gin.Context) {
 	if err != nil {
 		respondOperationError(c, err)
 		return
+	}
+	if helper.ReconcileChannelAutoGroup(channel, c.Request.Context()) {
+		balancer.InvalidateGroups()
 	}
 	invalidateChannelRuntimeState(channel.ID, oldChannel, channel)
 	middleware.AuditLog(c, middleware.EventChannelUpdate, map[string]interface{}{

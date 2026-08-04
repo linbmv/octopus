@@ -71,10 +71,12 @@ func (r *relayRun) run() {
 
 		written, err := r.runAttempt(attempt)
 		if err == nil {
+			r.requestFailoverState().stop()
 			r.metrics.Save(ctx, true, nil, r.attempts())
 			return
 		}
 		if errors.Is(err, errRoutingConfigChanged) && !written {
+			attempt.exhaustRequestCandidate(requestFailureChannel)
 			if refreshErr := r.refreshRouting(); refreshErr != nil {
 				var terminalErr *terminalRelayError
 				if errors.As(refreshErr, &terminalErr) {
@@ -100,6 +102,9 @@ func (r *relayRun) run() {
 			}
 			r.metrics.Save(ctx, false, err, r.attempts())
 			return
+		}
+		if r.runAttemptFunc != nil {
+			attempt.exhaustRequestCandidate(requestFailureChannel)
 		}
 		lastErr = err
 		var clientErr *classifiedClientRelayError
@@ -199,6 +204,12 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 			attempt, err := r.resolveCandidate(item, frame.iter.IsSticky(), frame.iter.StickyKeyID())
 			if attempt != nil {
 				attempt.firstTokenPolicyGroup = &frame.group
+				if !r.selectRequestCandidate(attempt) {
+					if attempt.channel != nil {
+						balancer.RecordProbeAbort(attempt.channel.ID, attempt.usedKey.ID, item.ModelName)
+					}
+					continue
+				}
 			}
 			if err != nil || attempt != nil {
 				return attempt, err
@@ -318,11 +329,29 @@ func (r *relayRun) buildRealAttempt(
 	}
 
 	for keyIndex, usedKey := range keyOptions {
+		candidateBaseURL := baseURL
+		candidateBaseURLIndex := 0
+		if len(baseURLOptions) > 0 {
+			candidateBaseURL = ""
+			candidateBaseURLIndex = -1
+			for i, option := range baseURLOptions {
+				if option != "" && r.requestCandidateAllowed(channel, usedKey, item.ModelName, option) {
+					candidateBaseURL = option
+					candidateBaseURLIndex = i
+					break
+				}
+			}
+		} else if !r.requestCandidateAllowed(channel, usedKey, item.ModelName, candidateBaseURL) {
+			continue
+		}
+		if candidateBaseURLIndex < 0 {
+			continue
+		}
 		keyRemark := cleanKeyRemark(usedKey.Remark)
 		if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {
 			continue
 		}
-		outAdapter, err := newChannelOutbound(channel, r.internalRequest, baseURL, usedKey)
+		outAdapter, err := newChannelOutbound(channel, r.internalRequest, candidateBaseURL, usedKey)
 		if err != nil {
 			// SkipCircuitBreak 通过时可能已把该 key 置为半开试探者；此处未发出
 			// 真实请求即放弃，必须归还试探名额，否则半开态会滞留到租约超时。
@@ -352,8 +381,9 @@ func (r *relayRun) buildRealAttempt(
 			usedKey:         usedKey,
 			keyOptions:      keyOptions,
 			keyIndex:        keyIndex,
-			baseURL:         baseURL,
+			baseURL:         candidateBaseURL,
 			baseURLOptions:  baseURLOptions,
+			baseURLIndex:    candidateBaseURLIndex,
 			attemptAction:   "selected",
 			selectionReason: "runtime_url_selector",
 			keyRemark:       keyRemark,

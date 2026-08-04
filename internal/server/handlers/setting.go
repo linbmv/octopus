@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/channelstate"
 	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -275,8 +276,13 @@ func importDB(c *gin.Context) {
 		resp.Success(c, result)
 		return
 	}
-	if err := refreshCachesAfterDBImport(); err != nil {
-		log.WithContext(c.Request.Context()).Errorw("runtime cache refresh after database restore failed", "error", err)
+	refreshErr := refreshCachesAfterDBImport()
+	// The database write is already committed on both paths. Drop every runtime
+	// decision and wake in-flight requests even if cache refresh failed, so the
+	// process cannot silently keep serving the pre-restore routing generation.
+	channelstate.InvalidateAll()
+	if refreshErr != nil {
+		log.WithContext(c.Request.Context()).Errorw("runtime cache refresh after database restore failed", "error", refreshErr)
 		resp.ErrorWithCodeAndDetails(c, http.StatusInternalServerError, "DB_IMPORT_CACHE_REFRESH_FAILED", "database restore committed but runtime cache refresh failed; restart the service before serving traffic", map[string]interface{}{
 			"import_committed": true,
 			"mode":             result.Mode,

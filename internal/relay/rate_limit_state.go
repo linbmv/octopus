@@ -108,3 +108,12 @@ func (s *channelRateLimitState) invalidate(channelID int) {
 	delete(s.until, channelID)
 	s.mu.Unlock()
 }
+
+func (s *channelRateLimitState) clear() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	clear(s.until)
+	s.mu.Unlock()
+}

@@ -309,6 +309,16 @@ func TestHealthManagerInvalidateChannelCanTargetOneModel(t *testing.T) {
 	}
 }
 
+func TestHealthManagerInvalidateAll(t *testing.T) {
+	manager := NewHealthManager(DefaultHealthConfig())
+	manager.RecordSuccess(7, 70, "model-a", time.Second)
+	manager.RecordSuccess(8, 80, "model-b", time.Second)
+	manager.InvalidateAll()
+	if states := manager.GetAllStates(); len(states) != 0 {
+		t.Fatalf("InvalidateAll() retained health states: %+v", states)
+	}
+}
+
 // TestHealthManager_Cleanup 测试清理过期状态
 func TestHealthManager_Cleanup(t *testing.T) {
 	config := DefaultHealthConfig()

@@ -60,8 +60,8 @@ func (ra *relayAttempt) handleFirstToken(stopFirstTokenGuard func()) {
 	if ra.span != nil {
 		ra.span.RecordFirstToken(now)
 	}
-	// 首字超时计时器已由 reader 协程在事件入队前停掉，这里只记录首 token 时间。
-	// 仍兜底调用一次（幂等）以防 reader 停表路径未覆盖到的边界。
+	// Only semantic output crosses the replay boundary. Stop the first-token and
+	// routing-change guards immediately before buffered control events are sent.
 	stopFirstTokenGuard()
 }
 

@@ -30,6 +30,7 @@ type relayRun struct {
 	streamFirstEventBudget time.Duration
 	routingSnapshot        routingstate.Snapshot
 	routingRefreshes       int
+	failoverState          *requestFailoverState
 	resolveGroupItemFunc   func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error)
 	runAttemptFunc         func(attempt *relayAttempt) (bool, error)
 	reloadRoutingFunc      func() error

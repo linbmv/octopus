@@ -33,6 +33,7 @@ func (ra *relayAttempt) run() (bool, error) {
 		// 否则 RPM/并发饱和会让半开态一直无有效试探。
 		balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		ra.iter.Skip(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, msg)
+		ra.exhaustRequestCandidate(requestFailureChannel)
 		return false, errors.New(msg)
 	}
 	defer releaseLimits()
@@ -52,10 +53,15 @@ func (ra *relayAttempt) run() (bool, error) {
 			return written, err
 		}
 		if errors.Is(err, errRoutingConfigChanged) {
+			ra.exhaustRequestCandidate(requestFailureChannel)
+			return false, err
+		}
+		if isRequestContextCanceled(ra.c.Request.Context(), err) {
 			return false, err
 		}
 		lastErr = err
 		if ra.canRetryNextBaseURL(err, responseHeaders, responseBody) {
+			ra.exhaustRequestCandidate(requestFailureCandidate)
 			if ra.switchToNextBaseURL() {
 				log.Infof("retrying channel %s(%d) with next base URL after endpoint-level error: %v",
 					ra.channel.Name, ra.channel.ID, lastErr)
@@ -63,8 +69,17 @@ func (ra *relayAttempt) run() (bool, error) {
 			}
 		}
 		if !ra.canRetryNextKey(err, responseHeaders, responseBody) {
+			decision := ra.decideError(ra.usedKey.StatusCode, responseHeaders, responseBody, err)
+			scope := requestFailureChannel
+			if decision.Action == ErrorActionRetryKey || decision.Classification.Level == errorclass.ErrorLevelKey {
+				scope = requestFailureKey
+			} else if decision.Action == ErrorActionReturnClient || decision.Action == ErrorActionNone {
+				scope = requestFailureCandidate
+			}
+			ra.exhaustRequestCandidate(scope)
 			return false, err
 		}
+		ra.exhaustRequestCandidate(requestFailureKey)
 		if !ra.switchToNextKey() {
 			return false, err
 		}
@@ -257,13 +272,12 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 	}
 	// URL 冷却只针对通道级故障（网络/5xx/超时/软错误）。key 级（401/配额）与
 	// client 级错误与端点本身无关，误记会让多 URL 渠道被轮换到次优端点。
-	if shouldRecordURLFailure(decision) && !ra.isAdaptiveFirstTokenTimeout(fwdErr) && !isFirstTokenBudgetTimeout(fwdErr) {
-		recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
-	}
 	endpointFallbackPending := decision.Action == ErrorActionRetryChannel &&
 		!ra.isAdaptiveFirstTokenTimeout(fwdErr) && !isFirstTokenBudgetTimeout(fwdErr) && ra.hasNextBaseURL()
-	healthPenalty := decision.Classification.Level != errorclass.ErrorLevelClient &&
-		!ra.isAdaptiveFirstTokenTimeout(fwdErr) && !isFirstTokenBudgetTimeout(fwdErr) && !endpointFallbackPending
+	recordURLFailure, healthPenalty := runtimeFailurePenalties(decision, fwdErr, endpointFallbackPending)
+	if recordURLFailure {
+		recordRuntimeURLFailure(ra.channel.ID, ra.baseURL)
+	}
 	span.SetRoutingMetadata(safeRuntimeURL(ra.baseURL), attemptDecisionAction(decision, endpointFallbackPending), healthPenalty, ra.selectionReason)
 	ra.applyCompactCompatibilityDecision(ctx, decision)
 	upstreamSpan.RecordError(fwdErr)
@@ -287,10 +301,10 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 			log.WithContext(ctx).Warnw("failed to update failed channel attempt statistics",
 				"channel_id", ra.channel.ID, "error", statsErr)
 		}
-		if !ra.isAdaptiveFirstTokenTimeout(fwdErr) && !isFirstTokenBudgetTimeout(fwdErr) && !endpointFallbackPending {
+		if healthPenalty {
 			balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		} else {
-			// 自适应超时或仍可进行端点级故障转移时，不提前惩罚整个
+			// 请求内调度超时或仍可进行端点级故障转移时，不提前惩罚
 			// channel+key+model；若本次是半开试探则归还名额。
 			balancer.RecordProbeAbort(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 		}
@@ -390,7 +404,8 @@ func (ra *relayAttempt) canRetryNextBaseURL(err error, upstreamHeaders http.Head
 
 func (ra *relayAttempt) hasNextBaseURL() bool {
 	for i := ra.baseURLIndex + 1; i < len(ra.baseURLOptions); i++ {
-		if ra.baseURLOptions[i] != "" && ra.baseURLOptions[i] != ra.baseURL {
+		if ra.baseURLOptions[i] != "" && ra.baseURLOptions[i] != ra.baseURL &&
+			ra.requestCandidateAllowed(ra.channel, ra.usedKey, ra.internalRequest.Model, ra.baseURLOptions[i]) {
 			return true
 		}
 	}
@@ -404,6 +419,9 @@ func (ra *relayAttempt) switchToNextBaseURL() bool {
 		if nextBaseURL == "" || nextBaseURL == ra.baseURL {
 			continue
 		}
+		if !ra.requestCandidateAllowed(ra.channel, ra.usedKey, ra.internalRequest.Model, nextBaseURL) {
+			continue
+		}
 		outAdapter, err := newChannelOutbound(ra.channel, ra.internalRequest, nextBaseURL, ra.usedKey)
 		if err != nil {
 			continue
@@ -414,7 +432,9 @@ func (ra *relayAttempt) switchToNextBaseURL() bool {
 		ra.metrics.OutboundRequestSummary = nil
 		ra.metrics.OutboundRequestArtifact = nil
 		ra.responseHeaderDuration = 0
-		ra.attemptAction = "selected"
+		if !ra.selectRequestCandidate(ra) {
+			continue
+		}
 		ra.selectionReason = "base_url_failover"
 		return true
 	}
@@ -426,6 +446,9 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		ra.keyIndex++
 		nextKey := ra.keyOptions[ra.keyIndex]
 		if nextKey.ChannelKey == "" {
+			continue
+		}
+		if !ra.requestCandidateAllowed(ra.channel, nextKey, ra.internalRequest.Model, ra.baseURL) {
 			continue
 		}
 		nextKeyRemark := cleanKeyRemark(nextKey.Remark)
@@ -445,7 +468,9 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		ra.metrics.ParamOverride = ""
 		ra.metrics.OutboundRequestSummary = nil
 		ra.metrics.OutboundRequestArtifact = nil
-		ra.attemptAction = "selected"
+		if !ra.selectRequestCandidate(ra) {
+			continue
+		}
 		ra.selectionReason = "key_failover"
 		return true
 	}

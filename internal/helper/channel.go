@@ -60,8 +60,16 @@ func ChannelBaseUrlDelayUpdate(channel *model.Channel, ctx context.Context) {
 }
 
 func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
+	publishAutoGroupRoutingChange(ReconcileChannelAutoGroup(channel, ctx))
+}
+
+// ReconcileChannelAutoGroup applies the routing-critical group membership
+// changes synchronously and leaves publication to the caller. HTTP handlers use
+// this to publish one routing revision only after both channel and group caches
+// reflect the administrator's change.
+func ReconcileChannelAutoGroup(channel *model.Channel, ctx context.Context) bool {
 	if channel == nil {
-		return
+		return false
 	}
 	channelModelNames := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel)
 	routingChanged := false
@@ -71,14 +79,12 @@ func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
 		routingChanged = changed
 	}
 	if channel.AutoGroup == model.AutoGroupTypeNone || len(channelModelNames) == 0 {
-		publishAutoGroupRoutingChange(routingChanged)
-		return
+		return routingChanged
 	}
 	groups, err := op.GroupList(ctx)
 	if err != nil {
 		log.Warnf("get group list failed: %v", err)
-		publishAutoGroupRoutingChange(routingChanged)
-		return
+		return routingChanged
 	}
 
 	for _, group := range groups {
@@ -87,7 +93,7 @@ func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
 			routingChanged = addMatchedModelsToGroup(channel.ID, group.ID, matchedModelNames, ctx) || routingChanged
 		}
 	}
-	publishAutoGroupRoutingChange(routingChanged)
+	return routingChanged
 }
 
 func matchModelsToGroup(channel *model.Channel, group model.Group, channelModelNames []string) []string {

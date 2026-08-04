@@ -18,6 +18,7 @@ import (
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	projectlog "github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
@@ -261,6 +262,7 @@ func TestImportDBEncryptedRawBodyRestoresAndRefreshes(t *testing.T) {
 
 	router := gin.New()
 	router.POST("/import", importDB)
+	routingBefore := routingstate.Current()
 	req := httptest.NewRequest(http.MethodPost, "/import", bytes.NewReader(encrypted))
 	req.Header.Set("Content-Type", op.EncryptedDBBackupContentType)
 	req.Header.Set(backupPasswordHeader, password)
@@ -279,6 +281,11 @@ func TestImportDBEncryptedRawBodyRestoresAndRefreshes(t *testing.T) {
 	}
 	if imported.Name != dump.Channels[0].Name {
 		t.Fatalf("imported channel = %#v", imported)
+	}
+	select {
+	case <-routingBefore.Changed:
+	default:
+		t.Fatal("successful database import did not publish a routing change")
 	}
 }
 
@@ -529,6 +536,7 @@ func TestImportDBReportsCommittedCacheRefreshFailure(t *testing.T) {
 	oldRefresh := refreshCachesAfterDBImport
 	refreshCachesAfterDBImport = func() error { return errors.New("injected cache refresh failure") }
 	t.Cleanup(func() { refreshCachesAfterDBImport = oldRefresh })
+	routingBefore := routingstate.Current()
 
 	dump := model.DBDump{
 		Version:    1,
@@ -557,6 +565,11 @@ func TestImportDBReportsCommittedCacheRefreshFailure(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+	select {
+	case <-routingBefore.Changed:
+	default:
+		t.Fatal("committed database import did not publish a routing change after cache refresh failure")
 	}
 	var response struct {
 		Error struct {

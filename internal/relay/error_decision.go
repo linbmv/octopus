@@ -260,6 +260,14 @@ func shouldRecordURLFailure(decision ErrorDecision) bool {
 	return decision.Classification.Level == errorclass.ErrorLevelChannel
 }
 
+func runtimeFailurePenalties(decision ErrorDecision, err error, endpointFallbackPending bool) (recordURLFailure, recordHealthFailure bool) {
+	nonPunitiveTimeout := isNonPunitiveFirstTokenTimeout(err)
+	recordURLFailure = shouldRecordURLFailure(decision) && !nonPunitiveTimeout
+	recordHealthFailure = decision.Classification.Level != errorclass.ErrorLevelClient &&
+		!nonPunitiveTimeout && !endpointFallbackPending
+	return recordURLFailure, recordHealthFailure
+}
+
 // isEndpointUnsupportedError is retained as a compatibility wrapper for the
 // focused endpoint tests. Compact routing uses isCompactEndpointUnsupported so
 // it can also inspect the response body and avoid model_not_found false marks.

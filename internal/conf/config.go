@@ -38,7 +38,7 @@ type JWT struct {
 
 type Relay struct {
 	// InitialResponseTimeoutSeconds is a non-disableable safety ceiling for the
-	// complete non-streaming lifecycle and the pre-first-event streaming phase.
+	// complete non-streaming lifecycle and the pre-semantic-output streaming phase.
 	// Lower phase-specific limits still win.
 	InitialResponseTimeoutSeconds int `mapstructure:"initial_response_timeout_seconds"`
 	// NonStreamTimeoutSeconds bounds the complete upstream lifecycle for a
@@ -46,16 +46,20 @@ type Relay struct {
 	// InitialResponseTimeoutSeconds ceiling.
 	NonStreamTimeoutSeconds        int `mapstructure:"non_stream_timeout_seconds"`
 	StreamFirstEventTimeoutSeconds int `mapstructure:"stream_first_event_timeout_seconds"`
-	StreamIdleTimeoutSeconds       int `mapstructure:"stream_idle_timeout_seconds"`
+	// StreamIdleTimeoutSeconds bounds silence after semantic output. Zero and
+	// values above InitialResponseTimeoutSeconds use that non-disableable ceiling.
+	StreamIdleTimeoutSeconds int `mapstructure:"stream_idle_timeout_seconds"`
 	// NonStreamAttemptTimeoutSeconds bounds one non-streaming upstream attempt
 	// while waiting for response headers, so a hung channel yields to remaining
 	// failover candidates instead of consuming the whole request budget. It is
 	// only applied when another candidate exists; the last candidate uses the
-	// remaining initial-response budget. Zero disables this per-attempt guard.
+	// remaining initial-response budget. This scheduling timeout does not add a
+	// global URL cooldown or circuit failure. Zero disables this per-attempt guard.
 	NonStreamAttemptTimeoutSeconds int `mapstructure:"non_stream_attempt_timeout_seconds"`
 	// StreamColdStartFirstEventTimeoutSeconds bounds the wait for the first
 	// stream event on channels without adaptive health samples when another
-	// failover candidate exists. Zero disables the cold-start override.
+	// failover candidate exists. This scheduling timeout does not add a global
+	// URL cooldown or circuit failure. Zero disables the cold-start override.
 	StreamColdStartFirstEventTimeoutSeconds int `mapstructure:"stream_cold_start_first_event_timeout_seconds"`
 	// MaxUpstreamAttempts is an optional cost guard across keys, base URLs, and
 	// channels. Zero lets the finite iterator and request time budgets decide.
@@ -275,7 +279,7 @@ func setDefaultsFor(v *viper.Viper) {
 	v.SetDefault("relay.initial_response_timeout_seconds", 120)
 	v.SetDefault("relay.non_stream_timeout_seconds", 120)
 	v.SetDefault("relay.stream_first_event_timeout_seconds", 120)
-	v.SetDefault("relay.stream_idle_timeout_seconds", 600)
+	v.SetDefault("relay.stream_idle_timeout_seconds", 120)
 	v.SetDefault("relay.non_stream_attempt_timeout_seconds", 60)
 	v.SetDefault("relay.stream_cold_start_first_event_timeout_seconds", 30)
 	v.SetDefault("relay.max_upstream_attempts", 0)

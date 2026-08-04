@@ -112,6 +112,17 @@ func InvalidateRuntimeURLState(channelID int) {
 	globalChannelRateLimits.invalidate(channelID)
 }
 
+// InvalidateAllRuntimeState clears endpoint, rate-limit and adaptive-health
+// evidence after a bulk database restore.
+func InvalidateAllRuntimeState() {
+	globalRuntimeURLSelector.InvalidateAll()
+	globalChannelRateLimits.clear()
+	globalChannelRPMLimiter.clear()
+	if healthManager != nil {
+		healthManager.InvalidateAll()
+	}
+}
+
 func (s *runtimeURLSelector) Select(channelID int, baseURLs []model.BaseUrl) string {
 	candidates := s.Candidates(channelID, baseURLs)
 	if len(candidates) == 0 {
@@ -338,6 +349,17 @@ func (s *runtimeURLSelector) InvalidateChannel(channelID int) {
 			delete(s.cooldowns, key)
 		}
 	}
+}
+
+func (s *runtimeURLSelector) InvalidateAll() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	clear(s.latencies)
+	clear(s.cooldowns)
+	s.writeCount = 0
+	s.mu.Unlock()
 }
 
 func (s *runtimeURLSelector) prepareWriteLocked(now time.Time) {

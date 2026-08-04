@@ -217,7 +217,7 @@ The configuration file is located at `data/config.json` by default and is automa
     "initial_response_timeout_seconds": 120,
     "non_stream_timeout_seconds": 120,
     "stream_first_event_timeout_seconds": 120,
-    "stream_idle_timeout_seconds": 600,
+    "stream_idle_timeout_seconds": 120,
     "non_stream_attempt_timeout_seconds": 60,
     "stream_cold_start_first_event_timeout_seconds": 30,
     "stream_first_event_budget_seconds": 120,
@@ -254,13 +254,13 @@ The configuration file is located at `data/config.json` by default and is automa
 | `database.path` | Database connection string | `data/data.db` |
 | `log.level` | Log level | `info` |
 | `log.format` | Log encoder (`json` or `console`) | `json` |
-| `relay.initial_response_timeout_seconds` | Non-disableable hard ceiling for the complete non-streaming lifecycle across retries and the cumulative pre-first-event streaming phase; range 1–120 seconds | `120` |
+| `relay.initial_response_timeout_seconds` | Non-disableable hard ceiling for the complete non-streaming lifecycle across retries and the cumulative pre-semantic-output streaming phase; range 1–120 seconds | `120` |
 | `relay.non_stream_timeout_seconds` | Configured complete non-streaming budget across retries (`0` uses the hard initial-response ceiling; max 86400 seconds). The effective value cannot exceed `initial_response_timeout_seconds`. | `120` |
-| `relay.stream_first_event_timeout_seconds` | Per-attempt global fallback from upstream request start through the first non-empty stream event (`0` disables this layer; max 86400 seconds). A group manual timeout wins, followed by an adaptive timeout with samples; cumulative waiting remains hard-bounded. | `120` |
-| `relay.stream_idle_timeout_seconds` | Stream idle guard armed only after the first non-empty event and reset by every upstream event or raw heartbeat (`0` disables; max 86400 seconds) | `600` |
-| `relay.non_stream_attempt_timeout_seconds` | Per-attempt response-header timeout while another failover candidate remains. The last candidate receives the remaining initial-response budget (`0` disables this layer; max 86400 seconds). | `60` |
-| `relay.stream_cold_start_first_event_timeout_seconds` | First-event timeout for a streaming candidate without adaptive samples while another failover candidate remains (`0` disables this layer; max 86400 seconds) | `30` |
-| `relay.stream_first_event_budget_seconds` | Cumulative first-event wait budget across streaming channel, key, and endpoint attempts (`0` uses the hard initial-response ceiling). The effective value cannot exceed `initial_response_timeout_seconds`. | `120` |
+| `relay.stream_first_event_timeout_seconds` | Per-attempt global fallback from upstream request start through the first semantic model output (`0` disables this layer; max 86400 seconds). Lifecycle/control events such as `response.created` do not end the guard. A group manual timeout wins, followed by an adaptive timeout with samples; cumulative waiting remains hard-bounded. | `120` |
+| `relay.stream_idle_timeout_seconds` | Stream idle guard armed only after the first semantic model output and reset by every upstream event or raw heartbeat (`0` uses the hard initial-response ceiling; configured values are capped by that ceiling) | `120` |
+| `relay.non_stream_attempt_timeout_seconds` | Per-attempt response-header timeout while another failover candidate remains. The last candidate receives the remaining initial-response budget. A timeout switches only the current request and does not add global URL cooldown or circuit-breaker failure (`0` disables this layer; max 86400 seconds). | `60` |
+| `relay.stream_cold_start_first_event_timeout_seconds` | First-semantic-output timeout for a streaming candidate without adaptive samples while another failover candidate remains. A timeout switches only the current request and does not add global URL cooldown or circuit-breaker failure (`0` disables this layer; max 86400 seconds). | `30` |
+| `relay.stream_first_event_budget_seconds` | Cumulative semantic-output wait budget across streaming channel, key, and endpoint attempts (`0` uses the hard initial-response ceiling). The effective value cannot exceed `initial_response_timeout_seconds`. | `120` |
 | `relay.max_json_request_bytes` | Maximum decoded JSON request body; valid range 1 byte–1 GiB | `33554432` (32 MiB) |
 | `relay.max_image_request_bytes` | Maximum complete image edit/variation multipart body; valid range 1 byte–1 GiB | `67108864` (64 MiB) |
 | `relay.max_non_stream_response_bytes` | Maximum decoded upstream non-streaming response and streaming HTTP error body; successful streams have no total byte cap | `67108864` (64 MiB) |

@@ -9,6 +9,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/routingstate"
 )
 
 func createApplyPatch(t *testing.T, channelID int, nextUserAgent string) (*model.ChannelPatch, *model.DiagnosticSession) {
@@ -55,6 +56,7 @@ func TestPatchServiceAppliesWithOptimisticVersionAndVerifiesOnce(t *testing.T) {
 	patch, _ := createApplyPatch(t, channel.ID, "codex-tui/1")
 	fake := &fakeDiagnosticExecutor{succeedOn: DimensionBaseline}
 	service := NewPatchService(testSelfHealingConfig(), fake)
+	routingBefore := routingstate.Current()
 	result, err := service.Apply(context.Background(), patch.ID)
 	if err != nil {
 		t.Fatalf("Apply error: %v", err)
@@ -74,6 +76,11 @@ func TestPatchServiceAppliesWithOptimisticVersionAndVerifiesOnce(t *testing.T) {
 	if len(fake.calls) != 1 || fake.calls[0].Dimension != DimensionBaseline {
 		t.Fatalf("verification calls = %#v, want exactly one baseline", fake.calls)
 	}
+	select {
+	case <-routingBefore.Changed:
+	default:
+		t.Fatal("self-healing apply did not publish a routing change")
+	}
 }
 
 func TestPatchServiceRollsBackAfterVerificationFailure(t *testing.T) {
@@ -85,6 +92,7 @@ func TestPatchServiceRollsBackAfterVerificationFailure(t *testing.T) {
 	current, _ := op.ChannelGet(channel.ID, context.Background())
 	patch, _ := createApplyPatch(t, channel.ID, "bad-agent")
 	service := NewPatchService(testSelfHealingConfig(), &fakeDiagnosticExecutor{})
+	routingBefore := routingstate.Current()
 	result, err := service.Apply(context.Background(), patch.ID)
 	if !errors.Is(err, ErrPatchInvalid) || result.Status != model.ChannelPatchRolledBack {
 		t.Fatalf("rollback result = %#v, err=%v", result, err)
@@ -95,6 +103,11 @@ func TestPatchServiceRollsBackAfterVerificationFailure(t *testing.T) {
 	}
 	if rolledBack.UserAgent != "old-agent" || rolledBack.ConfigVersion != current.ConfigVersion+2 {
 		t.Fatalf("rolled back channel = %#v", rolledBack)
+	}
+	select {
+	case <-routingBefore.Changed:
+	default:
+		t.Fatal("self-healing apply/rollback did not publish a routing change")
 	}
 }
 

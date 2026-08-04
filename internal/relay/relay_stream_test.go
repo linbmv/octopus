@@ -15,6 +15,7 @@ import (
 	"github.com/bestruirui/octopus/internal/conf"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/errorclass"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -243,21 +244,253 @@ func TestStreamLogCollectorRecognizesOnlySuccessfulTerminalEvents(t *testing.T) 
 	}
 }
 
+func TestStreamEventSemanticOutputBoundary(t *testing.T) {
+	tests := []struct {
+		name  string
+		event *httpclient.StreamEvent
+		want  bool
+	}{
+		{name: "responses created control", event: &httpclient.StreamEvent{Type: "response.created", Data: []byte(`{"type":"response.created","response":{"status":"in_progress"}}`)}, want: false},
+		{name: "responses in progress control", event: &httpclient.StreamEvent{Type: "response.in_progress", Data: []byte(`{"type":"response.in_progress"}`)}, want: false},
+		{name: "chat role control", event: &httpclient.StreamEvent{Data: []byte(`{"choices":[{"delta":{"role":"assistant"}}]}`)}, want: false},
+		{name: "chat whitespace content", event: &httpclient.StreamEvent{Data: []byte(`{"choices":[{"delta":{"content":" "}}]}`)}, want: true},
+		{name: "chat text", event: &httpclient.StreamEvent{Data: []byte(`{"choices":[{"delta":{"content":"hello"}}]}`)}, want: true},
+		{name: "chat tool call", event: &httpclient.StreamEvent{Data: []byte(`{"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"lookup"}}]}}]}`)}, want: true},
+		{name: "responses text delta", event: &httpclient.StreamEvent{Type: "response.output_text.delta", Data: []byte(`{"type":"response.output_text.delta","delta":"hello"}`)}, want: true},
+		{name: "responses function item", event: &httpclient.StreamEvent{Type: "response.output_item.added", Data: []byte(`{"type":"response.output_item.added","item":{"type":"function_call","name":"lookup","call_id":"call_1"}}`)}, want: true},
+		{name: "responses citation annotation", event: &httpclient.StreamEvent{Type: "response.output_text.annotation.added", Data: []byte(`{"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url":"https://example.com"}}`)}, want: true},
+		{name: "anthropic message start", event: &httpclient.StreamEvent{Type: "message_start", Data: []byte(`{"type":"message_start","message":{"content":[]}}`)}, want: false},
+		{name: "anthropic empty text block", event: &httpclient.StreamEvent{Type: "content_block_start", Data: []byte(`{"type":"content_block_start","content_block":{"type":"text","text":""}}`)}, want: false},
+		{name: "anthropic tool block", event: &httpclient.StreamEvent{Type: "content_block_start", Data: []byte(`{"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_1","name":"lookup"}}`)}, want: true},
+		{name: "anthropic text delta", event: &httpclient.StreamEvent{Type: "content_block_delta", Data: []byte(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`)}, want: true},
+		{name: "gemini text", event: &httpclient.StreamEvent{Data: []byte(`{"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}`)}, want: true},
+		{name: "gemini function call", event: &httpclient.StreamEvent{Data: []byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"city":"Paris"}}}]}}]}`)}, want: true},
+		{name: "usage only", event: &httpclient.StreamEvent{Data: []byte(`{"usage":{"input_tokens":1,"output_tokens":0}}`)}, want: false},
+		{name: "custom json payload", event: &httpclient.StreamEvent{Type: "chunk", Data: []byte(`{"chunk":"hello"}`)}, want: true},
+		{name: "done marker", event: &httpclient.StreamEvent{Data: llm.DoneStreamEvent.Data}, want: false},
+		{name: "binary audio", event: &httpclient.StreamEvent{Type: "audio/mpeg", Data: []byte{1, 2, 3}}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := streamEventHasSemanticOutput(tt.event); got != tt.want {
+				t.Fatalf("streamEventHasSemanticOutput() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadStreamStopsGuardBeforeEnqueueingSemanticOutput(t *testing.T) {
+	stream := &fakeStream{events: []*httpclient.StreamEvent{{
+		Data: []byte(`{"choices":[{"delta":{"content":"hello"}}]}`),
+	}}}
+	results := make(chan sseReadResult)
+	stopped := make(chan struct{})
+	var stopOnce sync.Once
+	go readStream(
+		context.Background(), stream, results,
+		func() { stopOnce.Do(func() { close(stopped) }) }, func() {},
+	)
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("semantic event did not stop the guard before enqueue")
+	}
+	result, ok := <-results
+	if !ok || result.event == nil || !result.semanticChecked || !result.semanticOutput {
+		t.Fatalf("semantic read result = %#v, open=%t", result, ok)
+	}
+	for range results {
+	}
+}
+
+func TestProcessStreamEventsBuffersControlsUntilSemanticOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ra := &relayAttempt{relayRun: &relayRun{
+		c: ginCtx, metrics: &RelayMetrics{ActualModel: "semantic-test"},
+		inAdapter: newInbound(llm.APIFormatOpenAIResponse),
+	}}
+	results := make(chan sseReadResult, 3)
+	results <- sseReadResult{event: &httpclient.StreamEvent{
+		Type: "response.created", Data: []byte(`{"type":"response.created","response":{"status":"in_progress"}}`),
+	}}
+	results <- sseReadResult{event: &httpclient.StreamEvent{
+		Type: "response.output_text.delta", Data: []byte(`{"type":"response.output_text.delta","delta":"hello"}`),
+	}}
+	close(results)
+	firstToken := true
+	guardStops := 0
+	err := ra.processStreamEvents(
+		ra.c.Request.Context(), results, &firstToken, newStreamLogCollector(), firstTokenTimeoutConfig{},
+		func() { guardStops++ }, func() {}, 0, nil,
+	)
+	if err != nil {
+		t.Fatalf("processStreamEvents() error = %v", err)
+	}
+	if firstToken || guardStops != 1 {
+		t.Fatalf("semantic boundary state: first=%t guard_stops=%d", firstToken, guardStops)
+	}
+	if !ra.c.Writer.Written() {
+		t.Fatal("semantic output did not flush buffered events")
+	}
+	body := recorder.Body.String()
+	controlIndex := strings.Index(body, "response.created")
+	semanticIndex := strings.Index(body, "response.output_text.delta")
+	if controlIndex < 0 || semanticIndex < 0 || controlIndex >= semanticIndex {
+		t.Fatalf("buffered event order is incorrect: %q", body)
+	}
+}
+
+func TestProcessStreamEventsDoesNotCommitSemanticOutputAfterRoutingChange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errRoutingConfigChanged)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+	ra := &relayAttempt{relayRun: &relayRun{
+		c: ginCtx, metrics: &RelayMetrics{ActualModel: "routing-race-test"},
+		inAdapter: newInbound(llm.APIFormatOpenAIResponse),
+	}}
+	results := make(chan sseReadResult, 1)
+	results <- sseReadResult{
+		event: &httpclient.StreamEvent{
+			Type: "response.output_text.delta",
+			Data: []byte(`{"type":"response.output_text.delta","delta":"hello"}`),
+		},
+		semanticOutput: true, semanticChecked: true,
+	}
+	close(results)
+	firstToken := true
+	err := ra.processStreamEvents(
+		ctx, results, &firstToken, newStreamLogCollector(), firstTokenTimeoutConfig{},
+		func() {}, func() {}, 0, nil,
+	)
+	if !errors.Is(err, errRoutingConfigChanged) {
+		t.Fatalf("processStreamEvents() error = %v, want routing change", err)
+	}
+	if !firstToken || recorder.Body.Len() != 0 || ginCtx.Writer.Written() {
+		t.Fatalf("routing change lost semantic boundary race: first=%t body=%q", firstToken, recorder.Body.String())
+	}
+}
+
+func TestProcessStreamEventsFlushesControlOnlyStreamOnCleanEOF(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	metrics := &RelayMetrics{ActualModel: "control-only-test"}
+	ra := &relayAttempt{relayRun: &relayRun{
+		c: ginCtx, metrics: metrics,
+		inAdapter: newInbound(llm.APIFormatOpenAIResponse),
+	}}
+	results := make(chan sseReadResult, 1)
+	results <- sseReadResult{event: &httpclient.StreamEvent{
+		Type: "response.incomplete",
+		Data: []byte(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`),
+	}}
+	close(results)
+	firstToken := true
+	guardStops := 0
+	err := ra.processStreamEvents(
+		ra.c.Request.Context(), results, &firstToken, newStreamLogCollector(), firstTokenTimeoutConfig{},
+		func() { guardStops++ }, func() {}, 0, nil,
+	)
+	if err != nil {
+		t.Fatalf("processStreamEvents() error = %v", err)
+	}
+	if !firstToken || guardStops != 1 || !metrics.FirstTokenTime.IsZero() {
+		t.Fatalf("control-only boundary state: first=%t guard_stops=%d first_token=%v",
+			firstToken, guardStops, metrics.FirstTokenTime)
+	}
+	if !strings.Contains(recorder.Body.String(), "response.incomplete") {
+		t.Fatalf("clean EOF did not flush control-only response: %q", recorder.Body.String())
+	}
+}
+
+func TestPreSemanticStreamBufferIsBounded(t *testing.T) {
+	buffer := &preSemanticStreamBuffer{}
+	err := buffer.add(&httpclient.StreamEvent{Type: "response.created", Data: bytes.Repeat([]byte("x"), conf.MaxRelayLogContentBytes)})
+	if !errors.Is(err, errPreSemanticStreamBufferExceeded) {
+		t.Fatalf("buffer.add() error = %v, want pre-semantic buffer limit", err)
+	}
+}
+
 type blockingAfterEventsStream struct {
-	events    []*httpclient.StreamEvent
-	index     int
-	release   chan struct{}
-	closeOnce sync.Once
-	ctx       context.Context
+	events      []*httpclient.StreamEvent
+	index       int
+	release     chan struct{}
+	closeOnce   sync.Once
+	delivered   chan struct{}
+	deliverOnce sync.Once
+	ctx         context.Context
 }
 
 func (s *blockingAfterEventsStream) Next() bool {
 	if s.index < len(s.events) {
 		s.index++
+		if s.delivered != nil {
+			s.deliverOnce.Do(func() { close(s.delivered) })
+		}
 		return true
 	}
 	<-s.release
 	return false
+}
+
+func TestRoutingChangeAfterControlEventRemainsSafeToFailOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	snapshot := routingstate.Current()
+	guarded, stopGuard, releaseGuard := newRoutingChangeGuard(context.Background(), snapshot.Changed)
+	defer releaseGuard()
+
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(guarded)
+	delivered := make(chan struct{})
+	stream := &blockingAfterEventsStream{
+		events: []*httpclient.StreamEvent{{
+			Type: "response.created", Data: []byte(`{"type":"response.created","response":{"status":"in_progress"}}`),
+		}},
+		release: make(chan struct{}), delivered: delivered, ctx: guarded,
+	}
+	ra := &relayAttempt{relayRun: &relayRun{
+		c: ginCtx, metrics: &RelayMetrics{ActualModel: "control-event-test"},
+		inAdapter: newInbound(llm.APIFormatOpenAIResponse),
+	}}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ra.writeStream(guarded, stopGuard, firstTokenTimeoutConfig{}, stream)
+	}()
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Fatal("control event was not read")
+	}
+	// Let the relay enqueue and buffer the control event. It must still have
+	// written no response bytes when the administrator changes routing.
+	time.Sleep(10 * time.Millisecond)
+	if recorder.Body.Len() != 0 || ginCtx.Writer.Written() {
+		t.Fatalf("control event crossed failover boundary: %q", recorder.Body.String())
+	}
+	routingstate.Notify()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, errRoutingConfigChanged) {
+			t.Fatalf("writeStream() error = %v, want routing configuration change", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("routing change did not interrupt stream after control event")
+	}
+	if recorder.Body.Len() != 0 || ginCtx.Writer.Written() {
+		t.Fatalf("discarded control event was written to the client: %q", recorder.Body.String())
+	}
 }
 
 func (s *blockingAfterEventsStream) Current() *httpclient.StreamEvent {

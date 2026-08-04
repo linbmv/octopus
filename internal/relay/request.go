@@ -134,6 +134,7 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 			relayConfig.InitialResponseTimeoutSeconds,
 		)) * time.Second,
 		routingSnapshot: routingSnapshot,
+		failoverState:   newRequestFailoverState(),
 	}
 	run.attachIteratorTimeline(iter)
 	return run, nil

@@ -43,6 +43,7 @@ func (r *relayRun) refreshRouting() error {
 	}
 
 	snapshot := routingstate.Current()
+	r.requestFailoverState().routingChanged()
 	r.routingRefreshes++
 	if r.reloadRoutingFunc != nil {
 		if err := r.reloadRoutingFunc(); err != nil {
@@ -87,7 +88,7 @@ func (r *relayRun) refreshRouting() error {
 }
 
 // newRoutingChangeGuard cancels only the pre-response upstream phase. Calling
-// stop after response headers (non-streaming) or the first non-empty event
+// stop after response headers (non-streaming) or the first semantic output
 // (streaming) detaches the watcher so an established response is never replayed.
 func newRoutingChangeGuard(parent context.Context, changed <-chan struct{}) (
 	ctx context.Context,

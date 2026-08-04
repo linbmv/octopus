@@ -31,3 +31,13 @@ func InvalidateGroups() {
 	smoothWeightedState.clear()
 	smoothRoundRobinState.clear()
 }
+
+// InvalidateAll removes every routing decision derived from the pre-restore
+// database. Full database imports can replace IDs and configuration in bulk, so
+// retaining any circuit or affinity entry would attach old evidence to new rows.
+func InvalidateAll() {
+	globalSession.clear()
+	globalBreaker.clear()
+	smoothWeightedState.clear()
+	smoothRoundRobinState.clear()
+}
