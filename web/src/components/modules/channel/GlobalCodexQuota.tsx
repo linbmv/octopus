@@ -31,7 +31,7 @@ export function GlobalCodexQuota() {
     return (
         <Popover>
             <PopoverTrigger asChild>
-                <Button type="button" variant="ghost" size="icon-sm" className="rounded-lg border border-border/70 bg-card/70 shadow-sm hover:bg-accent" aria-label={t('openPanel')} title={t('openPanel')} data-low-quota={summary.lowRemaining ? 'true' : 'false'}>
+                <Button type="button" variant="ghost" size="icon" className="rounded-xl transition-none text-muted-foreground hover:bg-transparent hover:text-foreground" aria-label={t('openPanel')} title={t('openPanel')} data-low-quota={summary.lowRemaining ? 'true' : 'false'}>
                     <BatteryMedium className={cn('size-4', quotaQuery.isLoading || channelsQuery.isLoading ? 'animate-pulse text-muted-foreground' : summary.lowRemaining ? 'text-destructive' : summary.limited ? 'text-orange-500' : summary.hasQuota ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')} />
                 </Button>
             </PopoverTrigger>
