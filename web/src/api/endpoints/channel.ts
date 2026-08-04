@@ -285,6 +285,8 @@ export function useUpdateChannel() {
         onSuccess: (data) => {
             logger.log('渠道更新成功:', data);
             queryClient.invalidateQueries({ queryKey: ['channels', 'list'] });
+            queryClient.invalidateQueries({ queryKey: ['channels', 'codex-quota'] });
+            queryClient.invalidateQueries({ queryKey: ['channels', data.id, 'quota'] });
             queryClient.invalidateQueries({ queryKey: ['models', 'channel'] });
             queryClient.invalidateQueries({ queryKey: ['groups', 'list'] });
         },
