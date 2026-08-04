@@ -15,6 +15,7 @@ import (
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
@@ -380,6 +381,8 @@ func resetChannelCircuit(c *gin.Context) {
 	}
 	balancer.ResetCircuit(request.ID, request.Model)
 	relay.InvalidateRuntimeURLState(request.ID)
+	relay.InvalidateChannelRuntimePenalties(request.ID, request.Model)
+	routingstate.Notify()
 	middleware.AuditLog(c, middleware.EventChannelUpdate, map[string]interface{}{
 		"channel_id": request.ID,
 		"action":     "reset_circuit",

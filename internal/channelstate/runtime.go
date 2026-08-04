@@ -7,6 +7,7 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/routingstate"
 )
 
 // Invalidate clears every channel-derived runtime state after a configuration
@@ -15,6 +16,7 @@ import (
 func Invalidate(channelID int, channels ...*model.Channel) {
 	balancer.InvalidateChannel(channelID)
 	relay.InvalidateRuntimeURLState(channelID)
+	relay.InvalidateChannelRuntimePenalties(channelID, "")
 
 	seenProxyURLs := make(map[string]struct{}, len(channels))
 	foundChannel := false
@@ -39,4 +41,5 @@ func Invalidate(channelID int, channels ...*model.Channel) {
 	if !foundChannel {
 		client.InvalidateAllCustomProxyClients()
 	}
+	routingstate.Notify()
 }

@@ -698,12 +698,14 @@
                 "retry_channel": "切換供應源",
                 "return_client": "返回客戶端",
                 "client_cancel": "客戶端取消",
+                "routing_refresh": "重新整理路由",
                 "stop": "停止"
             },
             "selectionReasons": {
                 "runtime_url_selector": "即時 URL 選擇",
                 "base_url_failover": "URL 故障轉移",
-                "key_failover": "金鑰故障轉移"
+                "key_failover": "金鑰故障轉移",
+                "configuration_changed": "設定已變更"
             },
             "attemptStatus": {
                 "success": "成功",

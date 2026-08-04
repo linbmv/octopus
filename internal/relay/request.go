@@ -15,6 +15,7 @@ import (
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/tracing"
 	"github.com/bestruirui/octopus/internal/utils/bodylimit"
@@ -40,10 +41,14 @@ func Handler(inboundType llm.APIFormat) gin.HandlerFunc {
 		if err != nil {
 			return
 		}
+		relayConfig := conf.Current().Relay
 		requestCtx, cancel := newRelayRequestContext(
 			c.Request.Context(),
 			run.internalRequest,
-			conf.Current().Relay.NonStreamTimeoutSeconds,
+			boundedInitialResponseTimeoutSeconds(
+				relayConfig.NonStreamTimeoutSeconds,
+				relayConfig.InitialResponseTimeoutSeconds,
+			),
 		)
 		defer cancel()
 		ctx, span := tracing.Tracer().Start(requestCtx, "relay.request")
@@ -75,6 +80,7 @@ func newRelayRequestContext(parent context.Context, request *llm.Request, timeou
 }
 
 func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transformer.Inbound) (*relayRun, error) {
+	routingSnapshot := routingstate.Current()
 	internalRequest, err := parseRequest(c, inboundType, inAdapter)
 	if err != nil {
 		return nil, err
@@ -104,6 +110,7 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 		return nil, err
 	}
 
+	relayConfig := conf.Current().Relay
 	run := &relayRun{
 		c:               c,
 		inAdapter:       inAdapter,
@@ -115,14 +122,18 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 			StartTime:       time.Now(),
 			InternalRequest: internalRequest,
 		},
-		iter:                   iter,
-		iterStack:              []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
-		iterHistory:            []*balancer.Iterator{iter},
-		group:                  group,
-		selectedBaseURLs:       selectedBaseURLs,
-		sessionID:              sessionID,
-		maxUpstreamAttempts:    conf.Current().Relay.MaxUpstreamAttempts,
-		streamFirstEventBudget: time.Duration(conf.Current().Relay.StreamFirstEventBudgetSeconds) * time.Second,
+		iter:                iter,
+		iterStack:           []*relayIteratorFrame{{group: group, iter: iter, depth: 0}},
+		iterHistory:         []*balancer.Iterator{iter},
+		group:               group,
+		selectedBaseURLs:    selectedBaseURLs,
+		sessionID:           sessionID,
+		maxUpstreamAttempts: relayConfig.MaxUpstreamAttempts,
+		streamFirstEventBudget: time.Duration(boundedInitialResponseTimeoutSeconds(
+			relayConfig.StreamFirstEventBudgetSeconds,
+			relayConfig.InitialResponseTimeoutSeconds,
+		)) * time.Second,
+		routingSnapshot: routingSnapshot,
 	}
 	run.attachIteratorTimeline(iter)
 	return run, nil

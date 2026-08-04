@@ -37,16 +37,21 @@ type JWT struct {
 }
 
 type Relay struct {
+	// InitialResponseTimeoutSeconds is a non-disableable safety ceiling for the
+	// complete non-streaming lifecycle and the pre-first-event streaming phase.
+	// Lower phase-specific limits still win.
+	InitialResponseTimeoutSeconds int `mapstructure:"initial_response_timeout_seconds"`
 	// NonStreamTimeoutSeconds bounds the complete upstream lifecycle for a
-	// non-streaming relay request, including retries. Zero disables the guard.
+	// non-streaming relay request, including retries. Zero defers to the hard
+	// InitialResponseTimeoutSeconds ceiling.
 	NonStreamTimeoutSeconds        int `mapstructure:"non_stream_timeout_seconds"`
 	StreamFirstEventTimeoutSeconds int `mapstructure:"stream_first_event_timeout_seconds"`
 	StreamIdleTimeoutSeconds       int `mapstructure:"stream_idle_timeout_seconds"`
 	// NonStreamAttemptTimeoutSeconds bounds one non-streaming upstream attempt
 	// while waiting for response headers, so a hung channel yields to remaining
 	// failover candidates instead of consuming the whole request budget. It is
-	// only applied when another candidate exists; the last candidate keeps the
-	// full NonStreamTimeoutSeconds budget. Zero disables the guard.
+	// only applied when another candidate exists; the last candidate uses the
+	// remaining initial-response budget. Zero disables this per-attempt guard.
 	NonStreamAttemptTimeoutSeconds int `mapstructure:"non_stream_attempt_timeout_seconds"`
 	// StreamColdStartFirstEventTimeoutSeconds bounds the wait for the first
 	// stream event on channels without adaptive health samples when another
@@ -267,8 +272,9 @@ func setDefaultsFor(v *viper.Viper) {
 	v.SetDefault("log.format", "json")
 	v.SetDefault("jwt.default_expiry_minutes", 15)
 	v.SetDefault("jwt.max_expiry_days", 30)
-	v.SetDefault("relay.non_stream_timeout_seconds", 600)
-	v.SetDefault("relay.stream_first_event_timeout_seconds", 600)
+	v.SetDefault("relay.initial_response_timeout_seconds", 120)
+	v.SetDefault("relay.non_stream_timeout_seconds", 120)
+	v.SetDefault("relay.stream_first_event_timeout_seconds", 120)
 	v.SetDefault("relay.stream_idle_timeout_seconds", 600)
 	v.SetDefault("relay.non_stream_attempt_timeout_seconds", 60)
 	v.SetDefault("relay.stream_cold_start_first_event_timeout_seconds", 30)
@@ -358,6 +364,9 @@ func Validate(config Config) error {
 	}
 	if config.JWT.DefaultExpiryMinutes <= 0 || config.JWT.MaxExpiryDays <= 0 {
 		return fmt.Errorf("JWT expiry values must be positive")
+	}
+	if config.Relay.InitialResponseTimeoutSeconds <= 0 || config.Relay.InitialResponseTimeoutSeconds > 120 {
+		return fmt.Errorf("relay.initial_response_timeout_seconds must be between 1 and 120")
 	}
 	if config.Relay.NonStreamTimeoutSeconds < 0 || config.Relay.NonStreamTimeoutSeconds > 24*60*60 {
 		return fmt.Errorf("relay.non_stream_timeout_seconds must be between 0 and 86400")

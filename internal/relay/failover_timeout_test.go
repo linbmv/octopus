@@ -10,6 +10,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/conf"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -175,6 +176,30 @@ func TestNonStreamAttemptTimeoutSkippedForLastCandidate(t *testing.T) {
 		t.Fatalf("无备选时不应触发 per-attempt 超时，但返回了: %v", err)
 	case <-time.After(1500 * time.Millisecond):
 		// 预期：仍在等待（真实部署中由全局 non_stream_timeout_seconds 兜底）。
+	}
+}
+
+func TestRoutingChangeInterruptsHungLastCandidateImmediately(t *testing.T) {
+	upstream := newHungUpstream(t)
+	setNonStreamAttemptTimeout(t, 0)
+	ra := newNonStreamAttempt(t, upstream.URL, 1)
+	ra.routingSnapshot = routingstate.Current()
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, err := ra.forward()
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	routingstate.Notify()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, errRoutingConfigChanged) {
+			t.Fatalf("forward error = %v, want routing configuration change", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("routing update did not interrupt the hung upstream immediately")
 	}
 }
 

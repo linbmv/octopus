@@ -40,11 +40,14 @@ func TestLoadUsesDefaultValues(t *testing.T) {
 	if config.JWT.DefaultExpiryMinutes != 15 || config.JWT.MaxExpiryDays != 30 {
 		t.Fatalf("JWT = %#v, want default expiry values", config.JWT)
 	}
-	if config.Relay.NonStreamTimeoutSeconds != 600 {
-		t.Fatalf("Relay.NonStreamTimeoutSeconds = %d, want 600", config.Relay.NonStreamTimeoutSeconds)
+	if config.Relay.InitialResponseTimeoutSeconds != 120 {
+		t.Fatalf("Relay.InitialResponseTimeoutSeconds = %d, want 120", config.Relay.InitialResponseTimeoutSeconds)
 	}
-	if config.Relay.StreamFirstEventTimeoutSeconds != 600 || config.Relay.StreamIdleTimeoutSeconds != 600 {
-		t.Fatalf("Relay stream timeout defaults = %#v, want 600 seconds each", config.Relay)
+	if config.Relay.NonStreamTimeoutSeconds != 120 {
+		t.Fatalf("Relay.NonStreamTimeoutSeconds = %d, want 120", config.Relay.NonStreamTimeoutSeconds)
+	}
+	if config.Relay.StreamFirstEventTimeoutSeconds != 120 || config.Relay.StreamIdleTimeoutSeconds != 600 {
+		t.Fatalf("Relay stream timeout defaults = %#v, want first-event=120s idle=600s", config.Relay)
 	}
 	if config.Relay.NonStreamAttemptTimeoutSeconds != 60 {
 		t.Fatalf("Relay.NonStreamAttemptTimeoutSeconds = %d, want 60", config.Relay.NonStreamAttemptTimeoutSeconds)
@@ -170,6 +173,15 @@ func TestValidateRejectsUnsafeNonStreamTimeout(t *testing.T) {
 	}
 
 	config.Relay.NonStreamTimeoutSeconds = 0
+	config.Relay.InitialResponseTimeoutSeconds = 0
+	if err := Validate(config); err == nil || !strings.Contains(err.Error(), "relay.initial_response_timeout_seconds") {
+		t.Fatalf("Validate() error = %v, want initial response timeout validation error", err)
+	}
+	config.Relay.InitialResponseTimeoutSeconds = 121
+	if err := Validate(config); err == nil || !strings.Contains(err.Error(), "relay.initial_response_timeout_seconds") {
+		t.Fatalf("Validate() error = %v, want initial response timeout validation error", err)
+	}
+	config.Relay.InitialResponseTimeoutSeconds = 120
 	if err := Validate(config); err != nil {
 		t.Fatalf("Validate() should allow an explicitly disabled timeout: %v", err)
 	}

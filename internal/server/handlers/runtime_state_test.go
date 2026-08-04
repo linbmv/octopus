@@ -7,6 +7,7 @@ import (
 	"github.com/bestruirui/octopus/internal/client"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/routingstate"
 )
 
 func TestInvalidateChannelRuntimeStateClearsStickyAndProxyClient(t *testing.T) {
@@ -25,6 +26,7 @@ func TestInvalidateChannelRuntimeStateClearsStickyAndProxyClient(t *testing.T) {
 	}
 	balancer.SetSticky(apiKeyID, modelName, channelID, 1, modelName)
 
+	routingBefore := routingstate.Current()
 	invalidateChannelRuntimeState(channelID, &model.Channel{
 		ID:           channelID,
 		ChannelProxy: &proxyURL,
@@ -39,6 +41,11 @@ func TestInvalidateChannelRuntimeStateClearsStickyAndProxyClient(t *testing.T) {
 	}
 	if firstClient == secondClient {
 		t.Fatal("channel invalidation reused the stale custom proxy client")
+	}
+	select {
+	case <-routingBefore.Changed:
+	default:
+		t.Fatal("channel invalidation did not publish a routing change")
 	}
 }
 

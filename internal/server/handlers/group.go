@@ -6,7 +6,9 @@ import (
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
@@ -96,8 +98,7 @@ func createGroup(c *gin.Context) {
 		respondOperationError(c, err)
 		return
 	}
-	balancer.InvalidateGroups()
-	resetGroupMemberCircuits(&group)
+	invalidateGroupRuntimeState(&group)
 	resp.Success(c, group)
 }
 
@@ -113,7 +114,14 @@ func resetGroupMemberCircuits(group *model.Group) {
 			continue
 		}
 		balancer.ResetCircuit(item.ChannelID, item.ModelName)
+		relay.InvalidateChannelRuntimePenalties(item.ChannelID, item.ModelName)
 	}
+}
+
+func invalidateGroupRuntimeState(group *model.Group) {
+	balancer.InvalidateGroups()
+	resetGroupMemberCircuits(group)
+	routingstate.Notify()
 }
 
 func updateGroup(c *gin.Context) {
@@ -137,8 +145,7 @@ func updateGroup(c *gin.Context) {
 		respondOperationError(c, err)
 		return
 	}
-	balancer.InvalidateGroups()
-	resetGroupMemberCircuits(group)
+	invalidateGroupRuntimeState(group)
 	resp.Success(c, group)
 }
 
@@ -154,5 +161,6 @@ func deleteGroup(c *gin.Context) {
 		return
 	}
 	balancer.InvalidateGroups()
+	routingstate.Notify()
 	resp.Success(c, "group deleted successfully")
 }

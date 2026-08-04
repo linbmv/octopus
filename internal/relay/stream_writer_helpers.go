@@ -11,6 +11,10 @@ import (
 
 // handleContextDone 处理 context 取消的情况（首 token 超时或客户端断开）
 func (ra *relayAttempt) handleContextDone(ctx context.Context, firstToken bool, firstTokenTimeout firstTokenTimeoutConfig, closeStream func()) error {
+	if firstToken && errors.Is(context.Cause(ctx), errRoutingConfigChanged) {
+		closeStream()
+		return errRoutingConfigChanged
+	}
 	// 首字超时在收到首个 token 前触发：返回错误以切换下一通道。
 	if firstToken && errors.Is(context.Cause(ctx), errFirstTokenTimeout) {
 		timeoutErr := firstTokenTimeout.Error(firstTokenTimeoutPhaseStreamFirstEvent)

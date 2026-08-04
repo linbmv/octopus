@@ -12,6 +12,21 @@ var (
 	errStreamFirstEventBudget = errors.New("stream first event budget exhausted")
 )
 
+const hardMaxInitialResponseTimeoutSeconds = 120
+
+// boundedInitialResponseTimeoutSeconds applies the operator-configured hard
+// ceiling to a phase-specific timeout. Zero phase values no longer disable the
+// safety boundary: waiting without any response must always remain bounded.
+func boundedInitialResponseTimeoutSeconds(configuredSeconds, ceilingSeconds int) int {
+	if ceilingSeconds <= 0 || ceilingSeconds > hardMaxInitialResponseTimeoutSeconds {
+		ceilingSeconds = hardMaxInitialResponseTimeoutSeconds
+	}
+	if configuredSeconds <= 0 || configuredSeconds > ceilingSeconds {
+		return ceilingSeconds
+	}
+	return configuredSeconds
+}
+
 func (r *relayRun) reserveUpstreamAttempt() bool {
 	if r == nil || r.maxUpstreamAttempts <= 0 {
 		return true

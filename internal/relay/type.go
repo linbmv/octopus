@@ -5,6 +5,7 @@ import (
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/transformer"
@@ -27,8 +28,11 @@ type relayRun struct {
 	maxUpstreamAttempts    int
 	streamFirstEventSpent  time.Duration
 	streamFirstEventBudget time.Duration
+	routingSnapshot        routingstate.Snapshot
+	routingRefreshes       int
 	resolveGroupItemFunc   func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error)
 	runAttemptFunc         func(attempt *relayAttempt) (bool, error)
+	reloadRoutingFunc      func() error
 }
 
 type relayIteratorFrame struct {

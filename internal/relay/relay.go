@@ -51,6 +51,9 @@ func (ra *relayAttempt) run() (bool, error) {
 		if err == nil || written {
 			return written, err
 		}
+		if errors.Is(err, errRoutingConfigChanged) {
+			return false, err
+		}
 		lastErr = err
 		if ra.canRetryNextBaseURL(err, responseHeaders, responseBody) {
 			if ra.switchToNextBaseURL() {
@@ -117,6 +120,12 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 
 	upstreamStatusCode, upstreamHeaders, upstreamResponseBody, fwdErr := ra.forward()
 	ra.recordStreamFirstEventWait(span, fwdErr)
+	if errors.Is(fwdErr, errRoutingConfigChanged) {
+		markRoutingRefreshAttempt(span, ra.channel, ra.usedKey, ra.internalRequest.Model, safeRuntimeURL(ra.baseURL))
+		log.Infof("attempt interrupted by routing configuration change: channel=%s(%d), key=%d, duration=%dms",
+			ra.channel.Name, ra.channel.ID, ra.usedKey.ID, span.Duration().Milliseconds())
+		return false, upstreamHeaders, upstreamResponseBody, errRoutingConfigChanged
+	}
 	if fwdErr != nil && isNonStreamRequestTimeout(ra.c.Request.Context()) {
 		fwdErr = fmt.Errorf("%w: %v", errNonStreamRequestTimeout, fwdErr)
 	}
@@ -497,8 +506,9 @@ func (ra *relayAttempt) forwardWithAdapter(
 	// 出站 HTTP client 没有响应头超时，仅靠 SSE 建立后的计时器无法打断仍卡在 client.Do 等响应头的请求。
 	// 流式按首字超时守卫；非流式按 per-attempt 响应头守卫（存在其他候选时），
 	// 否则一个挂死渠道会吃光整个 non_stream_timeout_seconds 预算，永远轮不到可用渠道。
-	fwdCtx := ctx
-	stopFirstTokenGuard := func() {}
+	fwdCtx, stopRoutingChangeGuard, releaseRoutingChangeGuard := newRoutingChangeGuard(ctx, ra.routingSnapshot.Changed)
+	defer releaseRoutingChangeGuard()
+	stopFirstTokenGuard := stopRoutingChangeGuard
 	wantStream := ra.internalRequest.Stream != nil && *ra.internalRequest.Stream
 	firstTokenTimeout, shadowFirstTokenTimeout := ra.firstTokenTimeoutPolicies()
 	if wantStream {
@@ -516,9 +526,14 @@ func (ra *relayAttempt) forwardWithAdapter(
 	attemptTimeout := firstTokenTimeoutConfig{}
 	if wantStream {
 		if firstTokenTimeout.Duration > 0 {
-			var release func()
-			fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, firstTokenTimeout.Duration)
+			var timeoutStop, release func()
+			fwdCtx, timeoutStop, release = newFirstTokenGuard(fwdCtx, firstTokenTimeout.Duration)
 			defer release()
+			previousStop := stopFirstTokenGuard
+			stopFirstTokenGuard = func() {
+				timeoutStop()
+				previousStop()
+			}
 		}
 		if shadowFirstTokenTimeout.Duration > 0 {
 			shadowStop, shadowRelease := newFirstTokenShadowObserver(shadowFirstTokenTimeout.Duration, func() {
@@ -534,9 +549,14 @@ func (ra *relayAttempt) forwardWithAdapter(
 	} else {
 		attemptTimeout = ra.nonStreamAttemptTimeout()
 		if attemptTimeout.Duration > 0 {
-			var release func()
-			fwdCtx, stopFirstTokenGuard, release = newFirstTokenGuard(ctx, attemptTimeout.Duration)
+			var timeoutStop, release func()
+			fwdCtx, timeoutStop, release = newFirstTokenGuard(fwdCtx, attemptTimeout.Duration)
 			defer release()
+			previousStop := stopFirstTokenGuard
+			stopFirstTokenGuard = func() {
+				timeoutStop()
+				previousStop()
+			}
 		}
 	}
 
@@ -567,6 +587,9 @@ func (ra *relayAttempt) forwardWithAdapter(
 		).
 		Process(fwdCtx, ra.internalRequest.RawRequest)
 	if err != nil {
+		if errors.Is(context.Cause(fwdCtx), errRoutingConfigChanged) {
+			return relayMiddleware.upstreamStatusCode, relayMiddleware.upstreamHeaders, relayMiddleware.upstreamResponseBody, errRoutingConfigChanged
+		}
 		// 等待响应头阶段触发首字/attempt 超时：此时尚未写客户端，返回明确错误以便切换下一通道。
 		if errors.Is(context.Cause(fwdCtx), errFirstTokenTimeout) {
 			if wantStream {

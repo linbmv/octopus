@@ -11,14 +11,14 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context.Context) error {
+func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context.Context) (bool, error) {
 	if len(items) == 0 {
-		return nil
+		return false, nil
 	}
 
 	group, ok := groupCache.Get(groupID)
 	if !ok {
-		return fmt.Errorf("group not found")
+		return false, fmt.Errorf("group not found")
 	}
 
 	seen := make(map[string]struct{}, len(items))
@@ -35,7 +35,7 @@ func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context
 		uniq = append(uniq, it)
 	}
 	if len(uniq) == 0 {
-		return nil
+		return false, nil
 	}
 
 	nextPriority := 1
@@ -58,7 +58,7 @@ func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context
 		nextPriority++
 	}
 
-	if err := db.GetDB().WithContext(ctx).
+	result := db.GetDB().WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{
 				{Name: "group_id"},
@@ -69,11 +69,14 @@ func GroupItemBatchAdd(groupID int, items []model.GroupIDAndLLMName, ctx context
 			},
 			DoNothing: true,
 		}).
-		Create(&newItems).Error; err != nil {
-		return fmt.Errorf("failed to create group items: %w", err)
+		Create(&newItems)
+	if result.Error != nil {
+		return false, fmt.Errorf("failed to create group items: %w", result.Error)
 	}
-
-	return groupRefreshCacheByID(groupID, ctx)
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	return true, groupRefreshCacheByID(groupID, ctx)
 }
 
 func GroupItemCompactStrategyUpdate(itemID, groupID int, strategy model.CompactStrategy, updatedAt time.Time, ctx context.Context) error {
@@ -101,9 +104,9 @@ func GroupItemCompactStrategyUpdateNoCacheRefresh(itemID, groupID int, strategy 
 }
 
 // GroupItemBatchDelByChannelAndModels 根据渠道ID和模型名称批量删除分组项
-func GroupItemBatchDelByChannelAndModels(keys []model.GroupIDAndLLMName, ctx context.Context) error {
+func GroupItemBatchDelByChannelAndModels(keys []model.GroupIDAndLLMName, ctx context.Context) (bool, error) {
 	if len(keys) == 0 {
-		return nil
+		return false, nil
 	}
 
 	conditions := make([][]interface{}, len(keys))
@@ -117,29 +120,33 @@ func GroupItemBatchDelByChannelAndModels(keys []model.GroupIDAndLLMName, ctx con
 		Distinct("group_id").
 		Where("(channel_id, model_name) IN ?", conditions).
 		Pluck("group_id", &groupIDs).Error; err != nil {
-		return fmt.Errorf("failed to find group ids: %w", err)
+		return false, fmt.Errorf("failed to find group ids: %w", err)
 	}
 
 	if len(groupIDs) == 0 {
-		return nil
+		return false, nil
 	}
 
-	if err := db.GetDB().WithContext(ctx).
+	result := db.GetDB().WithContext(ctx).
 		Where("(channel_id, model_name) IN ?", conditions).
-		Delete(&model.GroupItem{}).Error; err != nil {
-		return fmt.Errorf("failed to delete group items: %w", err)
+		Delete(&model.GroupItem{})
+	if result.Error != nil {
+		return false, fmt.Errorf("failed to delete group items: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
 	}
 
 	if err := groupRefreshCacheByIDs(groupIDs, ctx); err != nil {
-		return fmt.Errorf("failed to refresh group cache: %w", err)
+		return false, fmt.Errorf("failed to refresh group cache: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
-func GroupItemPruneByChannelModels(channelID int, modelNames []string, ctx context.Context) error {
+func GroupItemPruneByChannelModels(channelID int, modelNames []string, ctx context.Context) (bool, error) {
 	if channelID == 0 {
-		return nil
+		return false, nil
 	}
 
 	allowed := make([]string, 0, len(modelNames))
@@ -166,10 +173,10 @@ func GroupItemPruneByChannelModels(channelID int, modelNames []string, ctx conte
 
 	var groupIDs []int
 	if err := query.Distinct("group_id").Pluck("group_id", &groupIDs).Error; err != nil {
-		return fmt.Errorf("failed to find stale group ids: %w", err)
+		return false, fmt.Errorf("failed to find stale group ids: %w", err)
 	}
 	if len(groupIDs) == 0 {
-		return nil
+		return false, nil
 	}
 
 	deleteQuery := db.GetDB().WithContext(ctx).
@@ -177,15 +184,19 @@ func GroupItemPruneByChannelModels(channelID int, modelNames []string, ctx conte
 	if len(allowed) > 0 {
 		deleteQuery = deleteQuery.Where("LOWER(model_name) NOT IN ?", allowed)
 	}
-	if err := deleteQuery.Delete(&model.GroupItem{}).Error; err != nil {
-		return fmt.Errorf("failed to delete stale group items: %w", err)
+	result := deleteQuery.Delete(&model.GroupItem{})
+	if result.Error != nil {
+		return false, fmt.Errorf("failed to delete stale group items: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
 	}
 
 	if err := groupRefreshCacheByIDs(groupIDs, ctx); err != nil {
-		return fmt.Errorf("failed to refresh group cache: %w", err)
+		return false, fmt.Errorf("failed to refresh group cache: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 func GroupItemList(groupID int, ctx context.Context) ([]model.GroupItem, error) {

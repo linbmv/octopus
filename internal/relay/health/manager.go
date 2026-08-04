@@ -302,6 +302,22 @@ func (m *HealthManager) GetAllStates() map[HealthKey]HealthStats {
 	return result
 }
 
+// InvalidateChannel removes historical health evidence after an administrator
+// changes a channel or explicitly asks it to re-enter service. An empty model
+// clears every model for the channel.
+func (m *HealthManager) InvalidateChannel(channelID int, model string) {
+	if m == nil || channelID <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.states {
+		if key.ChannelID == channelID && (model == "" || key.Model == model) {
+			delete(m.states, key)
+		}
+	}
+}
+
 // Enable 启用健康系统
 func (m *HealthManager) Enable() {
 	m.mu.Lock()

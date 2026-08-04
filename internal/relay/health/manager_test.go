@@ -283,6 +283,32 @@ func TestHealthManager_GetAllStates(t *testing.T) {
 	}
 }
 
+func TestHealthManagerInvalidateChannelCanTargetOneModel(t *testing.T) {
+	manager := NewHealthManager(DefaultHealthConfig())
+	manager.RecordSuccess(7, 70, "model-a", time.Second)
+	manager.RecordSuccess(7, 71, "model-b", time.Second)
+	manager.RecordSuccess(8, 80, "model-a", time.Second)
+
+	manager.InvalidateChannel(7, "model-a")
+	states := manager.GetAllStates()
+	if _, ok := states[HealthKey{ChannelID: 7, KeyID: 70, Model: "model-a"}]; ok {
+		t.Fatal("target channel/model health state remained after invalidation")
+	}
+	if _, ok := states[HealthKey{ChannelID: 7, KeyID: 71, Model: "model-b"}]; !ok {
+		t.Fatal("target channel's unrelated model was removed")
+	}
+	if _, ok := states[HealthKey{ChannelID: 8, KeyID: 80, Model: "model-a"}]; !ok {
+		t.Fatal("unrelated channel health state was removed")
+	}
+
+	manager.InvalidateChannel(7, "")
+	for key := range manager.GetAllStates() {
+		if key.ChannelID == 7 {
+			t.Fatalf("channel-wide invalidation retained state: %+v", key)
+		}
+	}
+}
+
 // TestHealthManager_Cleanup 测试清理过期状态
 func TestHealthManager_Cleanup(t *testing.T) {
 	config := DefaultHealthConfig()

@@ -31,6 +31,28 @@ func TestRelayRunUpstreamAttemptBudgetIsExact(t *testing.T) {
 	}
 }
 
+func TestBoundedInitialResponseTimeoutCannotBeDisabledOrRaisedAboveHardLimit(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured int
+		ceiling    int
+		want       int
+	}{
+		{name: "phase below ceiling", configured: 30, ceiling: 90, want: 30},
+		{name: "phase above ceiling", configured: 600, ceiling: 90, want: 90},
+		{name: "disabled phase uses ceiling", configured: 0, ceiling: 90, want: 90},
+		{name: "invalid ceiling uses hard max", configured: 600, ceiling: 0, want: hardMaxInitialResponseTimeoutSeconds},
+		{name: "oversized ceiling uses hard max", configured: 600, ceiling: 600, want: hardMaxInitialResponseTimeoutSeconds},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := boundedInitialResponseTimeoutSeconds(test.configured, test.ceiling); got != test.want {
+				t.Fatalf("bounded timeout = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestRelayRunStreamFirstEventBudgetTracksRemainingTime(t *testing.T) {
 	run := &relayRun{
 		streamFirstEventBudget: 90 * time.Second,

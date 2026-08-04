@@ -230,7 +230,7 @@ func TestGroupItemPruneByChannelModelsDeletesStaleModels(t *testing.T) {
 	groupCache.Set(group.ID, group)
 	groupMap.Set(group.Name, group)
 
-	if err := GroupItemPruneByChannelModels(501, []string{"gpt-4"}, ctx); err != nil {
+	if _, err := GroupItemPruneByChannelModels(501, []string{"gpt-4"}, ctx); err != nil {
 		t.Fatalf("GroupItemPruneByChannelModels 返回错误: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestGroupItemPruneByChannelModelsDeletesAllWhenModelListEmpty(t *testing.T)
 	groupCache.Set(group.ID, group)
 	groupMap.Set(group.Name, group)
 
-	if err := GroupItemPruneByChannelModels(601, nil, ctx); err != nil {
+	if _, err := GroupItemPruneByChannelModels(601, nil, ctx); err != nil {
 		t.Fatalf("GroupItemPruneByChannelModels 返回错误: %v", err)
 	}
 	remaining, err := GroupItemList(group.ID, ctx)

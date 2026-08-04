@@ -698,12 +698,14 @@
                 "retry_channel": "retry channel",
                 "return_client": "returned to client",
                 "client_cancel": "client canceled",
+                "routing_refresh": "routing refreshed",
                 "stop": "stopped"
             },
             "selectionReasons": {
                 "runtime_url_selector": "runtime URL selection",
                 "base_url_failover": "URL failover",
-                "key_failover": "key failover"
+                "key_failover": "key failover",
+                "configuration_changed": "configuration changed"
             },
             "attemptStatus": {
                 "success": "Success",

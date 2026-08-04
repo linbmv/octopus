@@ -9,6 +9,8 @@ import (
 	"github.com/bestruirui/octopus/internal/client"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xstrings"
 )
@@ -62,24 +64,30 @@ func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
 		return
 	}
 	channelModelNames := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel)
-	if err := op.GroupItemPruneByChannelModels(channel.ID, channelModelNames, ctx); err != nil {
+	routingChanged := false
+	if changed, err := op.GroupItemPruneByChannelModels(channel.ID, channelModelNames, ctx); err != nil {
 		log.Warnf("prune stale group items failed (channel=%d): %v", channel.ID, err)
+	} else {
+		routingChanged = changed
 	}
 	if channel.AutoGroup == model.AutoGroupTypeNone || len(channelModelNames) == 0 {
+		publishAutoGroupRoutingChange(routingChanged)
 		return
 	}
 	groups, err := op.GroupList(ctx)
 	if err != nil {
 		log.Warnf("get group list failed: %v", err)
+		publishAutoGroupRoutingChange(routingChanged)
 		return
 	}
 
 	for _, group := range groups {
 		matchedModelNames := matchModelsToGroup(channel, group, channelModelNames)
 		if len(matchedModelNames) > 0 {
-			addMatchedModelsToGroup(channel.ID, group.ID, matchedModelNames, ctx)
+			routingChanged = addMatchedModelsToGroup(channel.ID, group.ID, matchedModelNames, ctx) || routingChanged
 		}
 	}
+	publishAutoGroupRoutingChange(routingChanged)
 }
 
 func matchModelsToGroup(channel *model.Channel, group model.Group, channelModelNames []string) []string {
@@ -142,7 +150,7 @@ func matchRegex(channelID int, group model.Group, modelNames []string) []string 
 	return matched
 }
 
-func addMatchedModelsToGroup(channelID, groupID int, modelNames []string, ctx context.Context) {
+func addMatchedModelsToGroup(channelID, groupID int, modelNames []string, ctx context.Context) bool {
 	items := make([]model.GroupIDAndLLMName, 0, len(modelNames))
 	for _, modelName := range modelNames {
 		items = append(items, model.GroupIDAndLLMName{
@@ -150,7 +158,23 @@ func addMatchedModelsToGroup(channelID, groupID int, modelNames []string, ctx co
 			ModelName: modelName,
 		})
 	}
-	if err := op.GroupItemBatchAdd(groupID, items, ctx); err != nil {
+	changed, err := op.GroupItemBatchAdd(groupID, items, ctx)
+	if err != nil {
 		log.Warnf("group item batch add failed (channel=%d group=%d): %v", channelID, groupID, err)
+		return false
 	}
+	if changed {
+		for _, modelName := range modelNames {
+			balancer.ResetCircuit(channelID, modelName)
+		}
+	}
+	return changed
+}
+
+func publishAutoGroupRoutingChange(changed bool) {
+	if !changed {
+		return
+	}
+	balancer.InvalidateGroups()
+	routingstate.Notify()
 }

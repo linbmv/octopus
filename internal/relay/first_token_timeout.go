@@ -183,8 +183,8 @@ func (ra *relayAttempt) firstTokenTimeoutPolicies() (enforced firstTokenTimeoutC
 }
 
 // nonStreamAttemptTimeout 返回单次非流式尝试的响应头等待上限。
-// 仅当还有其他候选可以转移时生效——最后一个候选保留完整的
-// non_stream_timeout_seconds 预算，避免误杀合法的慢生成。
+// 仅当还有其他候选可以转移时生效——最后一个候选使用请求剩余的
+// 首响应总预算，避免每次尝试重新获得一份长超时。
 func (ra *relayAttempt) nonStreamAttemptTimeout() firstTokenTimeoutConfig {
 	if ra == nil || !ra.hasFailoverAlternative() {
 		return firstTokenTimeoutConfig{}
@@ -238,7 +238,7 @@ func selectFirstTokenTimeout(manualSeconds int, adaptive time.Duration, hasAdapt
 		return firstTokenTimeoutConfig{Duration: adaptive, Source: firstTokenTimeoutAdaptive}
 	}
 	// 冷启动（无手工值也无健康样本）且仍有故障转移余地时收紧首字上限，
-	// 让挂死渠道尽快让位；最后的候选回落到全局值保留完整耐心。
+	// 让挂死渠道尽快让位；最后的候选回落到全局值，但仍受请求累计预算约束。
 	if hasAlternative && coldStartSeconds > 0 && (globalSeconds <= 0 || coldStartSeconds < globalSeconds) {
 		return firstTokenTimeoutConfig{
 			Duration: time.Duration(coldStartSeconds) * time.Second,

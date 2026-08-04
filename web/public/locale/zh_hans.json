@@ -698,12 +698,14 @@
                 "retry_channel": "切换渠道",
                 "return_client": "返回客户端",
                 "client_cancel": "客户端取消",
+                "routing_refresh": "刷新路由",
                 "stop": "停止"
             },
             "selectionReasons": {
                 "runtime_url_selector": "运行时 URL 选择",
                 "base_url_failover": "URL 故障转移",
-                "key_failover": "密钥故障转移"
+                "key_failover": "密钥故障转移",
+                "configuration_changed": "配置已变更"
             },
             "attemptStatus": {
                 "success": "成功",

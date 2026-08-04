@@ -11,6 +11,8 @@ import (
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/routingstate"
 	"github.com/bestruirui/octopus/internal/utils/diff"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xstrings"
@@ -129,8 +131,13 @@ func deleteRemovedModelsFromGroups(channelID int, channelName string, deletedMod
 	for i, m := range deletedModels {
 		keys[i] = model.GroupIDAndLLMName{ChannelID: channelID, ModelName: m}
 	}
-	if err := op.GroupItemBatchDelByChannelAndModels(keys, ctx); err != nil {
+	changed, err := op.GroupItemBatchDelByChannelAndModels(keys, ctx)
+	if err != nil {
 		return fmt.Errorf("delete removed group items: %w", err)
+	}
+	if changed {
+		balancer.InvalidateGroups()
+		routingstate.Notify()
 	}
 	return nil
 }

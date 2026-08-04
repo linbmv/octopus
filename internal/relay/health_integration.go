@@ -42,6 +42,16 @@ func ReloadHealthSettings() {
 	healthManager.UpdateConfig(applyHealthSettings(health.DefaultHealthConfig()))
 }
 
+// InvalidateChannelRuntimePenalties clears runtime-only evidence that can keep
+// an administratively changed channel out of selection. model may be empty to
+// clear every model for the channel.
+func InvalidateChannelRuntimePenalties(channelID int, model string) {
+	globalChannelRateLimits.invalidate(channelID)
+	if healthManager != nil {
+		healthManager.InvalidateChannel(channelID, model)
+	}
+}
+
 // RefreshHealthMetrics 刷新 Prometheus 指标快照。
 func RefreshHealthMetrics() {
 	if healthMetrics == nil || healthManager == nil {

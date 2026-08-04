@@ -2,10 +2,14 @@ package op
 
 import (
 	"context"
+	"net/http"
 	"testing"
+	"time"
 
+	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/cache"
+	"github.com/looplj/axonhub/llm"
 )
 
 func TestChannelServiceReadMethodsUseInjectedCache(t *testing.T) {
@@ -47,6 +51,45 @@ func TestChannelServiceReadMethodsUseInjectedCache(t *testing.T) {
 		if item.ChannelName != "Channel 7" {
 			t.Fatalf("ChannelName = %q, want fallback name", item.ChannelName)
 		}
+	}
+}
+
+func TestChannelEnabledResetsEnabledKeyCooldowns(t *testing.T) {
+	initTestDB(t)
+	future := time.Now().Add(5 * time.Minute).Unix()
+	channel := model.Channel{
+		Name:     "enable-reset",
+		Type:     llm.APIFormatOpenAIChatCompletion,
+		Enabled:  false,
+		BaseUrls: []model.BaseUrl{{URL: "https://example.com/v1"}},
+		Model:    "m",
+		Keys: []model.ChannelKey{
+			{Enabled: true, ChannelKey: "sk-test", StatusCode: http.StatusTooManyRequests, LastUseTimeStamp: time.Now().Unix(), RetryAfterUntil: future},
+		},
+	}
+	if err := ChannelCreate(&channel, context.Background()); err != nil {
+		t.Fatalf("ChannelCreate() error = %v", err)
+	}
+	if err := ChannelEnabled(channel.ID, true, context.Background()); err != nil {
+		t.Fatalf("ChannelEnabled() error = %v", err)
+	}
+
+	updated, err := ChannelGet(channel.ID, context.Background())
+	if err != nil {
+		t.Fatalf("ChannelGet() error = %v", err)
+	}
+	if !updated.Enabled || len(updated.Keys) != 1 {
+		t.Fatalf("updated channel = %+v", updated)
+	}
+	if updated.Keys[0].StatusCode != 0 || updated.Keys[0].RetryAfterUntil != 0 || updated.Keys[0].LastUseTimeStamp != 0 {
+		t.Fatalf("enabled key cooldown remained in cache: %+v", updated.Keys[0])
+	}
+	var persisted []model.ChannelKey
+	if err := db.GetDB().Where("channel_id = ?", channel.ID).Order("id ASC").Find(&persisted).Error; err != nil {
+		t.Fatalf("load persisted keys: %v", err)
+	}
+	if len(persisted) != 1 || persisted[0].StatusCode != 0 || persisted[0].RetryAfterUntil != 0 || persisted[0].LastUseTimeStamp != 0 {
+		t.Fatalf("enabled key cooldown remained in database: %+v", persisted)
 	}
 }
 

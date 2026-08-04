@@ -36,6 +36,19 @@ func (r *relayRun) run() {
 			return
 		default:
 		}
+		if r.routingChanged() {
+			if err := r.refreshRouting(); err != nil {
+				var terminalErr *terminalRelayError
+				if errors.As(err, &terminalErr) {
+					r.metrics.Save(ctx, false, err, r.attempts())
+					respondRelayError(r.c, terminalErr.StatusCode(), terminalErr)
+					return
+				}
+				lastErr = err
+				break
+			}
+			continue
+		}
 
 		attempt, err := r.prepareAttempt()
 		if err != nil {
@@ -60,6 +73,19 @@ func (r *relayRun) run() {
 		if err == nil {
 			r.metrics.Save(ctx, true, nil, r.attempts())
 			return
+		}
+		if errors.Is(err, errRoutingConfigChanged) && !written {
+			if refreshErr := r.refreshRouting(); refreshErr != nil {
+				var terminalErr *terminalRelayError
+				if errors.As(refreshErr, &terminalErr) {
+					r.metrics.Save(ctx, false, refreshErr, r.attempts())
+					respondRelayError(r.c, terminalErr.StatusCode(), terminalErr)
+					return
+				}
+				lastErr = refreshErr
+				break
+			}
+			continue
 		}
 		var terminalErr *terminalRelayError
 		if errors.As(err, &terminalErr) {

@@ -508,29 +508,31 @@ func invalidateCapabilityEvidenceForChannelUpdateTx(tx *gorm.DB, req *model.Chan
 }
 
 func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
-	oldChannel, ok := channelCache.Get(id)
+	channel, ok := channelCache.Get(id)
 	if !ok {
 		return fmt.Errorf("%w: channel not found", ErrNotFound)
 	}
-	result := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"enabled": enabled, "config_version": gorm.Expr("config_version + ?", 1),
-	})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		var count int64
-		if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Count(&count).Error; err != nil {
-			return fmt.Errorf("failed to verify channel enable update: %w", err)
+
+	request := &model.ChannelUpdateRequest{ID: id, Enabled: &enabled}
+	if enabled {
+		// An explicit administrator enable means "try this channel now". Reset
+		// persisted 429/runtime cooldowns for every enabled key in the same
+		// transaction so the refreshed cache cannot remain unavailable for five
+		// minutes after the channel switch is turned on.
+		request.KeysToUpdate = make([]model.ChannelKeyUpdateRequest, 0, len(channel.Keys))
+		for _, key := range channel.Keys {
+			if !key.Enabled {
+				continue
+			}
+			keyEnabled := true
+			request.KeysToUpdate = append(request.KeysToUpdate, model.ChannelKeyUpdateRequest{
+				ID:      key.ID,
+				Enabled: &keyEnabled,
+			})
 		}
-		if count != 1 {
-			return fmt.Errorf("%w: channel not found", ErrNotFound)
-		}
 	}
-	oldChannel.Enabled = enabled
-	oldChannel.ConfigVersion++
-	channelCache.Set(id, oldChannel)
-	return nil
+	_, err := ChannelUpdate(request, ctx)
+	return err
 }
 
 func ChannelDel(id int, ctx context.Context) error {
