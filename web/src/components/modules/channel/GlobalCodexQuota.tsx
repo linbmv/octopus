@@ -35,12 +35,12 @@ export function GlobalCodexQuota() {
                     <BatteryMedium className={cn('size-4', quotaQuery.isLoading || channelsQuery.isLoading ? 'animate-pulse text-muted-foreground' : summary.lowRemaining ? 'text-destructive' : summary.limited ? 'text-orange-500' : summary.hasQuota ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')} />
                 </Button>
             </PopoverTrigger>
-            <PopoverContent align="end" sideOffset={8} className="w-[min(calc(100vw-1rem),30rem)] overflow-hidden p-0">
+            <PopoverContent align="end" sideOffset={8} className="w-[min(calc(100vw-1rem),30rem)] overflow-hidden p-0 shadow-none">
                 <div className="flex max-h-[min(88vh,56rem)] flex-col">
                     <header className="flex shrink-0 items-center gap-2 border-b border-border/70 bg-card/95 px-3 py-2.5">
                         <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary"><BatteryMedium className="size-4" /></span>
                         <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold">{t('title')}</h2><p className="truncate text-[10px] text-muted-foreground">{t('description')}</p></div>
-                        <Button type="button" size="sm" variant="outline" className="h-7 shrink-0 rounded-md px-2 text-[11px]" disabled={refresh.isPending} onClick={() => refresh.mutate()} aria-label={t('refresh')}><RefreshCw className={cn('mr-1 size-3', refresh.isPending && 'animate-spin')} />{refresh.isPending ? t('refreshing') : t('refreshShort')}</Button>
+                        <Button type="button" size="icon-sm" variant="ghost" className="size-7 rounded-md text-muted-foreground shadow-none hover:bg-muted/60 hover:text-foreground" disabled={refresh.isPending} onClick={() => refresh.mutate()} aria-label={t('refresh')} title={t('refresh')}><RefreshCw className={cn('size-3.5', refresh.isPending && 'animate-spin')} /></Button>
                     </header>
 
                     {quotaQuery.isError && <p className="p-4 text-xs text-destructive">{t('loadFailed')}</p>}
@@ -54,8 +54,6 @@ export function GlobalCodexQuota() {
 function CodexQuotaListItem({ channel, keyData, quota }: { channel: Channel; keyData: ChannelKey; quota?: CodexQuota }) {
     const t = useTranslations('codexQuota');
     const updateChannel = useUpdateChannel();
-    const usage = maxUsage(quota);
-    const hasUsage = quotaWindows(quota).length > 0;
     const remark = keyData.remark?.trim();
     const name = remark || `${channel.name} #${keyData.id}`;
     const windows = quotaWindowEntries(quota, t).slice(0, 2);
@@ -75,17 +73,13 @@ function CodexQuotaListItem({ channel, keyData, quota }: { channel: Channel; key
                     <span className="min-w-0 truncate text-muted-foreground">{t('plan')} <strong className="text-foreground">{quota?.plan_type || '—'}</strong></span>
                 </div>
             </div>
-            <span className={cn('shrink-0 text-xs font-semibold tabular-nums', usage >= 90 ? 'text-destructive' : usage >= 70 ? 'text-orange-600 dark:text-orange-400' : 'text-emerald-600 dark:text-emerald-400')} title={hasUsage ? t('usage', { used: usage, remaining: 100 - usage }) : undefined}>{hasUsage ? `${usage}%` : '—'}</span>
-            <label className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-muted-foreground">
-                <span>{keyData.enabled ? t('enabled') : t('disabled')}</span>
-                <Switch checked={keyData.enabled} disabled={updateChannel.isPending} onCheckedChange={(enabled) => updateChannel.mutate({ id: channel.id, keys_to_update: [{ id: keyData.id, enabled }] })} aria-label={`${t('toggleEnable')}: ${name}`} />
-            </label>
+            <Switch className="shadow-none" checked={keyData.enabled} disabled={updateChannel.isPending} onCheckedChange={(enabled) => updateChannel.mutate({ id: channel.id, keys_to_update: [{ id: keyData.id, enabled }] })} aria-label={`${t('toggleEnable')}: ${name}`} />
         </div>
 
         {windows.length ? <div className="mt-1 grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-2">{windows.map(({ window, label }) => {
             const value = clampPercent(window.used_percent);
             return <div key={`${label}-${window.reset_at}`} className="min-w-0">
-                <div className="flex items-center justify-between gap-2 text-[9px] text-muted-foreground"><span className="truncate">{label}</span><span className="shrink-0 font-semibold tabular-nums text-foreground">{value}%</span></div>
+                <div className="truncate text-[9px] text-muted-foreground">{label}</div>
                 <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-muted"><div className={cn('h-full rounded-full', value >= 90 ? 'bg-rose-400' : value >= 70 ? 'bg-amber-400' : 'bg-lime-400')} style={{ width: `${value}%` }} /></div>
             </div>;
         })}</div> : null}
@@ -114,10 +108,6 @@ function quotaWindowEntries(quota: CodexQuota | undefined, t: QuotaTranslator): 
     if (!quota) return [];
     const windows = [quota.rate_limit?.primary_window, quota.rate_limit?.secondary_window, quota.code_review_rate_limit?.primary_window, quota.code_review_rate_limit?.secondary_window, ...(quota.additional_rate_limits ?? []).flatMap((item) => [item.rate_limit?.primary_window, item.rate_limit?.secondary_window])].filter((window): window is NonNullable<typeof window> => Boolean(window));
     return windows.map((window) => ({ window, label: quotaWindowLabel(window.limit_window_seconds, t) }));
-}
-
-function maxUsage(quota?: CodexQuota) {
-    return quotaWindows(quota).reduce((max, value) => Math.max(max, clampPercent(value)), 0);
 }
 
 function quotaWindowLabel(seconds: number, t: QuotaTranslator) {
