@@ -673,6 +673,8 @@
             "error": "錯誤",
             "errorInfo": "錯誤訊息",
             "firstToken": "首字",
+            "firstTokenTimeout": "首字逾時",
+            "firstTokenUnavailable": "未觀測",
             "totalTime": "總耗時",
             "input": "輸入",
             "output": "輸出",

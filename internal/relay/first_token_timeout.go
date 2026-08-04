@@ -223,6 +223,9 @@ func (ra *relayAttempt) hasFailoverAlternative() bool {
 				return true
 			}
 		}
+		if len(ra.deferredSlowAttempts) > 0 {
+			return true
+		}
 	}
 	return false
 }

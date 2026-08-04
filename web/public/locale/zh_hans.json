@@ -673,6 +673,8 @@
             "error": "错误",
             "errorInfo": "错误信息",
             "firstToken": "首字",
+            "firstTokenTimeout": "首字超时",
+            "firstTokenUnavailable": "未观测",
             "totalTime": "总耗时",
             "input": "输入",
             "output": "输出",

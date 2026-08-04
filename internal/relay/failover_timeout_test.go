@@ -296,6 +296,7 @@ func TestRequestLocalSchedulingTimeoutsDoNotApplyGlobalPenalties(t *testing.T) {
 		firstTokenTimeoutColdStart,
 		firstTokenTimeoutNonStreamAttempt,
 		firstTokenTimeoutBudget,
+		firstTokenTimeoutGlobal,
 	} {
 		err := firstTokenTimeoutConfig{Duration: time.Second, Source: source}.
 			Error(firstTokenTimeoutPhaseWaitingHeaders)
@@ -306,7 +307,7 @@ func TestRequestLocalSchedulingTimeoutsDoNotApplyGlobalPenalties(t *testing.T) {
 		}
 	}
 
-	for _, source := range []firstTokenTimeoutSource{firstTokenTimeoutManual, firstTokenTimeoutGlobal} {
+	for _, source := range []firstTokenTimeoutSource{firstTokenTimeoutManual} {
 		err := firstTokenTimeoutConfig{Duration: time.Second, Source: source}.
 			Error(firstTokenTimeoutPhaseWaitingHeaders)
 		decision := decideRelayError(0, nil, nil, err)

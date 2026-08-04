@@ -27,6 +27,7 @@ import (
 
 // run 统一管理一次通道尝试的完整生命周期。
 func (ra *relayAttempt) run() (bool, error) {
+	defer ra.releaseSlowRecoveryLease()
 	releaseLimits, msg, ok := reserveChannelLimits(ra.channel)
 	if !ok {
 		// 该 key 可能刚被授予半开试探名额；未发请求即放弃必须归还，
@@ -168,6 +169,7 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 			urlLatency = span.Duration()
 		}
 		recordRuntimeURLSuccess(ra.channel.ID, ra.baseURL, urlLatency)
+		ra.clearSlowRecoveryState()
 		ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
 		if updateErr := op.ChannelKeyUpdate(ra.usedKey); updateErr != nil {
 			log.WithContext(ctx).Warnw("failed to update channel key runtime state",
@@ -245,6 +247,18 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 			ra.channel.Name, ra.channel.ID, ra.usedKey.ID,
 			span.Duration().Milliseconds(), msg, fwdErr)
 		return ra.c.Writer.Written(), upstreamHeaders, upstreamResponseBody, fwdErr
+	}
+	if isSlowRecoveryTimeout(fwdErr) {
+		ra.recordSlowRecoveryTimeout(fwdErr)
+	} else if isFirstTokenTimeoutError(fwdErr) {
+		// Manual and adaptive first-token policies remain authoritative. They do
+		// not create or clear passive slow state.
+		ra.releaseSlowRecoveryLease()
+	} else {
+		// A prompt HTTP/transport result proves that this candidate is no longer
+		// merely "slow unknown". Its actual error still follows normal health,
+		// URL-cooldown, and circuit-breaker classification below.
+		ra.clearSlowRecoveryState()
 	}
 
 	if updateErr := op.ChannelKeyUpdate(ra.usedKey); updateErr != nil {
@@ -422,8 +436,19 @@ func (ra *relayAttempt) switchToNextBaseURL() bool {
 		if !ra.requestCandidateAllowed(ra.channel, ra.usedKey, ra.internalRequest.Model, nextBaseURL) {
 			continue
 		}
+		slowKey := newSlowRecoveryKey(ra.channel, ra.usedKey, ra.internalRequest.Model, nextBaseURL)
+		allowed, slowLease, remaining := globalSlowRecovery.acquire(slowKey)
+		if !allowed {
+			if ra.iter != nil {
+				ra.iter.Skip(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, slowRecoveryBackoffMessage(remaining))
+			}
+			continue
+		}
 		outAdapter, err := newChannelOutbound(ra.channel, ra.internalRequest, nextBaseURL, ra.usedKey)
 		if err != nil {
+			if slowLease != 0 {
+				globalSlowRecovery.release(slowKey, slowLease)
+			}
 			continue
 		}
 		ra.baseURL = nextBaseURL
@@ -432,7 +457,10 @@ func (ra *relayAttempt) switchToNextBaseURL() bool {
 		ra.metrics.OutboundRequestSummary = nil
 		ra.metrics.OutboundRequestArtifact = nil
 		ra.responseHeaderDuration = 0
+		ra.slowRecoveryKey = slowKey
+		ra.slowRecoveryLease = slowLease
 		if !ra.selectRequestCandidate(ra) {
+			ra.releaseSlowRecoveryLease()
 			continue
 		}
 		ra.selectionReason = "base_url_failover"
@@ -455,8 +483,20 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		if ra.iter != nil && ra.iter.SkipCircuitBreak(ra.channel.ID, nextKey.ID, ra.channel.Name, nextKeyRemark) {
 			continue
 		}
+		slowKey := newSlowRecoveryKey(ra.channel, nextKey, ra.internalRequest.Model, ra.baseURL)
+		allowed, slowLease, remaining := globalSlowRecovery.acquire(slowKey)
+		if !allowed {
+			balancer.RecordProbeAbort(ra.channel.ID, nextKey.ID, ra.internalRequest.Model)
+			if ra.iter != nil {
+				ra.iter.Skip(ra.channel.ID, nextKey.ID, ra.channel.Name, slowRecoveryBackoffMessage(remaining))
+			}
+			continue
+		}
 		outAdapter, err := newChannelOutbound(ra.channel, ra.internalRequest, ra.baseURL, nextKey)
 		if err != nil {
+			if slowLease != 0 {
+				globalSlowRecovery.release(slowKey, slowLease)
+			}
 			// 同 buildRealAttempt：刚被授予的半开试探名额必须归还。
 			balancer.RecordProbeAbort(ra.channel.ID, nextKey.ID, ra.internalRequest.Model)
 			ra.iter.Skip(ra.channel.ID, nextKey.ID, ra.channel.Name, err.Error())
@@ -468,7 +508,10 @@ func (ra *relayAttempt) switchToNextKey() bool {
 		ra.metrics.ParamOverride = ""
 		ra.metrics.OutboundRequestSummary = nil
 		ra.metrics.OutboundRequestArtifact = nil
+		ra.slowRecoveryKey = slowKey
+		ra.slowRecoveryLease = slowLease
 		if !ra.selectRequestCandidate(ra) {
+			ra.releaseSlowRecoveryLease()
 			continue
 		}
 		ra.selectionReason = "key_failover"

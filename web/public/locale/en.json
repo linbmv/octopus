@@ -673,6 +673,8 @@
             "error": "Error",
             "errorInfo": "Error Info",
             "firstToken": "TTFT",
+            "firstTokenTimeout": "First-token timeout",
+            "firstTokenUnavailable": "not observed",
             "totalTime": "Total",
             "input": "Input",
             "output": "Output",

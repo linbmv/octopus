@@ -271,6 +271,11 @@ func TestInvalidateChannelRuntimePenaltiesClearsRateLimitAndHealth(t *testing.T)
 	const channelID = 9091
 	healthManager.RecordSuccess(channelID, 1, "m", time.Second)
 	recordChannelRateLimit(channelID, time.Minute)
+	slowKey := newSlowRecoveryKey(
+		&dbmodel.Channel{ID: channelID, ConfigVersion: 1, Type: llm.APIFormatOpenAIResponse},
+		dbmodel.ChannelKey{ID: 1, ChannelKey: "test"}, "m", "https://slow.example/v1",
+	)
+	globalSlowRecovery.recordTimeout(slowKey, 30*time.Second)
 	if channelRateLimitRemaining(channelID) <= 0 {
 		t.Fatal("rate-limit precondition was not established")
 	}
@@ -284,9 +289,17 @@ func TestInvalidateChannelRuntimePenaltiesClearsRateLimitAndHealth(t *testing.T)
 			t.Fatalf("health state remained after invalidation: %+v", key)
 		}
 	}
+	globalSlowRecovery.mu.Lock()
+	_, slowExists := globalSlowRecovery.entries[slowKey]
+	globalSlowRecovery.mu.Unlock()
+	if slowExists {
+		t.Fatal("passive slow-recovery state remained after channel invalidation")
+	}
 }
 
 func TestInvalidateAllRuntimeStateClearsRateLimitURLAndHealth(t *testing.T) {
+	globalChannelRPMLimiter.clear()
+	t.Cleanup(globalChannelRPMLimiter.clear)
 	previousManager := healthManager
 	healthManager = health.NewHealthManager(health.DefaultHealthConfig())
 	t.Cleanup(func() { healthManager = previousManager })
@@ -295,6 +308,10 @@ func TestInvalidateAllRuntimeStateClearsRateLimitURLAndHealth(t *testing.T) {
 	healthManager.RecordSuccess(channelID, 1, "m", time.Second)
 	recordChannelRateLimit(channelID, time.Minute)
 	recordRuntimeURLFailure(channelID, "https://restore.example/v1")
+	globalSlowRecovery.recordTimeout(newSlowRecoveryKey(
+		&dbmodel.Channel{ID: channelID, ConfigVersion: 1, Type: llm.APIFormatOpenAIResponse},
+		dbmodel.ChannelKey{ID: 1, ChannelKey: "test"}, "m", "https://restore.example/v1",
+	), 30*time.Second)
 	if first := globalChannelRPMLimiter.reserve(channelID, 1); !first.Allowed {
 		t.Fatal("RPM limiter precondition rejected the first request")
 	}
@@ -308,6 +325,12 @@ func TestInvalidateAllRuntimeStateClearsRateLimitURLAndHealth(t *testing.T) {
 	}
 	if len(healthManager.GetAllStates()) != 0 {
 		t.Fatal("bulk invalidation retained health state")
+	}
+	globalSlowRecovery.mu.Lock()
+	slowEntries := len(globalSlowRecovery.entries)
+	globalSlowRecovery.mu.Unlock()
+	if slowEntries != 0 {
+		t.Fatalf("bulk invalidation retained %d passive slow-recovery entries", slowEntries)
 	}
 	globalRuntimeURLSelector.mu.Lock()
 	latencies := len(globalRuntimeURLSelector.latencies)

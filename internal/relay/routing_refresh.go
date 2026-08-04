@@ -45,6 +45,9 @@ func (r *relayRun) refreshRouting() error {
 	snapshot := routingstate.Current()
 	r.requestFailoverState().routingChanged()
 	r.routingRefreshes++
+	// Deferred slow candidates belong to the previous configuration snapshot.
+	// Release their passive leases before rebuilding the candidate tree.
+	r.releaseDeferredSlowAttempts()
 	if r.reloadRoutingFunc != nil {
 		if err := r.reloadRoutingFunc(); err != nil {
 			return err

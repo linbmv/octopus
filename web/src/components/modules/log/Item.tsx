@@ -11,7 +11,7 @@ import { getModelIcon } from '@/lib/model-icons';
 import { parseUsageCacheTokens } from '@/lib/usage-cache-tokens';
 import { cn } from '@/lib/utils';
 import { RetryBadgeWithTooltip } from './AttemptHistory';
-import { formatLogDuration, formatLogTime, shouldShowReasoningTokens } from './format';
+import { formatFirstTokenMetric, formatLogDuration, formatLogTime, shouldShowReasoningTokens } from './format';
 import { LogDetails } from './LogDetails';
 
 export function LogCard({ log }: { log: RelayLog }) {
@@ -44,7 +44,7 @@ export function LogCard({ log }: { log: RelayLog }) {
                             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground">
                                 <Metric icon={Clock}>{formatLogTime(log.time, locale)}</Metric>
                                 {requestKey && <Metric icon={KeyRound}>{requestKey}</Metric>}
-                                <Metric icon={Zap}>{t('firstToken')} {formatLogDuration(log.ftut)}</Metric>
+                                <Metric icon={Zap}>{formatFirstTokenMetric(log.ftut, log.error, { observed: t('firstToken'), timeout: t('firstTokenTimeout'), unavailable: t('firstTokenUnavailable') })}</Metric>
                                 <Metric icon={Cpu}>{t('totalTime')} {formatLogDuration(log.use_time)}</Metric>
                                 <Metric icon={ArrowDownToLine}>{t('input')} {log.input_tokens.toLocaleString()}</Metric>
                                 <Metric icon={ArrowUpFromLine}>{t('output')} {log.output_tokens.toLocaleString()}</Metric>

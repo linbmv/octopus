@@ -31,6 +31,7 @@ type relayRun struct {
 	routingSnapshot        routingstate.Snapshot
 	routingRefreshes       int
 	failoverState          *requestFailoverState
+	deferredSlowAttempts   []deferredSlowAttempt
 	resolveGroupItemFunc   func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error)
 	runAttemptFunc         func(attempt *relayAttempt) (bool, error)
 	reloadRoutingFunc      func() error
@@ -40,6 +41,11 @@ type relayIteratorFrame struct {
 	group dbmodel.Group
 	iter  *balancer.Iterator
 	depth int
+}
+
+type deferredSlowAttempt struct {
+	attempt *relayAttempt
+	iter    *balancer.Iterator
 }
 
 // relayAttempt 保存一次上游通道尝试的状态。
@@ -59,6 +65,8 @@ type relayAttempt struct {
 	attemptAction          string
 	selectionReason        string
 	keyRemark              string                    // 清洗后的本次 key 备注，用于 attempt 日志记录
+	slowRecoveryKey        slowRecoveryKey           // 被动慢恢复候选身份（仅稳定 ID 与不可逆指纹）
+	slowRecoveryLease      slowRecoveryLeaseID       // 当前请求占用的恢复租约代次（0 表示无租约）
 	trackingID             string                    // 活跃请求跟踪 ID
 	span                   *balancer.AttemptSpan     // attempt 追踪 span，用于记录首 token 时间
 	responseHeaderDuration time.Duration             // request start to upstream response headers

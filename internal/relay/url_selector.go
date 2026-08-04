@@ -118,6 +118,7 @@ func InvalidateAllRuntimeState() {
 	globalRuntimeURLSelector.InvalidateAll()
 	globalChannelRateLimits.clear()
 	globalChannelRPMLimiter.clear()
+	globalSlowRecovery.invalidateAll()
 	if healthManager != nil {
 		healthManager.InvalidateAll()
 	}

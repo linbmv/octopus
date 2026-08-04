@@ -261,7 +261,10 @@ func shouldRecordURLFailure(decision ErrorDecision) bool {
 }
 
 func runtimeFailurePenalties(decision ErrorDecision, err error, endpointFallbackPending bool) (recordURLFailure, recordHealthFailure bool) {
-	nonPunitiveTimeout := isNonPunitiveFirstTokenTimeout(err)
+	// Eligible initial-response timeouts enter the separate passive slow-recovery
+	// state. They remain request failures for audit purposes, but are not proof
+	// of a broken endpoint and must not feed URL cooldown or the circuit breaker.
+	nonPunitiveTimeout := isNonPunitiveFirstTokenTimeout(err) || isSlowRecoveryTimeout(err)
 	recordURLFailure = shouldRecordURLFailure(decision) && !nonPunitiveTimeout
 	recordHealthFailure = decision.Classification.Level != errorclass.ErrorLevelClient &&
 		!nonPunitiveTimeout && !endpointFallbackPending

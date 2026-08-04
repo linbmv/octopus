@@ -16,7 +16,7 @@ import { getModelIcon } from '@/lib/model-icons';
 import { parseUsageCacheTokens } from '@/lib/usage-cache-tokens';
 import { cn } from '@/lib/utils';
 import { AttemptList, RetryBadgeWithTooltip } from './AttemptHistory';
-import { formatLogDuration, formatLogTime, shouldShowReasoningTokens } from './format';
+import { formatFirstTokenMetric, formatLogDuration, formatLogTime, shouldShowReasoningTokens } from './format';
 
 export function LogDetails({ log }: { log: RelayLog }) {
     const t = useTranslations('log.card');
@@ -56,7 +56,7 @@ export function LogDetails({ log }: { log: RelayLog }) {
                 <footer className="mt-auto flex shrink-0 flex-wrap items-center gap-3 pt-4 text-xs text-muted-foreground md:gap-4">
                     <FooterMetric icon={Clock}>{formatLogTime(log.time, locale)}</FooterMetric>
                     {log.request_api_key_name?.trim() && <FooterMetric icon={KeyRound}>{log.request_api_key_name.trim()}</FooterMetric>}
-                    <FooterMetric icon={Zap}>{t('firstTokenTime')}: {formatLogDuration(log.ftut)}</FooterMetric>
+                    <FooterMetric icon={Zap}>{t('firstTokenTime')}: {formatFirstTokenMetric(log.ftut, log.error, { observed: t('firstToken'), timeout: t('firstTokenTimeout'), unavailable: t('firstTokenUnavailable') })}</FooterMetric>
                     <FooterMetric icon={Cpu}>{t('totalTime')}: {formatLogDuration(log.use_time)}</FooterMetric>
                     <FooterMetric icon={DollarSign}>{t('cost')}: {Number(log.cost).toFixed(6)}</FooterMetric>
                 </footer>

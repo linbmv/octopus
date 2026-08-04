@@ -16,6 +16,7 @@ import (
 
 func (r *relayRun) run() {
 	ctx := r.c.Request.Context()
+	defer r.releaseDeferredSlowAttempts()
 	var lastErr error
 	var lastClientErr *classifiedClientRelayError
 
@@ -196,7 +197,16 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 		}
 		frame := r.currentIteratorFrame()
 		if frame == nil {
-			return nil, nil
+			attempt := r.popDeferredSlowAttempt()
+			if attempt == nil {
+				return nil, nil
+			}
+			if !r.selectRequestCandidate(attempt) {
+				balancer.RecordProbeAbort(attempt.channel.ID, attempt.usedKey.ID, attempt.groupItem.ModelName)
+				attempt.releaseSlowRecoveryLease()
+				continue
+			}
+			return attempt, nil
 		}
 		item := frame.iter.Item()
 		if item.Type != dbmodel.GroupItemTypeGroup {
@@ -204,6 +214,10 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 			attempt, err := r.resolveCandidate(item, frame.iter.IsSticky(), frame.iter.StickyKeyID())
 			if attempt != nil {
 				attempt.firstTokenPolicyGroup = &frame.group
+				if attempt.slowRecoveryLease != 0 && attempt.hasFailoverAlternative() {
+					r.deferSlowAttempt(attempt)
+					continue
+				}
 				if !r.selectRequestCandidate(attempt) {
 					if attempt.channel != nil {
 						balancer.RecordProbeAbort(attempt.channel.ID, attempt.usedKey.ID, item.ModelName)
@@ -220,6 +234,97 @@ func (r *relayRun) prepareAttempt() (*relayAttempt, error) {
 			return nil, err
 		}
 	}
+}
+
+// deferSlowAttempt postpones an already-known slow candidate until ordinary
+// candidates have been exhausted. The stored attempt has not contacted the
+// upstream; its dedicated iterator is used only if a later real user request
+// step reaches this passive recovery fallback.
+func (r *relayRun) deferSlowAttempt(attempt *relayAttempt) {
+	if r == nil || attempt == nil || attempt.channel == nil {
+		if attempt != nil {
+			attempt.releaseSlowRecoveryLease()
+		}
+		return
+	}
+	group := r.group
+	if attempt.firstTokenPolicyGroup != nil {
+		group = *attempt.firstTokenPolicyGroup
+	}
+	group.Items = []dbmodel.GroupItem{attempt.groupItem}
+	// buildRealAttempt may have acquired a circuit HalfOpen slot. Deferral does
+	// not contact the upstream, so return it now and acquire afresh when this
+	// real-request fallback is actually selected.
+	balancer.RecordProbeAbort(attempt.channel.ID, attempt.usedKey.ID, attempt.groupItem.ModelName)
+	iter := balancer.NewIteratorFromCandidates(
+		group,
+		r.metrics.APIKeyID,
+		r.metrics.RequestModel,
+		[]dbmodel.GroupItem{attempt.groupItem},
+		nil,
+	)
+	if !iter.Next() {
+		attempt.releaseSlowRecoveryLease()
+		return
+	}
+	r.attachIteratorTimeline(iter)
+	r.iterHistory = append(r.iterHistory, iter)
+	// Keep the channel's remaining URL/key fallbacks attached. The known-slow
+	// candidate is delayed behind ordinary group items, but deferral must never
+	// make an otherwise eligible same-channel fallback disappear.
+	r.deferredSlowAttempts = append(r.deferredSlowAttempts, deferredSlowAttempt{attempt: attempt, iter: iter})
+}
+
+func (r *relayRun) popDeferredSlowAttempt() *relayAttempt {
+	for r != nil && len(r.deferredSlowAttempts) > 0 {
+		deferred := r.deferredSlowAttempts[0]
+		r.deferredSlowAttempts = r.deferredSlowAttempts[1:]
+		attempt := deferred.attempt
+		if attempt == nil || attempt.channel == nil || deferred.iter == nil {
+			if attempt != nil {
+				attempt.releaseSlowRecoveryLease()
+			}
+			continue
+		}
+		if !r.requestCandidateAllowed(attempt.channel, attempt.usedKey, attempt.groupItem.ModelName, attempt.baseURL) {
+			attempt.releaseSlowRecoveryLease()
+			continue
+		}
+		r.iter = deferred.iter
+		if r.iter.SkipCircuitBreak(attempt.channel.ID, attempt.usedKey.ID, attempt.channel.Name, attempt.keyRemark) {
+			attempt.releaseSlowRecoveryLease()
+			continue
+		}
+		r.internalRequest.Model = attempt.groupItem.ModelName
+		r.metrics.ActualModel = attempt.groupItem.ModelName
+		r.metrics.ParamOverride = ""
+		r.metrics.OutboundRequestSummary = nil
+		r.metrics.OutboundRequestArtifact = nil
+		attempt.responseHeaderDuration = 0
+		outAdapter, err := newChannelOutbound(attempt.channel, r.internalRequest, attempt.baseURL, attempt.usedKey)
+		if err != nil {
+			balancer.RecordProbeAbort(attempt.channel.ID, attempt.usedKey.ID, attempt.groupItem.ModelName)
+			r.iter.Skip(attempt.channel.ID, attempt.usedKey.ID, attempt.channel.Name, err.Error())
+			attempt.releaseSlowRecoveryLease()
+			continue
+		}
+		attempt.outAdapter = outAdapter
+		attempt.selectionReason = "passive_slow_recovery"
+		return attempt
+	}
+	return nil
+}
+
+func (r *relayRun) releaseDeferredSlowAttempts() {
+	if r == nil {
+		return
+	}
+	for _, deferred := range r.deferredSlowAttempts {
+		if deferred.attempt != nil {
+			deferred.attempt.releaseSlowRecoveryLease()
+		}
+	}
+	r.deferredSlowAttempts = nil
 }
 
 func (r *relayRun) resolveCandidate(
@@ -351,8 +456,20 @@ func (r *relayRun) buildRealAttempt(
 		if r.iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name, keyRemark) {
 			continue
 		}
+		slowKey := newSlowRecoveryKey(channel, usedKey, item.ModelName, candidateBaseURL)
+		allowed, slowLease, remaining := globalSlowRecovery.acquire(slowKey)
+		if !allowed {
+			// Slow recovery is passive: skip this candidate until another real
+			// request reaches its due time. No synthetic upstream request is made.
+			balancer.RecordProbeAbort(channel.ID, usedKey.ID, item.ModelName)
+			r.iter.Skip(channel.ID, usedKey.ID, channel.Name, slowRecoveryBackoffMessage(remaining))
+			continue
+		}
 		outAdapter, err := newChannelOutbound(channel, r.internalRequest, candidateBaseURL, usedKey)
 		if err != nil {
+			if slowLease != 0 {
+				globalSlowRecovery.release(slowKey, slowLease)
+			}
 			// SkipCircuitBreak 通过时可能已把该 key 置为半开试探者；此处未发出
 			// 真实请求即放弃，必须归还试探名额，否则半开态会滞留到租约超时。
 			balancer.RecordProbeAbort(channel.ID, usedKey.ID, item.ModelName)
@@ -374,19 +491,21 @@ func (r *relayRun) buildRealAttempt(
 		)
 
 		return &relayAttempt{
-			relayRun:        r,
-			outAdapter:      outAdapter,
-			channel:         channel,
-			groupItem:       item,
-			usedKey:         usedKey,
-			keyOptions:      keyOptions,
-			keyIndex:        keyIndex,
-			baseURL:         candidateBaseURL,
-			baseURLOptions:  baseURLOptions,
-			baseURLIndex:    candidateBaseURLIndex,
-			attemptAction:   "selected",
-			selectionReason: "runtime_url_selector",
-			keyRemark:       keyRemark,
+			relayRun:          r,
+			outAdapter:        outAdapter,
+			channel:           channel,
+			groupItem:         item,
+			usedKey:           usedKey,
+			keyOptions:        keyOptions,
+			keyIndex:          keyIndex,
+			baseURL:           candidateBaseURL,
+			baseURLOptions:    baseURLOptions,
+			baseURLIndex:      candidateBaseURLIndex,
+			attemptAction:     "selected",
+			selectionReason:   "runtime_url_selector",
+			keyRemark:         keyRemark,
+			slowRecoveryKey:   slowKey,
+			slowRecoveryLease: slowLease,
 		}, nil
 	}
 

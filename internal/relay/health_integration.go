@@ -47,6 +47,7 @@ func ReloadHealthSettings() {
 // clear every model for the channel.
 func InvalidateChannelRuntimePenalties(channelID int, model string) {
 	globalChannelRateLimits.invalidate(channelID)
+	globalSlowRecovery.invalidateChannel(channelID, model)
 	if healthManager != nil {
 		healthManager.InvalidateChannel(channelID, model)
 	}

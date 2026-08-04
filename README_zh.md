@@ -250,6 +250,8 @@ Next.js 16.2.10 是当前固定的最新版，但自身精确固定了旧 PostCS
 | `observability.tracing.endpoint` | OTLP/HTTP Collector 地址 | `localhost:4318` |
 | `observability.tracing.sample_ratio` | Trace 采样率（0 到 1） | `0.01` |
 
+首响应超时还会进入仅驻内存的被动慢恢复状态。后续真实用户请求会将已知慢的渠道/Key/模型/端点作用域放在普通候选之后；只有普通候选未完成请求时才尝试它，且只能使用当前请求在同一 `120s` 硬上限内的剩余预算。第一次恢复机会立即可用；重复超时后依次退避 `60s`、`120s`、`240s`、`480s`，最高 `600s`；退避只会立即跳过候选，不会延长用户请求。上游只要及时返回就会清除慢标记，渠道或路由配置变更也会废弃旧标记。该机制不启动后台任务，不发送合成测活或额外生成请求。
+
 程序启动后会监听配置文件变化。新配置只有在完整解析并通过校验后才会原子替换当前快照；无效配置会被拒绝并继续使用旧值。`log.level`、Relay 时限/请求响应体上限和 tracing 配置会对新请求/新 attempt 即时生效；业务监听器、可信代理、会话 Cookie 策略、独立 metrics 监听器（包括启停和 token）、数据库连接及日志格式变更需要重启进程。业务端口永不提供 `/metrics`，Prometheus 应采集 `observability.metrics.host:port/metrics`。
 
 Relay 会在解压前拒绝除空值/`identity` 以外的 `Content-Encoding`（415），防止压缩请求膨胀攻击；过大的 JSON 或图片 multipart 请求返回结构化 413。非流式响应上限作用于 Go Transport 解压后的内容。模型发现另有每页 16 MiB、跨 Key/分页累计 64 MiB 和 50,000 个唯一模型上限；价格目录响应上限为 16 MiB。首事件与空闲保护只是阶段时限，不是流式总时限：持续产生 heartbeat 的有效流可以无限期运行，已识别终止事件仍按成功处理。
