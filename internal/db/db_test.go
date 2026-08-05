@@ -129,7 +129,12 @@ func TestInitDBWithSQLiteAppliesSchemaAndConfiguresPool(t *testing.T) {
 			t.Errorf("expected migrated table for %T", table)
 		}
 	}
-	for _, column := range []string{"header_rules", "json_rewrite_rules"} {
+	for _, column := range []string{
+		"header_rules",
+		"json_rewrite_rules",
+		"first_token_timeout_exception_enabled",
+		"first_token_timeout_exception_seconds",
+	} {
 		if !got.Migrator().HasColumn(&model.Channel{}, column) {
 			t.Errorf("expected migrated channels.%s column", column)
 		}

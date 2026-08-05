@@ -28,6 +28,7 @@ const (
 	// 仅在存在其他候选时生效；最后一个候选保留完整请求预算。
 	firstTokenTimeoutNonStreamAttempt
 	firstTokenTimeoutBudget
+	firstTokenTimeoutChannelException
 )
 
 type firstTokenTimeoutConfig struct {
@@ -56,6 +57,8 @@ func (c firstTokenTimeoutConfig) Reason() string {
 		return "non_stream_attempt_timeout"
 	case firstTokenTimeoutBudget:
 		return "stream_first_event_budget"
+	case firstTokenTimeoutChannelException:
+		return "channel_first_token_timeout_exception"
 	default:
 		return "first_token_timeout"
 	}
@@ -159,6 +162,12 @@ func (ra *relayAttempt) firstTokenTimeoutPolicies() (enforced firstTokenTimeoutC
 		hasAdaptiveTimeout = adaptiveTimeout > 0
 	}
 	relayConf := conf.Current().Relay
+	if exceptionSeconds := channelFirstTokenTimeoutExceptionSeconds(ra.channel); exceptionSeconds > 0 {
+		return firstTokenTimeoutConfig{
+			Duration: time.Duration(exceptionSeconds) * time.Second,
+			Source:   firstTokenTimeoutChannelException,
+		}, firstTokenTimeoutConfig{}
+	}
 	manualTimeout := ra.group.FirstTokenTimeOut
 	if ra.firstTokenPolicyGroup != nil {
 		manualTimeout = ra.firstTokenPolicyGroup.FirstTokenTimeOut
@@ -186,12 +195,54 @@ func (ra *relayAttempt) firstTokenTimeoutPolicies() (enforced firstTokenTimeoutC
 // 仅当还有其他候选可以转移时生效——最后一个候选使用请求剩余的
 // 首响应总预算，避免每次尝试重新获得一份长超时。
 func (ra *relayAttempt) nonStreamAttemptTimeout() firstTokenTimeoutConfig {
-	if ra == nil || !ra.hasFailoverAlternative() {
+	if ra == nil {
 		return firstTokenTimeoutConfig{}
+	}
+	if exceptionSeconds := channelFirstTokenTimeoutExceptionSeconds(ra.channel); exceptionSeconds > 0 {
+		return firstTokenTimeoutConfig{
+			Duration: time.Duration(exceptionSeconds) * time.Second,
+			Source:   firstTokenTimeoutChannelException,
+		}
+	}
+	if !ra.hasFailoverAlternative() {
+		if ra.relayRun == nil || ra.initialResponseTimeoutSeconds <= hardMaxInitialResponseTimeoutSeconds {
+			return firstTokenTimeoutConfig{}
+		}
+		relayConf := conf.Current().Relay
+		return firstTokenTimeoutConfig{
+			Duration: time.Duration(boundedInitialResponseTimeoutSeconds(
+				relayConf.NonStreamTimeoutSeconds,
+				relayConf.InitialResponseTimeoutSeconds,
+			)) * time.Second,
+			Source: firstTokenTimeoutGlobal,
+		}
 	}
 	seconds := conf.Current().Relay.NonStreamAttemptTimeoutSeconds
 	if seconds <= 0 {
+		if ra.relayRun != nil && ra.initialResponseTimeoutSeconds > hardMaxInitialResponseTimeoutSeconds {
+			relayConf := conf.Current().Relay
+			return firstTokenTimeoutConfig{
+				Duration: time.Duration(boundedInitialResponseTimeoutSeconds(
+					relayConf.NonStreamTimeoutSeconds,
+					relayConf.InitialResponseTimeoutSeconds,
+				)) * time.Second,
+				Source: firstTokenTimeoutGlobal,
+			}
+		}
 		return firstTokenTimeoutConfig{}
+	}
+	if ra.relayRun != nil && ra.initialResponseTimeoutSeconds > hardMaxInitialResponseTimeoutSeconds {
+		relayConf := conf.Current().Relay
+		normalSeconds := boundedInitialResponseTimeoutSeconds(
+			relayConf.NonStreamTimeoutSeconds,
+			relayConf.InitialResponseTimeoutSeconds,
+		)
+		if seconds > normalSeconds {
+			return firstTokenTimeoutConfig{
+				Duration: time.Duration(normalSeconds) * time.Second,
+				Source:   firstTokenTimeoutGlobal,
+			}
+		}
 	}
 	return firstTokenTimeoutConfig{
 		Duration: time.Duration(seconds) * time.Second,

@@ -217,28 +217,30 @@ func listChannel(c *gin.Context) {
 }
 
 type channelCreateRequest struct {
-	Name               string                       `json:"name"`
-	Type               llm.APIFormat                `json:"type"`
-	Enabled            *bool                        `json:"enabled,omitempty"`
-	BaseUrls           []model.BaseUrl              `json:"base_urls"`
-	Keys               []model.ChannelKeyAddRequest `json:"keys"`
-	Model              string                       `json:"model"`
-	CustomModel        string                       `json:"custom_model,omitempty"`
-	Proxy              bool                         `json:"proxy,omitempty"`
-	AutoSync           bool                         `json:"auto_sync,omitempty"`
-	AutoGroup          model.AutoGroupType          `json:"auto_group,omitempty"`
-	CustomHeader       []model.CustomHeader         `json:"custom_header,omitempty"`
-	HeaderRules        []model.HeaderRule           `json:"header_rules,omitempty"`
-	JSONRewriteRules   []model.JSONRewriteRule      `json:"json_rewrite_rules,omitempty"`
-	ParamOverride      *string                      `json:"param_override,omitempty"`
-	RawPassthrough     bool                         `json:"raw_passthrough,omitempty"`
-	RPMLimit           int                          `json:"rpm_limit,omitempty"`
-	MaxConcurrency     int                          `json:"max_concurrency,omitempty"`
-	ChannelProxy       *string                      `json:"channel_proxy,omitempty"`
-	MatchRegex         *string                      `json:"match_regex,omitempty"`
-	UserAgent          string                       `json:"user_agent,omitempty"`
-	PolicyProfile      model.ChannelPolicyProfile   `json:"policy_profile,omitempty"`
-	SelfHealingEnabled bool                         `json:"self_healing_enabled,omitempty"`
+	Name                              string                       `json:"name"`
+	Type                              llm.APIFormat                `json:"type"`
+	Enabled                           *bool                        `json:"enabled,omitempty"`
+	BaseUrls                          []model.BaseUrl              `json:"base_urls"`
+	Keys                              []model.ChannelKeyAddRequest `json:"keys"`
+	Model                             string                       `json:"model"`
+	CustomModel                       string                       `json:"custom_model,omitempty"`
+	Proxy                             bool                         `json:"proxy,omitempty"`
+	AutoSync                          bool                         `json:"auto_sync,omitempty"`
+	AutoGroup                         model.AutoGroupType          `json:"auto_group,omitempty"`
+	CustomHeader                      []model.CustomHeader         `json:"custom_header,omitempty"`
+	HeaderRules                       []model.HeaderRule           `json:"header_rules,omitempty"`
+	JSONRewriteRules                  []model.JSONRewriteRule      `json:"json_rewrite_rules,omitempty"`
+	ParamOverride                     *string                      `json:"param_override,omitempty"`
+	RawPassthrough                    bool                         `json:"raw_passthrough,omitempty"`
+	RPMLimit                          int                          `json:"rpm_limit,omitempty"`
+	MaxConcurrency                    int                          `json:"max_concurrency,omitempty"`
+	ChannelProxy                      *string                      `json:"channel_proxy,omitempty"`
+	MatchRegex                        *string                      `json:"match_regex,omitempty"`
+	UserAgent                         string                       `json:"user_agent,omitempty"`
+	PolicyProfile                     model.ChannelPolicyProfile   `json:"policy_profile,omitempty"`
+	SelfHealingEnabled                bool                         `json:"self_healing_enabled,omitempty"`
+	FirstTokenTimeoutExceptionEnabled bool                         `json:"first_token_timeout_exception_enabled,omitempty"`
+	FirstTokenTimeoutExceptionSeconds int                          `json:"first_token_timeout_exception_seconds,omitempty"`
 }
 
 func (r channelCreateRequest) channel() model.Channel {
@@ -251,28 +253,30 @@ func (r channelCreateRequest) channel() model.Channel {
 		keys[i] = model.ChannelKey{Enabled: key.Enabled, ChannelKey: key.ChannelKey, Remark: key.Remark}
 	}
 	return model.Channel{
-		Name:               r.Name,
-		Type:               r.Type,
-		Enabled:            enabled,
-		BaseUrls:           r.BaseUrls,
-		Keys:               keys,
-		Model:              r.Model,
-		CustomModel:        r.CustomModel,
-		Proxy:              r.Proxy,
-		AutoSync:           r.AutoSync,
-		AutoGroup:          r.AutoGroup,
-		CustomHeader:       r.CustomHeader,
-		HeaderRules:        r.HeaderRules,
-		JSONRewriteRules:   r.JSONRewriteRules,
-		ParamOverride:      r.ParamOverride,
-		RawPassthrough:     r.RawPassthrough,
-		RPMLimit:           r.RPMLimit,
-		MaxConcurrency:     r.MaxConcurrency,
-		ChannelProxy:       r.ChannelProxy,
-		MatchRegex:         r.MatchRegex,
-		UserAgent:          r.UserAgent,
-		PolicyProfile:      r.PolicyProfile,
-		SelfHealingEnabled: r.SelfHealingEnabled,
+		Name:                              r.Name,
+		Type:                              r.Type,
+		Enabled:                           enabled,
+		BaseUrls:                          r.BaseUrls,
+		Keys:                              keys,
+		Model:                             r.Model,
+		CustomModel:                       r.CustomModel,
+		Proxy:                             r.Proxy,
+		AutoSync:                          r.AutoSync,
+		AutoGroup:                         r.AutoGroup,
+		CustomHeader:                      r.CustomHeader,
+		HeaderRules:                       r.HeaderRules,
+		JSONRewriteRules:                  r.JSONRewriteRules,
+		ParamOverride:                     r.ParamOverride,
+		RawPassthrough:                    r.RawPassthrough,
+		RPMLimit:                          r.RPMLimit,
+		MaxConcurrency:                    r.MaxConcurrency,
+		ChannelProxy:                      r.ChannelProxy,
+		MatchRegex:                        r.MatchRegex,
+		UserAgent:                         r.UserAgent,
+		PolicyProfile:                     r.PolicyProfile,
+		SelfHealingEnabled:                r.SelfHealingEnabled,
+		FirstTokenTimeoutExceptionEnabled: r.FirstTokenTimeoutExceptionEnabled,
+		FirstTokenTimeoutExceptionSeconds: r.FirstTokenTimeoutExceptionSeconds,
 	}
 }
 

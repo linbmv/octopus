@@ -13,6 +13,7 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { useTranslations } from 'next-intl';
 import type { ChannelFormData } from './Form';
 import { CustomHeadersSection } from './FormSections';
@@ -181,6 +182,42 @@ export function ChannelAdvancedSection({
                             placeholder={t('paramOverridePlaceholder')}
                             className="min-h-28 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         />
+                    </div>
+
+                    <div className="space-y-3 rounded-xl border border-border/60 bg-muted/10 p-3">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <Switch
+                                checked={formData.first_token_timeout_exception_enabled}
+                                onCheckedChange={(checked) => onFormDataChange({
+                                    ...formData,
+                                    first_token_timeout_exception_enabled: checked,
+                                    first_token_timeout_exception_seconds: checked && formData.first_token_timeout_exception_seconds <= 120
+                                        ? 200
+                                        : formData.first_token_timeout_exception_seconds,
+                                })}
+                            />
+                            <span className="text-sm font-medium text-card-foreground">{t('firstTokenTimeoutException')}</span>
+                        </label>
+                        <p className="text-xs text-muted-foreground">{t('firstTokenTimeoutExceptionHint')}</p>
+                        <div className="space-y-2">
+                            <label htmlFor={`${idPrefix}-first-token-timeout-exception-seconds`} className="text-sm font-medium text-card-foreground">
+                                {t('firstTokenTimeoutExceptionSeconds')}
+                            </label>
+                            <Input
+                                id={`${idPrefix}-first-token-timeout-exception-seconds`}
+                                type="number"
+                                min={121}
+                                max={600}
+                                step={1}
+                                disabled={!formData.first_token_timeout_exception_enabled}
+                                value={formData.first_token_timeout_exception_seconds}
+                                onChange={(e) => onFormDataChange({
+                                    ...formData,
+                                    first_token_timeout_exception_seconds: Math.min(600, Math.max(121, Number(e.target.value || 121))),
+                                })}
+                                className="rounded-xl"
+                            />
+                        </div>
                     </div>
 
                     <RequestRewriteRulesSection

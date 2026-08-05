@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 )
 
@@ -12,7 +13,31 @@ var (
 	errStreamFirstEventBudget = errors.New("stream first event budget exhausted")
 )
 
-const hardMaxInitialResponseTimeoutSeconds = 120
+const hardMaxInitialResponseTimeoutSeconds = dbmodel.HardMaxInitialResponseTimeoutSeconds
+const maxChannelFirstTokenTimeoutExceptionSeconds = dbmodel.MaxChannelFirstTokenTimeoutExceptionSeconds
+
+func channelFirstTokenTimeoutExceptionSeconds(channel *dbmodel.Channel) int {
+	if channel == nil || !channel.FirstTokenTimeoutExceptionEnabled {
+		return 0
+	}
+	seconds := channel.FirstTokenTimeoutExceptionSeconds
+	if seconds <= hardMaxInitialResponseTimeoutSeconds || seconds > maxChannelFirstTokenTimeoutExceptionSeconds {
+		return 0
+	}
+	return seconds
+}
+
+func channelInitialResponseTimeoutBudget(channel *dbmodel.Channel) time.Duration {
+	seconds := channelFirstTokenTimeoutExceptionSeconds(channel)
+	if seconds == 0 {
+		seconds = hardMaxInitialResponseTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func channelHasInitialResponseTimeoutException(channel *dbmodel.Channel) bool {
+	return channelFirstTokenTimeoutExceptionSeconds(channel) > 0
+}
 
 // boundedInitialResponseTimeoutSeconds applies the operator-configured hard
 // ceiling to a phase-specific timeout. Zero phase values no longer disable the

@@ -457,7 +457,10 @@ func (r *relayRun) buildRealAttempt(
 			continue
 		}
 		slowKey := newSlowRecoveryKey(channel, usedKey, item.ModelName, candidateBaseURL)
-		allowed, slowLease, remaining := globalSlowRecovery.acquire(slowKey)
+		allowed, slowLease, remaining := globalSlowRecovery.acquireForBudget(
+			slowKey,
+			channelInitialResponseTimeoutBudget(channel),
+		)
 		if !allowed {
 			// Slow recovery is passive: skip this candidate until another real
 			// request reaches its due time. No synthetic upstream request is made.

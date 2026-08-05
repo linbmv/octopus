@@ -82,9 +82,22 @@ func newSlowRecoveryKey(channel *dbmodel.Channel, key dbmodel.ChannelKey, modelN
 // it only prevents concurrent real user requests from all spending their
 // initial-response budget on the same slow candidate.
 func (s *slowRecoveryTracker) acquire(key slowRecoveryKey) (allowed bool, leaseID slowRecoveryLeaseID, remaining time.Duration) {
+	budget := time.Duration(hardMaxInitialResponseTimeoutSeconds) * time.Second
+	if s != nil && s.lease > 0 {
+		budget = s.lease
+	}
+	return s.acquireForBudget(key, budget)
+}
+
+// acquireForBudget uses the actual initial-response budget of the selected
+// channel for the in-flight lease. An exception channel can legitimately wait
+// longer than 120 seconds; its lease must cover that same interval so another
+// request cannot start a duplicate recovery attempt while it is still running.
+func (s *slowRecoveryTracker) acquireForBudget(key slowRecoveryKey, budget time.Duration) (allowed bool, leaseID slowRecoveryLeaseID, remaining time.Duration) {
 	if s == nil || key.ChannelID <= 0 {
 		return true, 0, 0
 	}
+	leaseDuration := boundedChannelInitialResponseBudget(budget)
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,7 +117,7 @@ func (s *slowRecoveryTracker) acquire(key slowRecoveryKey) (allowed bool, leaseI
 		s.nextLeaseID++
 	}
 	entry.InFlight = true
-	entry.LeaseUntil = now.Add(s.lease)
+	entry.LeaseUntil = now.Add(leaseDuration)
 	entry.LeaseID = s.nextLeaseID
 	entry.LastTouched = now
 	s.entries[key] = entry
@@ -116,10 +129,14 @@ func (s *slowRecoveryTracker) acquire(key slowRecoveryKey) (allowed bool, leaseI
 // timeouts add exponential backoff. No goroutine or synthetic request is
 // created here.
 func (s *slowRecoveryTracker) recordTimeout(key slowRecoveryKey, budget time.Duration) {
-	s.recordTimeoutForLease(key, budget, 0)
+	s.recordTimeoutForLeaseBudget(key, boundedSlowRecoveryBudget(budget), 0)
 }
 
 func (s *slowRecoveryTracker) recordTimeoutForLease(key slowRecoveryKey, budget time.Duration, leaseID slowRecoveryLeaseID) {
+	s.recordTimeoutForLeaseBudget(key, boundedSlowRecoveryBudget(budget), leaseID)
+}
+
+func (s *slowRecoveryTracker) recordTimeoutForLeaseBudget(key slowRecoveryKey, budget time.Duration, leaseID slowRecoveryLeaseID) {
 	if s == nil || key.ChannelID <= 0 {
 		return
 	}
@@ -277,6 +294,9 @@ func slowRecoveryTimeoutBudget(err error) time.Duration {
 	}
 	var timeoutErr *firstTokenTimeoutError
 	if errors.As(err, &timeoutErr) {
+		if timeoutErr.config.Source == firstTokenTimeoutChannelException {
+			return boundedChannelInitialResponseBudget(timeoutErr.config.Duration)
+		}
 		return boundedSlowRecoveryBudget(timeoutErr.config.Duration)
 	}
 	return 0
@@ -286,6 +306,14 @@ func boundedSlowRecoveryBudget(budget time.Duration) time.Duration {
 	maxBudget := time.Duration(hardMaxInitialResponseTimeoutSeconds) * time.Second
 	if budget <= 0 || budget > maxBudget {
 		return maxBudget
+	}
+	return budget
+}
+
+func boundedChannelInitialResponseBudget(budget time.Duration) time.Duration {
+	maxBudget := time.Duration(maxChannelFirstTokenTimeoutExceptionSeconds) * time.Second
+	if budget <= 0 || budget > maxBudget {
+		return time.Duration(hardMaxInitialResponseTimeoutSeconds) * time.Second
 	}
 	return budget
 }
@@ -308,7 +336,8 @@ func isSlowRecoveryTimeout(err error) bool {
 	case firstTokenTimeoutGlobal,
 		firstTokenTimeoutColdStart,
 		firstTokenTimeoutNonStreamAttempt,
-		firstTokenTimeoutBudget:
+		firstTokenTimeoutBudget,
+		firstTokenTimeoutChannelException:
 		return true
 	default:
 		return false
@@ -345,7 +374,11 @@ func (ra *relayAttempt) recordSlowRecoveryTimeout(err error) {
 		return
 	}
 	identity := ra.slowRecoveryIdentity()
-	globalSlowRecovery.recordTimeoutForLease(identity, slowRecoveryTimeoutBudget(err), ra.slowRecoveryLease)
+	budget := slowRecoveryTimeoutBudget(err)
+	if errors.Is(err, errNonStreamRequestTimeout) && channelHasInitialResponseTimeoutException(ra.channel) {
+		budget = channelInitialResponseTimeoutBudget(ra.channel)
+	}
+	globalSlowRecovery.recordTimeoutForLeaseBudget(identity, budget, ra.slowRecoveryLease)
 	ra.slowRecoveryKey = identity
 	ra.slowRecoveryLease = 0
 }

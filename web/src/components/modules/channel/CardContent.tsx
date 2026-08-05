@@ -32,6 +32,8 @@ function initialChannelForm(channel: Channel): ChannelFormData {
         user_agent: channel.user_agent ?? '',
         policy_profile: channel.policy_profile ?? 'standard',
         self_healing_enabled: channel.self_healing_enabled ?? false,
+        first_token_timeout_exception_enabled: channel.first_token_timeout_exception_enabled ?? false,
+        first_token_timeout_exception_seconds: channel.first_token_timeout_exception_seconds ?? 0,
     };
 }
 
@@ -64,6 +66,13 @@ function channelUpdateRequest(channel: Channel, form: ChannelFormData): UpdateCh
     if (form.raw_passthrough !== channel.raw_passthrough) request.raw_passthrough = form.raw_passthrough;
     if (form.self_healing_enabled !== (channel.self_healing_enabled ?? false)) {
         request.self_healing_enabled = form.self_healing_enabled;
+    }
+    if (form.first_token_timeout_exception_enabled !== (channel.first_token_timeout_exception_enabled ?? false)) {
+        request.first_token_timeout_exception_enabled = form.first_token_timeout_exception_enabled;
+    }
+    if (form.first_token_timeout_exception_seconds !== (channel.first_token_timeout_exception_seconds ?? 0) ||
+        (form.first_token_timeout_exception_enabled && !(channel.first_token_timeout_exception_enabled ?? false))) {
+        request.first_token_timeout_exception_seconds = form.first_token_timeout_exception_seconds;
     }
     const rpm = Math.max(0, Number(form.rpm_limit || 0));
     if (rpm !== (channel.rpm_limit ?? 0)) request.rpm_limit = rpm;

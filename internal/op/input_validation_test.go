@@ -129,6 +129,46 @@ func TestChannelAdvancedRewriteRulesPersistAcrossCreateAndPatch(t *testing.T) {
 	}
 }
 
+func TestChannelFirstTokenTimeoutExceptionPersistsAcrossCreateAndPatch(t *testing.T) {
+	initTestDB(t)
+	channel := validOperationChannel("slow-trusted-channel")
+	channel.FirstTokenTimeoutExceptionEnabled = true
+	channel.FirstTokenTimeoutExceptionSeconds = 200
+	if err := ChannelCreate(&channel, context.Background()); err != nil {
+		t.Fatalf("ChannelCreate() error = %v", err)
+	}
+
+	persisted, err := ChannelGet(channel.ID, context.Background())
+	if err != nil {
+		t.Fatalf("ChannelGet() error = %v", err)
+	}
+	if !persisted.FirstTokenTimeoutExceptionEnabled || persisted.FirstTokenTimeoutExceptionSeconds != 200 {
+		t.Fatalf("created channel exception = enabled:%v seconds:%d, want true/200", persisted.FirstTokenTimeoutExceptionEnabled, persisted.FirstTokenTimeoutExceptionSeconds)
+	}
+
+	disabled := false
+	seconds := 300
+	updated, err := ChannelUpdate(&model.ChannelUpdateRequest{
+		ID:                                channel.ID,
+		FirstTokenTimeoutExceptionEnabled: &disabled,
+		FirstTokenTimeoutExceptionSeconds: &seconds,
+	}, context.Background())
+	if err != nil {
+		t.Fatalf("ChannelUpdate() error = %v", err)
+	}
+	if updated.FirstTokenTimeoutExceptionEnabled || updated.FirstTokenTimeoutExceptionSeconds != 300 {
+		t.Fatalf("updated channel exception = enabled:%v seconds:%d, want false/300", updated.FirstTokenTimeoutExceptionEnabled, updated.FirstTokenTimeoutExceptionSeconds)
+	}
+
+	var stored model.Channel
+	if err := db.GetDB().First(&stored, channel.ID).Error; err != nil {
+		t.Fatalf("load persisted channel: %v", err)
+	}
+	if stored.FirstTokenTimeoutExceptionEnabled || stored.FirstTokenTimeoutExceptionSeconds != 300 {
+		t.Fatalf("persisted channel exception = enabled:%v seconds:%d, want false/300", stored.FirstTokenTimeoutExceptionEnabled, stored.FirstTokenTimeoutExceptionSeconds)
+	}
+}
+
 func TestGroupUpdateMissingItemRollsBackPatch(t *testing.T) {
 	initTestDB(t)
 	group := model.Group{Name: "before", Mode: model.GroupModeRoundRobin}

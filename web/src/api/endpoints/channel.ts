@@ -98,6 +98,8 @@ export type CreateChannelRequest = {
     user_agent?: string;
     policy_profile?: ChannelPolicyProfile;
     self_healing_enabled?: boolean;
+    first_token_timeout_exception_enabled?: boolean;
+    first_token_timeout_exception_seconds?: number;
 };
 
 /**
@@ -126,6 +128,8 @@ export type UpdateChannelRequest = {
     user_agent?: string;
     policy_profile?: ChannelPolicyProfile;
     self_healing_enabled?: boolean;
+    first_token_timeout_exception_enabled?: boolean;
+    first_token_timeout_exception_seconds?: number;
     // keys diff
     keys_to_add?: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
     keys_to_update?: Array<{ id: number; enabled?: boolean; channel_key?: string; remark?: string }>;

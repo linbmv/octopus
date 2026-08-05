@@ -77,6 +77,36 @@ func TestFirstTokenTimeoutManualSourceTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestChannelFirstTokenTimeoutExceptionOverridesNormalPolicy(t *testing.T) {
+	ra := newTestAttempt(&dbmodel.Channel{
+		ID:                                1,
+		FirstTokenTimeoutExceptionEnabled: true,
+		FirstTokenTimeoutExceptionSeconds: 200,
+	})
+	ra.group = dbmodel.Group{FirstTokenTimeOut: 30}
+
+	got := ra.firstTokenTimeout()
+	if got.Source != firstTokenTimeoutChannelException {
+		t.Fatalf("timeout source = %v, want channel exception", got.Source)
+	}
+	if got.Duration != 200*time.Second {
+		t.Fatalf("timeout duration = %v, want 200s", got.Duration)
+	}
+}
+
+func TestOrdinaryChannelKeepsNormalCeilingWhenRequestHasExceptionBudget(t *testing.T) {
+	ra := newTestAttempt(&dbmodel.Channel{ID: 1})
+	ra.relayRun.initialResponseTimeoutSeconds = 200
+	stream := true
+	ra.internalRequest = &llm.Request{Stream: &stream}
+	ra.streamFirstEventBudget = 200 * time.Second
+
+	got, _ := ra.firstTokenTimeoutPolicies()
+	if got.Duration > 120*time.Second {
+		t.Fatalf("ordinary channel timeout = %v, must remain at or below 120s", got.Duration)
+	}
+}
+
 func TestFirstTokenTimeoutPriorityManualThenAdaptiveThenGlobal(t *testing.T) {
 	tests := []struct {
 		name             string

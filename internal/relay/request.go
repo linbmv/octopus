@@ -41,14 +41,10 @@ func Handler(inboundType llm.APIFormat) gin.HandlerFunc {
 		if err != nil {
 			return
 		}
-		relayConfig := conf.Current().Relay
 		requestCtx, cancel := newRelayRequestContext(
 			c.Request.Context(),
 			run.internalRequest,
-			boundedInitialResponseTimeoutSeconds(
-				relayConfig.NonStreamTimeoutSeconds,
-				relayConfig.InitialResponseTimeoutSeconds,
-			),
+			run.initialResponseTimeoutSeconds,
 		)
 		defer cancel()
 		ctx, span := tracing.Tracer().Start(requestCtx, "relay.request")
@@ -129,15 +125,72 @@ func newRelayRun(c *gin.Context, inboundType llm.APIFormat, inAdapter transforme
 		selectedBaseURLs:    selectedBaseURLs,
 		sessionID:           sessionID,
 		maxUpstreamAttempts: relayConfig.MaxUpstreamAttempts,
-		streamFirstEventBudget: time.Duration(boundedInitialResponseTimeoutSeconds(
+		initialResponseTimeoutSeconds: initialResponseBudgetSeconds(
+			relayConfig.NonStreamTimeoutSeconds,
+			relayConfig.InitialResponseTimeoutSeconds,
+			group,
+			c.Request.Context(),
+		),
+		streamFirstEventBudget: time.Duration(initialResponseBudgetSeconds(
 			relayConfig.StreamFirstEventBudgetSeconds,
 			relayConfig.InitialResponseTimeoutSeconds,
+			group,
+			c.Request.Context(),
 		)) * time.Second,
 		routingSnapshot: routingSnapshot,
 		failoverState:   newRequestFailoverState(),
 	}
 	run.attachIteratorTimeline(iter)
 	return run, nil
+}
+
+// initialResponseBudgetSeconds keeps the process-wide request deadline at the
+// normal 120-second ceiling unless an enabled candidate explicitly asks for a
+// channel exception. The per-attempt guards still enforce the normal ceiling
+// for every channel that did not opt in.
+func initialResponseBudgetSeconds(configuredSeconds, ceilingSeconds int, group dbmodel.Group, ctx context.Context) int {
+	configured := boundedInitialResponseTimeoutSeconds(configuredSeconds, ceilingSeconds)
+	if exception := maxChannelInitialResponseTimeoutSeconds(group, ctx); exception > configured {
+		return exception
+	}
+	return configured
+}
+
+func maxChannelInitialResponseTimeoutSeconds(group dbmodel.Group, ctx context.Context) int {
+	maxSeconds := hardMaxInitialResponseTimeoutSeconds
+	visited := make(map[int]struct{})
+	var walk func(dbmodel.Group)
+	walk = func(current dbmodel.Group) {
+		for _, item := range current.Items {
+			if item.Type == dbmodel.GroupItemTypeGroup {
+				if item.TargetGroupID <= 0 {
+					continue
+				}
+				if _, seen := visited[item.TargetGroupID]; seen {
+					continue
+				}
+				visited[item.TargetGroupID] = struct{}{}
+				nested, err := op.GroupGetEnabledTreeByID(item.TargetGroupID, ctx)
+				if err == nil && nested != nil {
+					walk(*nested)
+				}
+				delete(visited, item.TargetGroupID)
+				continue
+			}
+			if item.ChannelID <= 0 {
+				continue
+			}
+			channel, err := op.ChannelGet(item.ChannelID, ctx)
+			if err != nil {
+				continue
+			}
+			if seconds := channelFirstTokenTimeoutExceptionSeconds(channel); seconds > maxSeconds {
+				maxSeconds = seconds
+			}
+		}
+	}
+	walk(group)
+	return maxSeconds
 }
 
 func newRelayIterator(group dbmodel.Group, apiKeyID int, request *llm.Request, ctx context.Context) *balancer.Iterator {

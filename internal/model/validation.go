@@ -35,12 +35,17 @@ const (
 	MaxModelListBytes        = 64 << 10
 	MaxGroupTimeoutSeconds   = 24 * 60 * 60
 	MaxSessionKeepSeconds    = 30 * 24 * 60 * 60
-	MaxGroupItemPriority     = 1_000_000
-	MaxGroupItemWeight       = 1_000_000
-	MaxAPIKeyCost            = 1_000_000_000_000
-	MaxLLMPrice              = 1_000_000_000
-	MaxUnixTimestamp         = int64(253402300799) // 9999-12-31T23:59:59Z
-	maxSupportedModelsPerKey = 256
+	// HardMaxInitialResponseTimeoutSeconds is the default non-disableable
+	// initial-response ceiling. A channel may exceed it only through the
+	// explicit, validated exception fields on Channel.
+	HardMaxInitialResponseTimeoutSeconds        = 120
+	MaxChannelFirstTokenTimeoutExceptionSeconds = 600
+	MaxGroupItemPriority                        = 1_000_000
+	MaxGroupItemWeight                          = 1_000_000
+	MaxAPIKeyCost                               = 1_000_000_000_000
+	MaxLLMPrice                                 = 1_000_000_000
+	MaxUnixTimestamp                            = int64(253402300799) // 9999-12-31T23:59:59Z
+	maxSupportedModelsPerKey                    = 256
 )
 
 var supportedChannelTypes = map[llm.APIFormat]struct{}{
@@ -98,6 +103,9 @@ func ValidateChannel(channel *Channel) error {
 	if channel.ConfigVersion <= 0 {
 		channel.ConfigVersion = 1
 	}
+	if err := validateChannelFirstTokenTimeoutException(channel.FirstTokenTimeoutExceptionEnabled, channel.FirstTokenTimeoutExceptionSeconds); err != nil {
+		return err
+	}
 	if !channel.PolicyProfile.Valid() {
 		return fmt.Errorf("invalid channel policy_profile %q", channel.PolicyProfile)
 	}
@@ -123,6 +131,20 @@ func ValidateChannelUpdate(req *ChannelUpdateRequest) error {
 	}
 	if req.PolicyProfile != nil && !req.PolicyProfile.Valid() {
 		return fmt.Errorf("invalid channel policy_profile %q", *req.PolicyProfile)
+	}
+	if req.FirstTokenTimeoutExceptionEnabled != nil && *req.FirstTokenTimeoutExceptionEnabled {
+		if req.FirstTokenTimeoutExceptionSeconds == nil || *req.FirstTokenTimeoutExceptionSeconds <= HardMaxInitialResponseTimeoutSeconds {
+			return fmt.Errorf("channel first-token timeout exception must be greater than %d seconds when enabled", HardMaxInitialResponseTimeoutSeconds)
+		}
+	}
+	if req.FirstTokenTimeoutExceptionSeconds != nil {
+		seconds := *req.FirstTokenTimeoutExceptionSeconds
+		if seconds < 0 || seconds > MaxChannelFirstTokenTimeoutExceptionSeconds {
+			return fmt.Errorf("channel first-token timeout exception must be between 0 and %d seconds", MaxChannelFirstTokenTimeoutExceptionSeconds)
+		}
+		if seconds != 0 && seconds <= HardMaxInitialResponseTimeoutSeconds {
+			return fmt.Errorf("channel first-token timeout exception must be 0 or greater than %d seconds", HardMaxInitialResponseTimeoutSeconds)
+		}
 	}
 	if req.BaseUrls != nil {
 		if err := validateBaseURLs(*req.BaseUrls); err != nil {
@@ -182,6 +204,19 @@ func ValidateChannelUpdate(req *ChannelUpdateRequest) error {
 			return fmt.Errorf("channel key %d appears in both %s and delete operations", id, previous)
 		}
 		changedIDs[id] = "delete"
+	}
+	return nil
+}
+
+func validateChannelFirstTokenTimeoutException(enabled bool, seconds int) error {
+	if seconds < 0 || seconds > MaxChannelFirstTokenTimeoutExceptionSeconds {
+		return fmt.Errorf("channel first-token timeout exception must be between 0 and %d seconds", MaxChannelFirstTokenTimeoutExceptionSeconds)
+	}
+	if seconds != 0 && seconds <= HardMaxInitialResponseTimeoutSeconds {
+		return fmt.Errorf("channel first-token timeout exception must be 0 or greater than %d seconds", HardMaxInitialResponseTimeoutSeconds)
+	}
+	if enabled && seconds == 0 {
+		return fmt.Errorf("channel first-token timeout exception must be greater than %d seconds when enabled", HardMaxInitialResponseTimeoutSeconds)
 	}
 	return nil
 }

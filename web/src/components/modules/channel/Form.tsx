@@ -50,6 +50,8 @@ export interface ChannelFormData {
     user_agent: string;
     policy_profile: ChannelPolicyProfile;
     self_healing_enabled: boolean;
+    first_token_timeout_exception_enabled: boolean;
+    first_token_timeout_exception_seconds: number;
 }
 
 export interface ChannelFormProps {

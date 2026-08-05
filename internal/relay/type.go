@@ -13,28 +13,29 @@ import (
 
 // relayRun 保存一次客户端请求在负载均衡循环中共享的状态。
 type relayRun struct {
-	c                      *gin.Context
-	inAdapter              transformer.Inbound
-	internalRequest        *llm.Request
-	metrics                *RelayMetrics
-	iter                   *balancer.Iterator
-	iterStack              []*relayIteratorFrame
-	iterHistory            []*balancer.Iterator
-	timeline               []dbmodel.ChannelAttempt
-	group                  dbmodel.Group
-	selectedBaseURLs       map[int]string
-	sessionID              string
-	upstreamAttempts       int
-	maxUpstreamAttempts    int
-	streamFirstEventSpent  time.Duration
-	streamFirstEventBudget time.Duration
-	routingSnapshot        routingstate.Snapshot
-	routingRefreshes       int
-	failoverState          *requestFailoverState
-	deferredSlowAttempts   []deferredSlowAttempt
-	resolveGroupItemFunc   func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error)
-	runAttemptFunc         func(attempt *relayAttempt) (bool, error)
-	reloadRoutingFunc      func() error
+	c                             *gin.Context
+	inAdapter                     transformer.Inbound
+	internalRequest               *llm.Request
+	metrics                       *RelayMetrics
+	iter                          *balancer.Iterator
+	iterStack                     []*relayIteratorFrame
+	iterHistory                   []*balancer.Iterator
+	timeline                      []dbmodel.ChannelAttempt
+	group                         dbmodel.Group
+	selectedBaseURLs              map[int]string
+	sessionID                     string
+	upstreamAttempts              int
+	maxUpstreamAttempts           int
+	initialResponseTimeoutSeconds int
+	streamFirstEventSpent         time.Duration
+	streamFirstEventBudget        time.Duration
+	routingSnapshot               routingstate.Snapshot
+	routingRefreshes              int
+	failoverState                 *requestFailoverState
+	deferredSlowAttempts          []deferredSlowAttempt
+	resolveGroupItemFunc          func(item dbmodel.GroupItem, sticky bool, stickyKeyID int) (*relayAttempt, error)
+	runAttemptFunc                func(attempt *relayAttempt) (bool, error)
+	reloadRoutingFunc             func() error
 }
 
 type relayIteratorFrame struct {

@@ -437,7 +437,10 @@ func (ra *relayAttempt) switchToNextBaseURL() bool {
 			continue
 		}
 		slowKey := newSlowRecoveryKey(ra.channel, ra.usedKey, ra.internalRequest.Model, nextBaseURL)
-		allowed, slowLease, remaining := globalSlowRecovery.acquire(slowKey)
+		allowed, slowLease, remaining := globalSlowRecovery.acquireForBudget(
+			slowKey,
+			channelInitialResponseTimeoutBudget(ra.channel),
+		)
 		if !allowed {
 			if ra.iter != nil {
 				ra.iter.Skip(ra.channel.ID, ra.usedKey.ID, ra.channel.Name, slowRecoveryBackoffMessage(remaining))
@@ -484,7 +487,10 @@ func (ra *relayAttempt) switchToNextKey() bool {
 			continue
 		}
 		slowKey := newSlowRecoveryKey(ra.channel, nextKey, ra.internalRequest.Model, ra.baseURL)
-		allowed, slowLease, remaining := globalSlowRecovery.acquire(slowKey)
+		allowed, slowLease, remaining := globalSlowRecovery.acquireForBudget(
+			slowKey,
+			channelInitialResponseTimeoutBudget(ra.channel),
+		)
 		if !allowed {
 			balancer.RecordProbeAbort(ra.channel.ID, nextKey.ID, ra.internalRequest.Model)
 			if ra.iter != nil {
@@ -580,6 +586,24 @@ func (ra *relayAttempt) forwardWithAdapter(
 	wantStream := ra.internalRequest.Stream != nil && *ra.internalRequest.Stream
 	firstTokenTimeout, shadowFirstTokenTimeout := ra.firstTokenTimeoutPolicies()
 	if wantStream {
+		// Expanding the request budget for one opted-in channel must not leak
+		// into ordinary candidates. Their effective first-event ceiling remains
+		// the normal configured value, itself capped by the 120-second safety
+		// boundary.
+		if !channelHasInitialResponseTimeoutException(ra.channel) {
+			relayConf := conf.Current().Relay
+			normalSeconds := boundedInitialResponseTimeoutSeconds(
+				relayConf.StreamFirstEventTimeoutSeconds,
+				relayConf.InitialResponseTimeoutSeconds,
+			)
+			normalDuration := time.Duration(normalSeconds) * time.Second
+			if firstTokenTimeout.Duration <= 0 || firstTokenTimeout.Duration > normalDuration {
+				firstTokenTimeout = firstTokenTimeoutConfig{
+					Duration: normalDuration,
+					Source:   firstTokenTimeoutGlobal,
+				}
+			}
+		}
 		if remaining := ra.remainingStreamFirstEventBudget(); remaining > 0 {
 			if firstTokenTimeout.Duration <= 0 {
 				firstTokenTimeout = firstTokenTimeoutConfig{Duration: remaining, Source: firstTokenTimeoutBudget}

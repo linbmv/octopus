@@ -233,6 +233,7 @@ func TestSlowRecoveryTimeoutClassificationKeepsManualAndAdaptivePoliciesSeparate
 		firstTokenTimeoutColdStart,
 		firstTokenTimeoutNonStreamAttempt,
 		firstTokenTimeoutBudget,
+		firstTokenTimeoutChannelException,
 	} {
 		err := firstTokenTimeoutConfig{Duration: 30 * time.Second, Source: source}.
 			Error(firstTokenTimeoutPhaseWaitingHeaders)
@@ -257,6 +258,25 @@ func TestSlowRecoveryTimeoutClassificationKeepsManualAndAdaptivePoliciesSeparate
 		Error(firstTokenTimeoutPhaseWaitingHeaders)
 	if got := slowRecoveryTimeoutBudget(oversized); got != 120*time.Second {
 		t.Fatalf("oversized recovery budget = %v, want 120s", got)
+	}
+	exception := firstTokenTimeoutConfig{Duration: 200 * time.Second, Source: firstTokenTimeoutChannelException}.
+		Error(firstTokenTimeoutPhaseWaitingHeaders)
+	if got := slowRecoveryTimeoutBudget(exception); got != 200*time.Second {
+		t.Fatalf("channel exception recovery budget = %v, want 200s", got)
+	}
+}
+
+func TestSlowRecoveryExceptionLeaseUsesChannelBudget(t *testing.T) {
+	tracker := newSlowRecoveryTracker()
+	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+	key := slowRecoveryKey{ChannelID: 1, ChannelKeyID: 2, Model: "m", ScopeFingerprint: "scope"}
+	tracker.recordTimeout(key, 30*time.Second)
+	if allowed, lease, _ := tracker.acquireForBudget(key, 200*time.Second); !allowed || lease == 0 {
+		t.Fatal("exception candidate did not receive a recovery lease")
+	}
+	if got := tracker.entries[key].LeaseUntil.Sub(now); got != 200*time.Second {
+		t.Fatalf("exception recovery lease = %v, want 200s", got)
 	}
 }
 

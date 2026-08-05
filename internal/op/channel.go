@@ -357,6 +357,8 @@ func applyChannelPatchTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {
 	helper.ApplyField("user_agent", req.UserAgent)
 	helper.ApplyField("policy_profile", req.PolicyProfile)
 	helper.ApplyField("self_healing_enabled", req.SelfHealingEnabled)
+	helper.ApplyField("first_token_timeout_exception_enabled", req.FirstTokenTimeoutExceptionEnabled)
+	helper.ApplyField("first_token_timeout_exception_seconds", req.FirstTokenTimeoutExceptionSeconds)
 
 	if !helper.HasUpdates() {
 		return nil
@@ -387,7 +389,9 @@ func channelUpdateHasChanges(req *model.ChannelUpdateRequest) bool {
 		req.JSONRewriteRules != nil || req.ChannelProxy != nil || req.ParamOverride != nil ||
 		req.RawPassthrough != nil || req.RPMLimit != nil || req.MaxConcurrency != nil ||
 		req.MatchRegex != nil || req.UserAgent != nil || req.PolicyProfile != nil ||
-		req.SelfHealingEnabled != nil || len(req.KeysToAdd) > 0 || len(req.KeysToUpdate) > 0 || len(req.KeysToDelete) > 0
+		req.SelfHealingEnabled != nil || req.FirstTokenTimeoutExceptionEnabled != nil ||
+		req.FirstTokenTimeoutExceptionSeconds != nil || len(req.KeysToAdd) > 0 ||
+		len(req.KeysToUpdate) > 0 || len(req.KeysToDelete) > 0
 }
 
 // GORM serializers are not invoked for map-based Updates values. Encode JSON

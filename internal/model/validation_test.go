@@ -30,6 +30,61 @@ func TestValidateChannelNormalizesAndAcceptsValidInput(t *testing.T) {
 	}
 }
 
+func TestValidateChannelFirstTokenTimeoutExceptionRequiresExplicitOptIn(t *testing.T) {
+	channel := validChannelForValidation()
+	channel.FirstTokenTimeoutExceptionEnabled = true
+	channel.FirstTokenTimeoutExceptionSeconds = 200
+	if err := ValidateChannel(&channel); err != nil {
+		t.Fatalf("ValidateChannel() rejected channel exception: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Channel)
+	}{
+		{name: "enabled at hard ceiling", mutate: func(c *Channel) {
+			c.FirstTokenTimeoutExceptionEnabled = true
+			c.FirstTokenTimeoutExceptionSeconds = HardMaxInitialResponseTimeoutSeconds
+		}},
+		{name: "enabled without seconds", mutate: func(c *Channel) { c.FirstTokenTimeoutExceptionEnabled = true }},
+		{name: "above maximum", mutate: func(c *Channel) {
+			c.FirstTokenTimeoutExceptionSeconds = MaxChannelFirstTokenTimeoutExceptionSeconds + 1
+		}},
+		{name: "negative seconds", mutate: func(c *Channel) { c.FirstTokenTimeoutExceptionSeconds = -1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := validChannelForValidation()
+			test.mutate(&invalid)
+			if err := ValidateChannel(&invalid); err == nil {
+				t.Fatal("ValidateChannel() accepted invalid channel exception")
+			}
+		})
+	}
+}
+
+func TestValidateChannelUpdateFirstTokenTimeoutException(t *testing.T) {
+	enabled := true
+	seconds := 200
+	if err := ValidateChannelUpdate(&ChannelUpdateRequest{
+		ID:                                1,
+		FirstTokenTimeoutExceptionEnabled: &enabled,
+		FirstTokenTimeoutExceptionSeconds: &seconds,
+	}); err != nil {
+		t.Fatalf("ValidateChannelUpdate() rejected valid channel exception: %v", err)
+	}
+	if err := ValidateChannelUpdate(&ChannelUpdateRequest{ID: 1, FirstTokenTimeoutExceptionEnabled: &enabled}); err == nil {
+		t.Fatal("ValidateChannelUpdate() accepted enabled exception without seconds")
+	}
+	tooShort := HardMaxInitialResponseTimeoutSeconds
+	if err := ValidateChannelUpdate(&ChannelUpdateRequest{
+		ID:                                1,
+		FirstTokenTimeoutExceptionEnabled: &enabled,
+		FirstTokenTimeoutExceptionSeconds: &tooShort,
+	}); err == nil {
+		t.Fatal("ValidateChannelUpdate() accepted exception at the hard ceiling")
+	}
+}
+
 func TestValidateChannelAcceptsOfficialCodexOAuthCredential(t *testing.T) {
 	channel := Channel{
 		Name:     "codex-oauth",

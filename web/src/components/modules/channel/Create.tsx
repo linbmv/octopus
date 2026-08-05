@@ -36,6 +36,8 @@ export function CreateDialogContent() {
         user_agent: '',
         policy_profile: ChannelPolicyProfile.Standard,
         self_healing_enabled: false,
+        first_token_timeout_exception_enabled: false,
+        first_token_timeout_exception_seconds: 0,
     });
     const t = useTranslations('channel.create');
 
@@ -78,6 +80,8 @@ export function CreateDialogContent() {
                 user_agent: formData.user_agent.trim(),
                 policy_profile: formData.policy_profile,
                 self_healing_enabled: formData.self_healing_enabled,
+                first_token_timeout_exception_enabled: formData.first_token_timeout_exception_enabled,
+                first_token_timeout_exception_seconds: formData.first_token_timeout_exception_seconds,
             },
             {
                 onSuccess: () => {
@@ -104,6 +108,8 @@ export function CreateDialogContent() {
                         user_agent: '',
                         policy_profile: ChannelPolicyProfile.Standard,
                         self_healing_enabled: false,
+                        first_token_timeout_exception_enabled: false,
+                        first_token_timeout_exception_seconds: 0,
                     });
                     setIsOpen(false);
                 }
