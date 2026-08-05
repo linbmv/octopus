@@ -96,7 +96,7 @@ func TestChannelFirstTokenTimeoutExceptionOverridesNormalPolicy(t *testing.T) {
 
 func TestOrdinaryChannelKeepsNormalCeilingWhenRequestHasExceptionBudget(t *testing.T) {
 	ra := newTestAttempt(&dbmodel.Channel{ID: 1})
-	ra.relayRun.initialResponseTimeoutSeconds = 200
+	ra.initialResponseTimeoutSeconds = 200
 	stream := true
 	ra.internalRequest = &llm.Request{Stream: &stream}
 	ra.streamFirstEventBudget = 200 * time.Second
