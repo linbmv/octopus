@@ -484,6 +484,7 @@ export type CodexQuota = {
     channel_name?: string;
     channel_key_id: number;
     key_remark?: string;
+    account_hint?: string;
     plan_type?: string;
     rate_limit?: {
         allowed: boolean;
@@ -530,9 +531,19 @@ export function useChannelQuota(channelId: number, enabled: boolean = true) {
 export function useRefreshChannelQuota(channelId: number) {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: async () => apiClient.post<CodexQuota[]>(`/api/v1/channel/${channelId}/quota/refresh`, {}),
-        onSuccess: (data) => {
-            queryClient.setQueryData(['channels', channelId, 'quota'], data);
+        mutationFn: async (channelKeyId?: number) => apiClient.post<CodexQuota[]>(`/api/v1/channel/${channelId}/quota/refresh`, channelKeyId ? { channel_key_id: channelKeyId } : {}),
+        onSuccess: (data, channelKeyId) => {
+            queryClient.setQueryData<CodexQuota[]>(['channels', channelId, 'quota'], (previous) => {
+                if (!previous || !channelKeyId) return data;
+                const refreshedKeys = new Set(data.map((quota) => quota.channel_key_id));
+                return [...previous.filter((quota) => !refreshedKeys.has(quota.channel_key_id)), ...data];
+            });
+            queryClient.setQueryData<CodexQuota[]>(['channels', 'codex-quota', 'global'], (previous) => {
+                if (!previous) return previous;
+                if (!channelKeyId) return [...previous.filter((quota) => quota.channel_id !== channelId), ...data];
+                const refreshedKeys = new Set(data.map((quota) => quota.channel_key_id));
+                return [...previous.filter((quota) => quota.channel_id !== channelId || !refreshedKeys.has(quota.channel_key_id)), ...data];
+            });
         },
         onError: (error) => {
             logger.error('Codex quota refresh failed:', error);

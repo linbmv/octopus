@@ -4,9 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/looplj/axonhub/llm/oauth"
 )
 
@@ -50,5 +52,39 @@ func TestFetchCodexQuotaDoesNotExposeUpstreamBodyOnFailure(t *testing.T) {
 	_, _, _, _, _, err := fetchCodexQuota(context.Background(), server.Client(), &oauth.OAuthCredentials{AccessToken: "access-token"}, "", server.URL)
 	if err == nil || err.Error() != "codex quota request failed with HTTP status 401" {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCredentialAccountHintIsStableAndNonReversible(t *testing.T) {
+	first := credentialAccountHint("account-one", 7)
+	if first == "account-one" || !strings.HasPrefix(first, "acct-") {
+		t.Fatalf("account hint = %q, want an acct- fingerprint", first)
+	}
+	if again := credentialAccountHint("account-one", 99); again != first {
+		t.Fatalf("same account produced different hints: %q and %q", first, again)
+	}
+	if other := credentialAccountHint("account-two", 7); other == first {
+		t.Fatalf("different accounts produced the same hint: %q", first)
+	}
+	if fallback := credentialAccountHint("", 7); fallback != "key-7" {
+		t.Fatalf("empty account hint = %q, want key-7", fallback)
+	}
+}
+
+func TestQueryCodexQuotaForKeySelectsOnlyRequestedEnabledKey(t *testing.T) {
+	channel := &dbmodel.Channel{
+		Type: dbmodel.ChannelTypeOpenAICodex,
+		Keys: []dbmodel.ChannelKey{
+			{ID: 11, Enabled: true, ChannelKey: `{"type":"codex","access_token":"first"}`},
+			{ID: 12, Enabled: true, ChannelKey: `{"type":"codex","access_token":"second"}`},
+			{ID: 13, Enabled: false, ChannelKey: `{"type":"codex","access_token":"disabled"}`},
+		},
+	}
+	quotas := QueryCodexQuotaForKey(context.Background(), channel, 12, true)
+	if len(quotas) != 1 || quotas[0].ChannelKeyID != 12 {
+		t.Fatalf("selected quotas = %#v, want only key 12", quotas)
+	}
+	if disabled := QueryCodexQuotaForKey(context.Background(), channel, 13, true); disabled != nil {
+		t.Fatalf("disabled key returned quotas: %#v", disabled)
 	}
 }

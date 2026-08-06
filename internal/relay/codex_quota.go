@@ -2,11 +2,14 @@ package relay
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/bestruirui/octopus/internal/helper"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/looplj/axonhub/llm/oauth"
+	"github.com/looplj/axonhub/llm/transformer/openai/codex"
 )
 
 const (
@@ -63,6 +67,7 @@ type CodexQuota struct {
 	ChannelName          string                          `json:"channel_name,omitempty"`
 	ChannelKeyID         int                             `json:"channel_key_id"`
 	KeyRemark            string                          `json:"key_remark,omitempty"`
+	AccountHint          string                          `json:"account_hint,omitempty"`
 	PlanType             string                          `json:"plan_type,omitempty"`
 	RateLimit            *CodexQuotaRateLimit            `json:"rate_limit,omitempty"`
 	CodeReviewRateLimit  *CodexQuotaRateLimit            `json:"code_review_rate_limit,omitempty"`
@@ -130,8 +135,23 @@ func QueryCodexQuota(ctx context.Context, channel *dbmodel.Channel, force bool) 
 	return results
 }
 
+// QueryCodexQuotaForKey refreshes one enabled Codex OAuth key. The channel
+// endpoint uses this for the per-card refresh action so another credential in
+// the same channel is not needlessly queried or replaced in the UI cache.
+func QueryCodexQuotaForKey(ctx context.Context, channel *dbmodel.Channel, keyID int, force bool) []CodexQuota {
+	if channel == nil || channel.Type != dbmodel.ChannelTypeOpenAICodex || keyID <= 0 {
+		return nil
+	}
+	for _, key := range channel.Keys {
+		if key.ID == keyID && key.Enabled && strings.TrimSpace(key.ChannelKey) != "" {
+			return []CodexQuota{queryCodexQuotaForKey(ctx, channel, key, force)}
+		}
+	}
+	return nil
+}
+
 func queryCodexQuotaForKey(ctx context.Context, channel *dbmodel.Channel, key dbmodel.ChannelKey, force bool) CodexQuota {
-	result := CodexQuota{ChannelID: channel.ID, ChannelName: channel.Name, ChannelKeyID: key.ID, KeyRemark: key.Remark}
+	result := CodexQuota{ChannelID: channel.ID, ChannelName: channel.Name, ChannelKeyID: key.ID, KeyRemark: key.Remark, AccountHint: credentialAccountHint("", key.ID)}
 	signature := codexProviderSignature(channel, key.ChannelKey)
 	if !force {
 		if cached, ok := getCodexQuota(key.ID, signature, time.Now()); ok {
@@ -144,6 +164,9 @@ func queryCodexQuotaForKey(ctx context.Context, channel *dbmodel.Channel, key db
 		var credentials *oauth.OAuthCredentials
 		credentials, err = provider.Get(ctx)
 		if err == nil {
+			// The account claim in the live access token is authoritative when it
+			// is present; imported document metadata can be stale after rotation.
+			result.AccountHint = credentialAccountHint(codexFirstNonEmpty(codex.ExtractChatGPTAccountIDFromJWT(credentials.AccessToken), accountID), key.ID)
 			client, clientErr := helper.ChannelHttpClient(channel)
 			if clientErr != nil {
 				err = clientErr
@@ -241,4 +264,19 @@ func publicCodexQuotaError(err error) string {
 		return err.Error()
 	}
 	return "Codex quota refresh failed"
+}
+
+// credentialAccountHint is a stable, non-reversible identifier. It lets an
+// operator see that two channels use the same upstream account without
+// returning the account ID, email, access token, or raw OAuth document.
+func credentialAccountHint(accountID string, keyID int) string {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		if keyID > 0 {
+			return "key-" + strconv.Itoa(keyID)
+		}
+		return "credential"
+	}
+	digest := sha256.Sum256([]byte(accountID))
+	return "acct-" + hex.EncodeToString(digest[:4])
 }

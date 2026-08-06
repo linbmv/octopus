@@ -75,6 +75,10 @@ func refreshGlobalChannelQuota(c *gin.Context) {
 	globalChannelQuota(c, true)
 }
 
+type channelQuotaRefreshRequest struct {
+	ChannelKeyID int `json:"channel_key_id,omitempty"`
+}
+
 func channelQuota(c *gin.Context, force bool) {
 	channelID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || channelID <= 0 {
@@ -98,5 +102,38 @@ func getChannelQuota(c *gin.Context) {
 }
 
 func refreshChannelQuota(c *gin.Context) {
-	channelQuota(c, true)
+	var request channelQuotaRefreshRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	if request.ChannelKeyID <= 0 {
+		channelQuota(c, true)
+		return
+	}
+
+	channelID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || channelID <= 0 {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	channel, err := op.ChannelGet(channelID, c.Request.Context())
+	if err != nil {
+		resp.Error(c, http.StatusNotFound, "channel not found")
+		return
+	}
+	if channel.Type != model.ChannelTypeOpenAICodex {
+		resp.ErrorWithCode(c, http.StatusConflict, "CODEX_QUOTA_UNSUPPORTED", "channel is not a Codex OAuth channel")
+		return
+	}
+	key := channel.GetChannelKeyByID(request.ChannelKeyID)
+	if key.ID == 0 {
+		resp.Error(c, http.StatusNotFound, "channel key not found")
+		return
+	}
+	if !key.Enabled {
+		resp.ErrorWithCode(c, http.StatusConflict, "CODEX_QUOTA_DISABLED", "channel key is disabled")
+		return
+	}
+	resp.Success(c, relay.QueryCodexQuotaForKey(c.Request.Context(), channel, request.ChannelKeyID, true))
 }

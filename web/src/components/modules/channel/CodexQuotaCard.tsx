@@ -3,7 +3,7 @@
 import { Download, Info, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
-import { useUpdateChannel, type Channel, type ChannelKey, type CodexQuota, type CodexQuotaWindow } from '@/api/endpoints/channel';
+import { useRefreshChannelQuota, useUpdateChannel, type Channel, type ChannelKey, type CodexQuota, type CodexQuotaWindow } from '@/api/endpoints/channel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -23,8 +23,10 @@ export function CodexQuotaCard({
 }) {
     const t = useTranslations('codexQuota');
     const updateChannel = useUpdateChannel();
+    const refreshQuota = useRefreshChannelQuota(channel.id);
     const [pending, setPending] = useState(false);
     const displayName = credentialFileName(channel, keyData);
+    const accountHint = quota?.account_hint || t('credentialFallback', { id: keyData.id });
     const rows = quota ? quotaWindowRows(quota, t) : [];
     const health = healthState(keyData.status_code, t);
     const resetCount = rows.filter((row) => row.window.reset_at > 0).length;
@@ -50,6 +52,10 @@ export function CodexQuotaCard({
                         </Badge>
                     </div>
                     <h3 className="mt-2 break-all text-lg font-bold leading-6 text-slate-700 dark:text-foreground" title={displayName}>{displayName}</h3>
+                    <div className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-slate-500 dark:text-muted-foreground">
+                        <span className="shrink-0">{t('account')}:</span>
+                        <code className="truncate rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 dark:bg-muted dark:text-muted-foreground" title={accountHint}>{accountHint}</code>
+                    </div>
                 </div>
             </header>
 
@@ -89,9 +95,14 @@ export function CodexQuotaCard({
             </section>
 
             <footer className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-4 py-2.5 dark:border-border dark:bg-muted/20">
-                <Button type="button" variant="ghost" className="h-7 rounded-md px-1.5 text-[11px] text-slate-600 hover:bg-white dark:text-muted-foreground dark:hover:bg-muted" aria-label={t('download')} title={t('download')} onClick={() => downloadCredential(channel, keyData)}>
-                    <Download className="mr-1.5 size-3.5" />{t('downloadShort')}
-                </Button>
+                <div className="flex items-center gap-1">
+                    <Button type="button" variant="ghost" className="h-7 rounded-md px-1.5 text-[11px] text-slate-600 hover:bg-white dark:text-muted-foreground dark:hover:bg-muted" aria-label={t('download')} title={t('download')} onClick={() => downloadCredential(channel, keyData)}>
+                        <Download className="mr-1.5 size-3.5" />{t('downloadShort')}
+                    </Button>
+                    <Button type="button" variant="ghost" className="h-7 rounded-md px-1.5 text-[11px] text-slate-600 hover:bg-white dark:text-muted-foreground dark:hover:bg-muted" disabled={!keyData.enabled || refreshQuota.isPending} aria-label={`${t('refreshSingle')}: ${displayName}`} title={t('refreshSingle')} onClick={() => refreshQuota.mutate(keyData.id)}>
+                        <RefreshCw className={cn('mr-1.5 size-3.5', refreshQuota.isPending && 'animate-spin')} />{refreshQuota.isPending ? t('refreshing') : t('refreshShort')}
+                    </Button>
+                </div>
                 <label className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-muted-foreground">
                     <span>{keyData.enabled ? t('enabled') : t('disabled')}</span>
                     {pending ? <RefreshCw className="size-4 animate-spin" /> : <Switch checked={keyData.enabled} disabled={pending || updateChannel.isPending} onCheckedChange={toggleKey} aria-label={t('toggleEnable')} />}

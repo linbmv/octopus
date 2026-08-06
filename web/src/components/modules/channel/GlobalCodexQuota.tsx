@@ -2,7 +2,7 @@
 
 import { BatteryMedium, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { ChannelType, useChannelList, useGlobalCodexQuota, useRefreshGlobalCodexQuota, useUpdateChannel, type Channel, type ChannelKey, type CodexQuota, type CodexQuotaWindow } from '@/api/endpoints/channel';
+import { ChannelType, useChannelList, useGlobalCodexQuota, useRefreshChannelQuota, useRefreshGlobalCodexQuota, useUpdateChannel, type Channel, type ChannelKey, type CodexQuota, type CodexQuotaWindow } from '@/api/endpoints/channel';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
@@ -54,8 +54,10 @@ export function GlobalCodexQuota() {
 function CodexQuotaListItem({ channel, keyData, quota }: { channel: Channel; keyData: ChannelKey; quota?: CodexQuota }) {
     const t = useTranslations('codexQuota');
     const updateChannel = useUpdateChannel();
+    const refreshQuota = useRefreshChannelQuota(channel.id);
     const remark = keyData.remark?.trim();
     const name = remark || `${channel.name} #${keyData.id}`;
+    const accountHint = quota?.account_hint || t('credentialFallback', { id: keyData.id });
     const windows = quotaWindowEntries(quota, t).slice(0, 2);
     const effectiveEnabled = channel.enabled && keyData.enabled;
 
@@ -72,8 +74,17 @@ function CodexQuotaListItem({ channel, keyData, quota }: { channel: Channel; key
                     <span className="shrink-0 text-rose-500 dark:text-rose-300">{t('failed')} {formatCount(channel.stats?.request_failed)}</span>
                     <span className="min-w-0 truncate text-muted-foreground">{t('plan')} <strong className="text-foreground">{quota?.plan_type || '—'}</strong></span>
                 </div>
+                <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[9px] text-muted-foreground">
+                    <span className="shrink-0">{t('account')}:</span>
+                    <code className="truncate rounded bg-muted px-1 font-mono text-[9px]" title={accountHint}>{accountHint}</code>
+                </div>
             </div>
-            <Switch className="shadow-none" checked={keyData.enabled} disabled={updateChannel.isPending} onCheckedChange={(enabled) => updateChannel.mutate({ id: channel.id, keys_to_update: [{ id: keyData.id, enabled }] })} aria-label={`${t('toggleEnable')}: ${name}`} />
+            <div className="flex shrink-0 items-center gap-1">
+                <Button type="button" size="icon-sm" variant="ghost" className="size-7 rounded-md text-muted-foreground shadow-none hover:bg-muted/60 hover:text-foreground" disabled={!keyData.enabled || refreshQuota.isPending} onClick={() => refreshQuota.mutate(keyData.id)} aria-label={`${t('refreshSingle')}: ${name}`} title={t('refreshSingle')}>
+                    <RefreshCw className={cn('size-3.5', refreshQuota.isPending && 'animate-spin')} />
+                </Button>
+                <Switch className="shadow-none" checked={keyData.enabled} disabled={updateChannel.isPending} onCheckedChange={(enabled) => updateChannel.mutate({ id: channel.id, keys_to_update: [{ id: keyData.id, enabled }] })} aria-label={`${t('toggleEnable')}: ${name}`} />
+            </div>
         </div>
 
         {windows.length ? <div className="mt-1 grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-2">{windows.map(({ window, label }) => {
