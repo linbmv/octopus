@@ -32,6 +32,16 @@ type StatsChannel struct {
 	StatsMetrics
 }
 
+// StatsChannelKey stores relay attempt and usage counters for one persisted
+// credential. Channel-level counters intentionally remain separate: a channel
+// can contain several credentials, so presenting StatsChannel on every key
+// would make each credential appear to have the same success/failure totals.
+type StatsChannelKey struct {
+	ChannelID    int `json:"channel_id" gorm:"index"`
+	ChannelKeyID int `json:"channel_key_id" gorm:"primaryKey"`
+	StatsMetrics
+}
+
 type StatsAPIKey struct {
 	APIKeyID int `json:"api_key_id" gorm:"primaryKey"`
 	StatsMetrics

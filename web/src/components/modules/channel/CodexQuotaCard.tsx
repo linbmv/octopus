@@ -65,8 +65,8 @@ export function CodexQuotaCard({
             </div>
 
             <div className="flex items-center gap-2 px-4 pb-3 pt-2 text-xs font-semibold">
-                <Badge variant="secondary" className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-600 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-300">{t('success')} {formatCount(channel.stats?.request_success)}</Badge>
-                <Badge variant="secondary" className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-500 hover:bg-rose-50 dark:bg-rose-950/30 dark:text-rose-300">{t('failed')} {formatCount(channel.stats?.request_failed)}</Badge>
+                <Badge variant="secondary" className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-600 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-300">{t('success')} {formatCount(keyData.stats?.request_success)}</Badge>
+                <Badge variant="secondary" className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-500 hover:bg-rose-50 dark:bg-rose-950/30 dark:text-rose-300">{t('failed')} {formatCount(keyData.stats?.request_failed)}</Badge>
             </div>
 
             <section className="border-t border-slate-100 px-4 py-3 dark:border-border">

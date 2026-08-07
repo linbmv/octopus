@@ -106,16 +106,17 @@ type JSONRewriteRule struct {
 }
 
 type ChannelKey struct {
-	ID               int     `json:"id" gorm:"primaryKey"`
-	UUID             string  `json:"uuid,omitempty" gorm:"size:36;uniqueIndex"`
-	ChannelID        int     `json:"channel_id"`
-	Enabled          bool    `json:"enabled" gorm:"default:true"`
-	ChannelKey       string  `json:"channel_key"`
-	StatusCode       int     `json:"status_code"`
-	LastUseTimeStamp int64   `json:"last_use_time_stamp"`
-	RetryAfterUntil  int64   `json:"retry_after_until"`
-	TotalCost        float64 `json:"total_cost"`
-	Remark           string  `json:"remark"`
+	ID               int              `json:"id" gorm:"primaryKey"`
+	UUID             string           `json:"uuid,omitempty" gorm:"size:36;uniqueIndex"`
+	ChannelID        int              `json:"channel_id"`
+	Enabled          bool             `json:"enabled" gorm:"default:true"`
+	ChannelKey       string           `json:"channel_key"`
+	StatusCode       int              `json:"status_code"`
+	LastUseTimeStamp int64            `json:"last_use_time_stamp"`
+	RetryAfterUntil  int64            `json:"retry_after_until"`
+	TotalCost        float64          `json:"total_cost"`
+	Remark           string           `json:"remark"`
+	Stats            *StatsChannelKey `json:"stats,omitempty" gorm:"-"`
 }
 
 // ChannelUpdateRequest 渠道更新请求 - 仅包含变更的数据

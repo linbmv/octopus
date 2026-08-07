@@ -209,11 +209,34 @@ func listChannel(c *gin.Context) {
 		respondInternalError(c, "list channels failed", err)
 		return
 	}
-	for i, channel := range channels {
-		stats := op.StatsChannelGet(channel.ID)
-		channels[i].Stats = &stats
+	for i := range channels {
+		attachChannelStats(&channels[i])
 	}
 	resp.Success(c, channels)
+}
+
+// attachChannelStats keeps aggregate channel totals and credential totals
+// separate in the list response. The key slice is copied because ChannelList
+// values are backed by the process cache and response-only fields must not
+// mutate that cache.
+func attachChannelStats(channel *model.Channel) {
+	if channel == nil {
+		return
+	}
+	channelStats := op.StatsChannelGet(channel.ID)
+	channel.Stats = &channelStats
+	if len(channel.Keys) == 0 {
+		return
+	}
+	keys := append([]model.ChannelKey(nil), channel.Keys...)
+	for i := range keys {
+		keyStats := op.StatsChannelKeyGet(keys[i].ID)
+		if keyStats.ChannelID == 0 {
+			keyStats.ChannelID = keys[i].ChannelID
+		}
+		keys[i].Stats = &keyStats
+	}
+	channel.Keys = keys
 }
 
 type channelCreateRequest struct {
@@ -311,8 +334,7 @@ func createChannel(c *gin.Context) {
 		"channel_name": channel.Name,
 		"type":         channel.Type,
 	})
-	stats := op.StatsChannelGet(channel.ID)
-	channel.Stats = &stats
+	attachChannelStats(&channel)
 	task.SubmitChannelMaintenance(channel)
 	resp.Success(c, channel)
 }
@@ -345,8 +367,7 @@ func updateChannel(c *gin.Context) {
 		"channel_id":   channel.ID,
 		"channel_name": channel.Name,
 	})
-	stats := op.StatsChannelGet(channel.ID)
-	channel.Stats = &stats
+	attachChannelStats(channel)
 	task.SubmitChannelMaintenance(*channel)
 	resp.Success(c, channel)
 }

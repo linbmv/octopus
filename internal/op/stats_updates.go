@@ -67,6 +67,38 @@ func (s *StatsService) ChannelUpdate(channelID int, metrics model.StatsMetrics) 
 	return nil
 }
 
+// StatsChannelKeyUpdate accumulates metrics for one credential. The channel ID
+// is kept alongside the key ID so backups and migration validation can verify
+// ownership instead of treating a credential counter as an unscoped integer.
+func StatsChannelKeyUpdate(channelID, channelKeyID int, metrics model.StatsMetrics) error {
+	return statsService.ChannelKeyUpdate(channelID, channelKeyID, metrics)
+}
+
+func (s *StatsService) ChannelKeyUpdate(channelID, channelKeyID int, metrics model.StatsMetrics) error {
+	if channelID <= 0 || channelKeyID <= 0 {
+		return fmt.Errorf("invalid channel key stats identity: channel_id=%d channel_key_id=%d", channelID, channelKeyID)
+	}
+
+	mu := statsLockFor(&s.channelKeyUpdateLocks, channelKeyID)
+	mu.Lock()
+	defer mu.Unlock()
+	if _, deleted := s.deletedChannelKeys.Get(channelKeyID); deleted {
+		return fmt.Errorf("%w: channel key was deleted while the request was in flight", ErrNotFound)
+	}
+
+	stats, ok := s.channelKeys.Get(channelKeyID)
+	if !ok {
+		stats = model.StatsChannelKey{ChannelID: channelID, ChannelKeyID: channelKeyID}
+	} else if stats.ChannelID != 0 && stats.ChannelID != channelID {
+		return fmt.Errorf("channel key stats ownership mismatch: key %d belongs to channel %d, got channel %d", channelKeyID, stats.ChannelID, channelID)
+	}
+	stats.ChannelID = channelID
+	stats.Add(metrics)
+	s.channelKeys.Set(channelKeyID, stats)
+	s.dirtyChannelKeys.mark(channelKeyID)
+	return nil
+}
+
 func StatsHourlyUpdate(metrics model.StatsMetrics) error {
 	return statsService.HourlyUpdate(metrics)
 }
@@ -130,4 +162,49 @@ func (s *StatsService) ChannelDel(id int) error {
 	s.channels.Del(id)
 	s.dirtyChannels.delete(id)
 	return db.GetDB().Delete(&model.StatsChannel{}, id).Error
+}
+
+func StatsChannelKeyDel(id int) error {
+	return statsService.ChannelKeyDel(id)
+}
+
+// StatsChannelKeyRestore clears a deletion tombstone when a credential ID is
+// loaded into a new cache generation (for example after an import or a key
+// creation on a database that reuses numeric IDs).
+func StatsChannelKeyRestore(id int) {
+	statsService.ChannelKeyRestore(id)
+}
+
+func (s *StatsService) ChannelKeyRestore(id int) {
+	if id <= 0 {
+		return
+	}
+	mu := statsLockFor(&s.channelKeyUpdateLocks, id)
+	mu.Lock()
+	s.deletedChannelKeys.Del(id)
+	mu.Unlock()
+}
+
+func (s *StatsService) ChannelKeyDel(id int) error {
+	if id <= 0 {
+		return nil
+	}
+	mu := statsLockFor(&s.channelKeyUpdateLocks, id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Mark the identity before removing its row. A relay attempt that started
+	// before deletion can finish after the transaction and must not recreate an
+	// orphan stats row for a credential that no longer exists.
+	s.deletedChannelKeys.Set(id, struct{}{})
+	s.channelKeys.Del(id)
+	s.dirtyChannelKeys.delete(id)
+	if err := db.GetDB().Where("channel_key_id = ?", id).Delete(&model.StatsChannelKey{}).Error; err != nil {
+		// Keep the in-memory tombstone only for a successful deletion. If the
+		// database operation failed, a later retry must still be able to persist
+		// the existing credential's stats.
+		s.deletedChannelKeys.Del(id)
+		return err
+	}
+	return nil
 }

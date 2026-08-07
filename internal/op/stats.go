@@ -91,6 +91,11 @@ type StatsService struct {
 	dirtyChannels      *dirtySet
 	channelUpdateLocks [256]sync.Mutex
 
+	channelKeys           cache.Cache[int, model.StatsChannelKey]
+	deletedChannelKeys    cache.Cache[int, struct{}]
+	dirtyChannelKeys      *dirtySet
+	channelKeyUpdateLocks [256]sync.Mutex
+
 	apiKeys           cache.Cache[int, model.StatsAPIKey]
 	dirtyAPIKeys      *dirtySet
 	apiKeyUpdateLocks [256]sync.Mutex
@@ -114,6 +119,9 @@ func NewStatsService() *StatsService {
 	return &StatsService{
 		channels:           cache.New[int, model.StatsChannel](16),
 		dirtyChannels:      newDirtySet(),
+		channelKeys:        cache.New[int, model.StatsChannelKey](16),
+		deletedChannelKeys: cache.New[int, struct{}](16),
+		dirtyChannelKeys:   newDirtySet(),
 		apiKeys:            cache.New[int, model.StatsAPIKey](16),
 		dirtyAPIKeys:       newDirtySet(),
 		pendingDaily:       make(map[string]model.StatsDaily),
@@ -149,6 +157,10 @@ func (s *StatsService) markDirtyAPIKey(id int) {
 
 func (s *StatsService) takeDirtyChannels() []int {
 	return dirtyIDs(s.dirtyChannels.snapshot())
+}
+
+func (s *StatsService) takeDirtyChannelKeys() []int {
+	return dirtyIDs(s.dirtyChannelKeys.snapshot())
 }
 
 func (s *StatsService) takeDirtyAPIKeys() []int {

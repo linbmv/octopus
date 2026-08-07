@@ -49,6 +49,40 @@ func (s *StatsService) ChannelGet(id int) model.StatsChannel {
 	return stats
 }
 
+func StatsChannelKeyGet(id int) model.StatsChannelKey {
+	return statsService.ChannelKeyGet(id)
+}
+
+func (s *StatsService) ChannelKeyGet(id int) model.StatsChannelKey {
+	if id <= 0 {
+		return model.StatsChannelKey{}
+	}
+	mu := statsLockFor(&s.channelKeyUpdateLocks, id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if stats, ok := s.channelKeys.Get(id); ok {
+		return stats
+	}
+	// A newly-created key has no persisted stats row until it is actually used.
+	// Returning an identity-only value keeps list reads side-effect free while
+	// still allowing the API to render zero counters immediately.
+	return model.StatsChannelKey{ChannelKeyID: id}
+}
+
+func StatsChannelKeyList() []model.StatsChannelKey {
+	return statsService.ChannelKeyList()
+}
+
+func (s *StatsService) ChannelKeyList() []model.StatsChannelKey {
+	rows := make([]model.StatsChannelKey, 0, s.channelKeys.Len())
+	for _, row := range s.channelKeys.GetAll() {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ChannelKeyID < rows[j].ChannelKeyID })
+	return rows
+}
+
 func StatsAPIKeyGet(id int) model.StatsAPIKey {
 	return statsService.APIKeyGet(id)
 }
@@ -182,6 +216,22 @@ func (s *StatsService) RefreshCache(ctx context.Context) error {
 	s.dirtyChannels.reset()
 	for _, v := range loadedChannels {
 		s.channels.Set(v.ChannelID, v)
+	}
+
+	var loadedChannelKeys []model.StatsChannelKey
+	result = dbConn.Find(&loadedChannelKeys)
+	if result.Error != nil {
+		return fmt.Errorf("failed to get channel key stats: %v", result.Error)
+	}
+
+	s.channelKeys.Clear()
+	// A full cache refresh follows restore/import and may legitimately reuse a
+	// numeric credential ID. Tombstones only protect the current in-memory
+	// generation, so discard them before loading the authoritative rows.
+	s.deletedChannelKeys.Clear()
+	s.dirtyChannelKeys.reset()
+	for _, v := range loadedChannelKeys {
+		s.channelKeys.Set(v.ChannelKeyID, v)
 	}
 
 	var loadedAPIKeys []model.StatsAPIKey

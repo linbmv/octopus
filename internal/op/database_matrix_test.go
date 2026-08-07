@@ -133,7 +133,7 @@ func TestDatabaseMatrix(t *testing.T) {
 	}
 	for _, table := range []string{
 		"channels", "channel_keys", "groups", "group_items", "llm_infos", "api_keys", "settings",
-		"stats_total", "stats_daily", "stats_hourly", "stats_channel", "stats_api_key", "relay_logs",
+		"stats_total", "stats_daily", "stats_hourly", "stats_channel", "stats_channel_key", "stats_api_key", "relay_logs",
 	} {
 		if result.RowsAffected[table] != 1 {
 			t.Errorf("restored rows for %s = %d, want 1", table, result.RowsAffected[table])
@@ -150,6 +150,10 @@ func TestDatabaseMatrix(t *testing.T) {
 	var restoredStats model.StatsTotal
 	if err := db.GetDB().First(&restoredStats, 1).Error; err != nil || restoredStats.ReasoningToken != 5 {
 		t.Fatalf("restored total reasoning tokens = %d, err=%v", restoredStats.ReasoningToken, err)
+	}
+	var restoredChannelKeyStats model.StatsChannelKey
+	if err := db.GetDB().First(&restoredChannelKeyStats, 11).Error; err != nil || restoredChannelKeyStats.ChannelID != 10 || restoredChannelKeyStats.ReasoningToken != 5 {
+		t.Fatalf("restored channel key stats = %#v, err=%v", restoredChannelKeyStats, err)
 	}
 	var restoredLog model.RelayLog
 	if err := db.GetDB().First(&restoredLog, 50).Error; err != nil || restoredLog.ReasoningTokens != 5 {
@@ -241,7 +245,7 @@ func assertDatabaseMatrixSchemaAndMigrations(t *testing.T, dbType string) {
 	for _, table := range []any{
 		&model.User{}, &model.WebAuthnCredential{}, &model.Channel{}, &model.ChannelKey{}, &model.Group{}, &model.GroupItem{},
 		&model.LLMInfo{}, &model.APIKey{}, &model.Setting{}, &model.StatsTotal{}, &model.StatsDaily{},
-		&model.StatsHourly{}, &model.StatsChannel{}, &model.StatsAPIKey{}, &model.RelayLog{},
+		&model.StatsHourly{}, &model.StatsChannel{}, &model.StatsChannelKey{}, &model.StatsAPIKey{}, &model.RelayLog{},
 		&migrate.MigrationRecord{},
 	} {
 		if !conn.Migrator().HasTable(table) {
@@ -253,7 +257,7 @@ func assertDatabaseMatrixSchemaAndMigrations(t *testing.T, dbType string) {
 	if err := conn.Order("version ASC").Find(&records).Error; err != nil {
 		t.Fatalf("read migration records: %v", err)
 	}
-	wantVersions := []int{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+	wantVersions := []int{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	gotVersions := make([]int, len(records))
 	for i, record := range records {
 		gotVersions[i] = record.Version
@@ -272,6 +276,7 @@ func assertDatabaseMatrixSchemaAndMigrations(t *testing.T, dbType string) {
 		{model: &model.StatsDaily{}, field: "ReasoningToken"},
 		{model: &model.StatsHourly{}, field: "ReasoningToken"},
 		{model: &model.StatsChannel{}, field: "ReasoningToken"},
+		{model: &model.StatsChannelKey{}, field: "ReasoningToken"},
 		{model: &model.StatsAPIKey{}, field: "ReasoningToken"},
 		{model: &model.RelayLog{}, field: "ReasoningTokens"},
 	} {
@@ -452,6 +457,7 @@ func assertDatabaseMatrixConcurrentDeletes(t *testing.T, ctx context.Context) {
 			{name: "channels", model: &model.Channel{}, where: "id = ?"},
 			{name: "channel_keys", model: &model.ChannelKey{}, where: "channel_id = ?"},
 			{name: "stats_channels", model: &model.StatsChannel{}, where: "channel_id = ?"},
+			{name: "stats_channel_keys", model: &model.StatsChannelKey{}, where: "channel_id = ?"},
 		} {
 			var count int64
 			if err := db.GetDB().Model(row.model).Where(row.where, id).Count(&count).Error; err != nil {

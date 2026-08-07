@@ -414,6 +414,29 @@ func (e *dbImportV2Executor) importChannelKeys(dump *model.DBDump) error {
 		if err := e.deleteByID("channel_keys", &model.ChannelKey{}, row.ID); err != nil {
 			return err
 		}
+		var statsCount int64
+		if err := e.tx.Model(&model.StatsChannelKey{}).Where("channel_key_id = ?", row.ID).Count(&statsCount).Error; err != nil {
+			return fmt.Errorf("count replaced channel key stats %d: %w", row.ID, err)
+		}
+		if e.dryRun {
+			if statsCount > 0 {
+				summary := e.result.Tables["stats_channel_key"]
+				summary.Delete += statsCount
+				e.result.Tables["stats_channel_key"] = summary
+				e.result.RowsAffected["stats_channel_key"] += statsCount
+			}
+			continue
+		}
+		result := e.tx.Where("channel_key_id = ?", row.ID).Delete(&model.StatsChannelKey{})
+		if result.Error != nil {
+			return fmt.Errorf("delete replaced channel key stats %d: %w", row.ID, result.Error)
+		}
+		if result.RowsAffected > 0 {
+			summary := e.result.Tables["stats_channel_key"]
+			summary.Delete += result.RowsAffected
+			e.result.Tables["stats_channel_key"] = summary
+			e.result.RowsAffected["stats_channel_key"] += result.RowsAffected
+		}
 	}
 	return nil
 }
@@ -683,6 +706,25 @@ func (e *dbImportV2Executor) importNonIdentityTables(dump *model.DBDump) error {
 			return true
 		},
 		func(row model.StatsChannel) string { return fmt.Sprint(row.ChannelID) }, false, true); err != nil {
+		return err
+	}
+	if err := importStableRows(e, "stats_channel_key", dump.StatsChannelKey,
+		func(row *model.StatsChannelKey) bool {
+			targetChannelID, ok := e.channelIDByOld[row.ChannelID]
+			if !ok {
+				e.unresolved("stats_channel_key", "", "channel_id", "source channel id %d was not mapped", row.ChannelID)
+				return false
+			}
+			targetKeyID, ok := e.channelKeyIDByOld[row.ChannelKeyID]
+			if !ok {
+				e.unresolved("stats_channel_key", "", "channel_key_id", "source channel key id %d was not mapped", row.ChannelKeyID)
+				return false
+			}
+			row.ChannelID = targetChannelID
+			row.ChannelKeyID = targetKeyID
+			return true
+		},
+		func(row model.StatsChannelKey) string { return fmt.Sprint(row.ChannelKeyID) }, false, true); err != nil {
 		return err
 	}
 	if err := importStableRows(e, "stats_api_key", dump.StatsAPIKey,

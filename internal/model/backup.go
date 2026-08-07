@@ -22,11 +22,12 @@ type DBDump struct {
 	Settings    []Setting          `json:"settings,omitempty"`
 	Relations   *DBDumpRelationsV2 `json:"relations,omitempty"`
 
-	StatsTotal   []StatsTotal   `json:"stats_total,omitempty"`
-	StatsDaily   []StatsDaily   `json:"stats_daily,omitempty"`
-	StatsHourly  []StatsHourly  `json:"stats_hourly,omitempty"`
-	StatsChannel []StatsChannel `json:"stats_channel,omitempty"`
-	StatsAPIKey  []StatsAPIKey  `json:"stats_api_key,omitempty"`
+	StatsTotal      []StatsTotal      `json:"stats_total,omitempty"`
+	StatsDaily      []StatsDaily      `json:"stats_daily,omitempty"`
+	StatsHourly     []StatsHourly     `json:"stats_hourly,omitempty"`
+	StatsChannel    []StatsChannel    `json:"stats_channel,omitempty"`
+	StatsChannelKey []StatsChannelKey `json:"stats_channel_key,omitempty"`
+	StatsAPIKey     []StatsAPIKey     `json:"stats_api_key,omitempty"`
 
 	RelayLogs []RelayLog `json:"relay_logs,omitempty"`
 }

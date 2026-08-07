@@ -152,6 +152,7 @@ type deleteTestChannelGraph struct {
 	key       model.ChannelKey
 	groupItem model.GroupItem
 	stats     model.StatsChannel
+	statsKey  model.StatsChannelKey
 }
 
 func createDeleteTestChannel(t *testing.T) model.Channel {
@@ -188,13 +189,19 @@ func createDeleteTestChannelGraph(t *testing.T) deleteTestChannelGraph {
 	if err := db.GetDB().Create(&stats).Error; err != nil {
 		t.Fatalf("create channel stats: %v", err)
 	}
+	statsKey := model.StatsChannelKey{ChannelID: channel.ID, ChannelKeyID: key.ID, StatsMetrics: model.StatsMetrics{RequestSuccess: 1}}
+	if err := db.GetDB().Create(&statsKey).Error; err != nil {
+		t.Fatalf("create channel key stats: %v", err)
+	}
 
 	channel.Keys = []model.ChannelKey{key}
 	channelCache.Set(channel.ID, channel)
 	channelKeyCache.Set(key.ID, key)
 	statsService.channels.Set(channel.ID, stats)
 	statsService.dirtyChannels.mark(channel.ID)
-	return deleteTestChannelGraph{channel: channel, key: key, groupItem: item, stats: stats}
+	statsService.channelKeys.Set(key.ID, statsKey)
+	statsService.dirtyChannelKeys.mark(key.ID)
+	return deleteTestChannelGraph{channel: channel, key: key, groupItem: item, stats: stats, statsKey: statsKey}
 }
 
 func assertChannelDeleteGraphPresent(t *testing.T, graph deleteTestChannelGraph) {
@@ -203,6 +210,7 @@ func assertChannelDeleteGraphPresent(t *testing.T, graph deleteTestChannelGraph)
 	assertDeleteTestRowCount(t, &model.ChannelKey{}, "id = ?", graph.key.ID, 1)
 	assertDeleteTestRowCount(t, &model.GroupItem{}, "id = ?", graph.groupItem.ID, 1)
 	assertDeleteTestRowCount(t, &model.StatsChannel{}, "channel_id = ?", graph.stats.ChannelID, 1)
+	assertDeleteTestRowCount(t, &model.StatsChannelKey{}, "channel_key_id = ?", graph.statsKey.ChannelKeyID, 1)
 	if _, ok := channelCache.Get(graph.channel.ID); !ok {
 		t.Fatal("channel cache changed before transaction committed")
 	}
@@ -282,6 +290,8 @@ func resetDeleteTestCaches(t *testing.T) {
 		apiKeyIDMap.Clear()
 		statsService.channels.Clear()
 		statsService.dirtyChannels.reset()
+		statsService.channelKeys.Clear()
+		statsService.dirtyChannelKeys.reset()
 		statsService.apiKeys.Clear()
 		statsService.dirtyAPIKeys.reset()
 	}

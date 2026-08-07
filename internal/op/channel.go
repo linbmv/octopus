@@ -69,6 +69,7 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	for _, k := range channel.Keys {
 		if k.ID != 0 {
 			channelKeyCache.Set(k.ID, k)
+			StatsChannelKeyRestore(k.ID)
 		}
 	}
 	return nil
@@ -284,6 +285,11 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 	if err := channelRefreshCacheByID(req.ID, ctx); err != nil {
 		return nil, err
 	}
+	for _, keyID := range req.KeysToDelete {
+		if err := StatsChannelKeyDel(keyID); err != nil {
+			log.Warnf("channel key %d was deleted but stats cache cleanup failed: %v", keyID, err)
+		}
+	}
 
 	channel, _ := channelCache.Get(req.ID)
 	return &channel, nil
@@ -422,6 +428,9 @@ func deleteChannelKeysTx(tx *gorm.DB, channelID int, keyIDs []int) error {
 	}
 	if err := tx.Where("id IN ? AND channel_id = ?", keyIDs, channelID).Delete(&model.ChannelKey{}).Error; err != nil {
 		return fmt.Errorf("failed to delete channel keys: %w", err)
+	}
+	if err := tx.Where("channel_key_id IN ? AND channel_id = ?", keyIDs, channelID).Delete(&model.StatsChannelKey{}).Error; err != nil {
+		return fmt.Errorf("failed to delete channel key stats: %w", err)
 	}
 	return nil
 }
@@ -577,6 +586,10 @@ func ChannelDel(id int, ctx context.Context) error {
 		tx.Rollback()
 		return fmt.Errorf("failed to delete channel keys: %w", err)
 	}
+	if err := tx.Where("channel_id = ?", id).Delete(&model.StatsChannelKey{}).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to delete channel key stats: %w", err)
+	}
 
 	if tx.Migrator().HasTable(&model.CapabilityEvidence{}) {
 		if err := deleteCapabilityEvidenceChannelTx(tx, id); err != nil {
@@ -621,6 +634,9 @@ func ChannelDel(id int, ctx context.Context) error {
 	for _, k := range ch.Keys {
 		if k.ID != 0 {
 			channelKeyCache.Del(k.ID)
+			if err := StatsChannelKeyDel(k.ID); err != nil {
+				log.Warnf("channel key %d was deleted but stats cleanup failed: %v", k.ID, err)
+			}
 		}
 	}
 	if err := StatsChannelDel(id); err != nil {
@@ -721,6 +737,7 @@ func channelRefreshCacheByID(id int, ctx context.Context) error {
 	for _, k := range channel.Keys {
 		if k.ID != 0 {
 			channelKeyCache.Set(k.ID, k)
+			StatsChannelKeyRestore(k.ID)
 		}
 	}
 	return nil

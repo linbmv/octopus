@@ -57,6 +57,7 @@ func (s *StatsService) persistSnapshots(
 	dailySnap model.StatsDaily,
 	hourlyAll [24]model.StatsHourly,
 	channelIDs []int,
+	channelKeyIDs []int,
 	apiKeyIDs []int,
 ) error {
 	dbConn := db.GetDB().WithContext(ctx)
@@ -94,6 +95,22 @@ func (s *StatsService) persistSnapshots(
 		}
 	}
 
+	for _, id := range channelKeyIDs {
+		if err := func() error {
+			mu := statsLockFor(&s.channelKeyUpdateLocks, id)
+			mu.Lock()
+			defer mu.Unlock()
+
+			stats, ok := s.channelKeys.Get(id)
+			if !ok {
+				return nil
+			}
+			return dbConn.Save(&stats).Error
+		}(); err != nil {
+			return err
+		}
+	}
+
 	for _, id := range apiKeyIDs {
 		if err := func() error {
 			mu := statsLockFor(&s.apiKeyUpdateLocks, id)
@@ -125,6 +142,7 @@ func (s *StatsService) saveDBWithDailyOverride(ctx context.Context, dailyOverrid
 	hourlyAll := s.hourlySnapshot()
 
 	channelDirty := s.dirtyChannels.snapshot()
+	channelKeyDirty := s.dirtyChannelKeys.snapshot()
 	apiKeyDirty := s.dirtyAPIKeys.snapshot()
 
 	err := s.persistSnapshots(
@@ -133,6 +151,7 @@ func (s *StatsService) saveDBWithDailyOverride(ctx context.Context, dailyOverrid
 		dailyOverride,
 		hourlyAll,
 		dirtyIDs(channelDirty),
+		dirtyIDs(channelKeyDirty),
 		dirtyIDs(apiKeyDirty),
 	)
 	if err != nil {
@@ -140,6 +159,7 @@ func (s *StatsService) saveDBWithDailyOverride(ctx context.Context, dailyOverrid
 	}
 
 	s.dirtyChannels.clearUnchanged(channelDirty)
+	s.dirtyChannelKeys.clearUnchanged(channelKeyDirty)
 	s.dirtyAPIKeys.clearUnchanged(apiKeyDirty)
 	return nil
 }

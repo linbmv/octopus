@@ -184,6 +184,13 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 			log.WithContext(ctx).Warnw("failed to update successful channel attempt statistics",
 				"channel_id", ra.channel.ID, "error", statsErr)
 		}
+		if statsErr := op.StatsChannelKeyUpdate(ra.channel.ID, ra.usedKey.ID, dbmodel.StatsMetrics{
+			WaitTime:       span.Duration().Milliseconds(),
+			RequestSuccess: 1,
+		}); statsErr != nil {
+			log.WithContext(ctx).Warnw("failed to update successful channel key attempt statistics",
+				"channel_id", ra.channel.ID, "channel_key_id", ra.usedKey.ID, "error", statsErr)
+		}
 		balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 
 		// 获取首 token 延迟
@@ -314,6 +321,13 @@ func (ra *relayAttempt) runWithCurrentKey() (bool, http.Header, []byte, error) {
 		}); statsErr != nil {
 			log.WithContext(ctx).Warnw("failed to update failed channel attempt statistics",
 				"channel_id", ra.channel.ID, "error", statsErr)
+		}
+		if statsErr := op.StatsChannelKeyUpdate(ra.channel.ID, ra.usedKey.ID, dbmodel.StatsMetrics{
+			WaitTime:      span.Duration().Milliseconds(),
+			RequestFailed: 1,
+		}); statsErr != nil {
+			log.WithContext(ctx).Warnw("failed to update failed channel key attempt statistics",
+				"channel_id", ra.channel.ID, "channel_key_id", ra.usedKey.ID, "error", statsErr)
 		}
 		if healthPenalty {
 			balancer.RecordFailure(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)

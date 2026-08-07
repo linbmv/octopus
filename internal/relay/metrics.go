@@ -194,6 +194,17 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 		}); statsErr != nil {
 			statsLogger.Warnw("failed to update channel relay statistics", "channel_id", channelID, "error", statsErr)
 		}
+		if finalKeyID > 0 {
+			if statsErr := op.StatsChannelKeyUpdate(channelID, finalKeyID, model.StatsMetrics{
+				InputToken:     m.Stats.InputToken,
+				OutputToken:    m.Stats.OutputToken,
+				ReasoningToken: m.Stats.ReasoningToken,
+				InputCost:      m.Stats.InputCost,
+				OutputCost:     m.Stats.OutputCost,
+			}); statsErr != nil {
+				statsLogger.Warnw("failed to update channel key relay statistics", "channel_id", channelID, "channel_key_id", finalKeyID, "error", statsErr)
+			}
+		}
 	}
 
 	log.WithContext(ctx).Infow("relay complete",

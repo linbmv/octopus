@@ -87,6 +87,9 @@ func DBExportAllStream(ctx context.Context, w io.Writer, includeLogs, includeSta
 		if err := streamDBDumpTable[model.StatsChannel](conn, w, &wroteField, "stats_channel", "stats_channel"); err != nil {
 			return err
 		}
+		if err := streamDBDumpTable[model.StatsChannelKey](conn, w, &wroteField, "stats_channel_key", "stats_channel_key"); err != nil {
+			return err
+		}
 		if err := streamDBDumpTable[model.StatsAPIKey](conn, w, &wroteField, "stats_api_key", "stats_api_key"); err != nil {
 			return err
 		}
@@ -315,6 +318,11 @@ func DBImportRestore(ctx context.Context, dump *model.DBDump) (*model.DBImportRe
 			} else {
 				res.RowsAffected["stats_channel"] = n
 			}
+			if n, err := createRestoreRows(tx, dump.StatsChannelKey); err != nil {
+				return fmt.Errorf("import stats_channel_key: %w", err)
+			} else {
+				res.RowsAffected["stats_channel_key"] = n
+			}
 			if n, err := createRestoreRows(tx, dump.StatsAPIKey); err != nil {
 				return fmt.Errorf("import stats_api_key: %w", err)
 			} else {
@@ -352,6 +360,7 @@ var restoreTargetTables = []struct {
 	{name: "stats_daily", model: &model.StatsDaily{}},
 	{name: "stats_hourly", model: &model.StatsHourly{}},
 	{name: "stats_channel", model: &model.StatsChannel{}},
+	{name: "stats_channel_key", model: &model.StatsChannelKey{}},
 	{name: "stats_api_key", model: &model.StatsAPIKey{}},
 	{name: "relay_logs", model: &model.RelayLog{}},
 }

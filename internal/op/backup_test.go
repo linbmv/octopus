@@ -118,6 +118,7 @@ func TestValidateDBDumpRejectsUnsafeInputs(t *testing.T) {
 		{name: "non-finite LLM price", mutate: func(d *model.DBDump) { d.LLMInfos[0].Input = math.NaN() }, field: "llm_infos[0]"},
 		{name: "unknown supported model", mutate: func(d *model.DBDump) { d.APIKeys[0].SupportedModels = "missing-group" }, field: "api_keys[0].supported_models"},
 		{name: "dangling channel stats", mutate: func(d *model.DBDump) { d.StatsChannel[0].ChannelID = 999 }, field: "stats_channel[0].channel_id"},
+		{name: "dangling channel key stats", mutate: func(d *model.DBDump) { d.StatsChannelKey[0].ChannelKeyID = 999 }, field: "stats_channel_key[0].channel_key_id"},
 		{name: "negative reasoning stats", mutate: func(d *model.DBDump) { d.StatsTotal[0].ReasoningToken = -1 }, field: "stats_total[0]"},
 		{name: "reasoning stats exceed output", mutate: func(d *model.DBDump) { d.StatsTotal[0].ReasoningToken = d.StatsTotal[0].OutputToken + 1 }, field: "stats_total[0].reasoning_token"},
 		{name: "negative reasoning log", mutate: func(d *model.DBDump) { d.RelayLogs[0].ReasoningTokens = -1 }, field: "relay_logs[0]"},
@@ -232,7 +233,7 @@ func TestDBImportRestoreRestoresValidatedDump(t *testing.T) {
 	if result.Mode != model.DBImportModeEmptyTargetRestore || result.CacheRefreshed {
 		t.Fatalf("DBImportRestore() result = %#v", result)
 	}
-	for _, key := range []string{"channels", "channel_keys", "groups", "group_items", "llm_infos", "api_keys", "settings", "stats_total", "stats_daily", "stats_hourly", "stats_channel", "stats_api_key", "relay_logs"} {
+	for _, key := range []string{"channels", "channel_keys", "groups", "group_items", "llm_infos", "api_keys", "settings", "stats_total", "stats_daily", "stats_hourly", "stats_channel", "stats_channel_key", "stats_api_key", "relay_logs"} {
 		if result.RowsAffected[key] != 1 {
 			t.Errorf("RowsAffected[%q] = %d, want 1", key, result.RowsAffected[key])
 		}
@@ -272,7 +273,7 @@ func TestLegacyBackupWithoutReasoningFieldsImportsAsZero(t *testing.T) {
 	if err := json.Unmarshal(payload, &document); err != nil {
 		t.Fatalf("decode current dump document: %v", err)
 	}
-	for _, table := range []string{"stats_total", "stats_daily", "stats_hourly", "stats_channel", "stats_api_key"} {
+	for _, table := range []string{"stats_total", "stats_daily", "stats_hourly", "stats_channel", "stats_channel_key", "stats_api_key"} {
 		var rows []map[string]json.RawMessage
 		if err := json.Unmarshal(document[table], &rows); err != nil {
 			t.Fatalf("decode %s: %v", table, err)
@@ -717,12 +718,13 @@ func validDBDump() *model.DBDump {
 				},
 			},
 		},
-		Settings:     []model.Setting{{Key: model.SettingKeyRelayLogKeepEnabled, Value: "true"}},
-		StatsTotal:   []model.StatsTotal{{ID: 1, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
-		StatsDaily:   []model.StatsDaily{{Date: "20260715", StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
-		StatsHourly:  []model.StatsHourly{{Hour: 12, Date: "20260715", StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
-		StatsChannel: []model.StatsChannel{{ChannelID: 10, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
-		StatsAPIKey:  []model.StatsAPIKey{{APIKeyID: 40, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		Settings:        []model.Setting{{Key: model.SettingKeyRelayLogKeepEnabled, Value: "true"}},
+		StatsTotal:      []model.StatsTotal{{ID: 1, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsDaily:      []model.StatsDaily{{Date: "20260715", StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsHourly:     []model.StatsHourly{{Hour: 12, Date: "20260715", StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsChannel:    []model.StatsChannel{{ChannelID: 10, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsChannelKey: []model.StatsChannelKey{{ChannelID: 10, ChannelKeyID: 11, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
+		StatsAPIKey:     []model.StatsAPIKey{{APIKeyID: 40, StatsMetrics: model.StatsMetrics{OutputToken: 8, ReasoningToken: 5, RequestSuccess: 1}}},
 		RelayLogs: []model.RelayLog{{
 			ID: 50, Time: 1, RequestModelName: "client-model", RequestAPIKeyName: "client", ChannelId: 10,
 			ChannelName: "source-channel", ActualModelName: "upstream-model", OutputTokens: 8, ReasoningTokens: 5, TotalAttempts: 1,

@@ -97,6 +97,7 @@ export interface ChannelKey {
   retry_after_until: number;
   total_cost: number;
   remark: string;
+  stats?: StatsChannelKey | null;
 }
 
 export interface ChannelKeyAddRequest {
@@ -295,6 +296,11 @@ export interface StatsAPIKey extends StatsMetrics {
 
 export interface StatsChannel extends StatsMetrics {
   channel_id: number;
+}
+
+export interface StatsChannelKey extends StatsMetrics {
+  channel_id: number;
+  channel_key_id: number;
 }
 
 export interface StatsDaily extends StatsMetrics {

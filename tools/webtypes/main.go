@@ -49,6 +49,7 @@ var modelTypes = []typeSpec{
 	{Name: "Setting", Type: reflect.TypeOf(model.Setting{})},
 	{Name: "StatsAPIKey", Type: reflect.TypeOf(model.StatsAPIKey{})},
 	{Name: "StatsChannel", Type: reflect.TypeOf(model.StatsChannel{})},
+	{Name: "StatsChannelKey", Type: reflect.TypeOf(model.StatsChannelKey{})},
 	{Name: "StatsDaily", Type: reflect.TypeOf(model.StatsDaily{})},
 	{Name: "StatsErrorLevelCounts", Type: reflect.TypeOf(model.StatsErrorLevelCounts{})},
 	{Name: "StatsErrorLevels", Type: reflect.TypeOf(model.StatsErrorLevels{})},

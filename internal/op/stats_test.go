@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -70,6 +71,32 @@ func TestStatsServiceChannelUpdateConcurrent(t *testing.T) {
 	}
 }
 
+func TestStatsServiceChannelKeyUpdateConcurrent(t *testing.T) {
+	service := NewStatsService()
+	const goroutines = 100
+	const updatesPerGoroutine = 100
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < updatesPerGoroutine; j++ {
+				if err := service.ChannelKeyUpdate(7, 42, model.StatsMetrics{RequestSuccess: 1, WaitTime: 2}); err != nil {
+					t.Errorf("channel key update: %v", err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	got := service.ChannelKeyGet(42)
+	want := int64(goroutines * updatesPerGoroutine)
+	if got.ChannelID != 7 || got.ChannelKeyID != 42 || got.RequestSuccess != want || got.WaitTime != want*2 {
+		t.Fatalf("concurrent channel key updates lost metrics: got=%#v want=%d", got, want)
+	}
+}
+
 func TestStatsServicePersistsReasoningTokensAcrossAllAggregates(t *testing.T) {
 	initTestDB(t)
 	service := NewStatsService()
@@ -93,6 +120,9 @@ func TestStatsServicePersistsReasoningTokensAcrossAllAggregates(t *testing.T) {
 	if err := service.ChannelUpdate(7, metrics); err != nil {
 		t.Fatalf("channel update: %v", err)
 	}
+	if err := service.ChannelKeyUpdate(7, 11, metrics); err != nil {
+		t.Fatalf("channel key update: %v", err)
+	}
 	if err := service.APIKeyUpdate(9, metrics); err != nil {
 		t.Fatalf("API key update: %v", err)
 	}
@@ -101,11 +131,12 @@ func TestStatsServicePersistsReasoningTokensAcrossAllAggregates(t *testing.T) {
 	}
 
 	for name, destination := range map[string]any{
-		"total":   &model.StatsTotal{},
-		"daily":   &model.StatsDaily{},
-		"hourly":  &model.StatsHourly{},
-		"channel": &model.StatsChannel{},
-		"api key": &model.StatsAPIKey{},
+		"total":       &model.StatsTotal{},
+		"daily":       &model.StatsDaily{},
+		"hourly":      &model.StatsHourly{},
+		"channel":     &model.StatsChannel{},
+		"channel key": &model.StatsChannelKey{},
+		"api key":     &model.StatsAPIKey{},
 	} {
 		if err := db.GetDB().First(destination).Error; err != nil {
 			t.Fatalf("load %s stats: %v", name, err)
@@ -120,12 +151,53 @@ func TestStatsServicePersistsReasoningTokensAcrossAllAggregates(t *testing.T) {
 			got = row.ReasoningToken
 		case *model.StatsChannel:
 			got = row.ReasoningToken
+		case *model.StatsChannelKey:
+			got = row.ReasoningToken
 		case *model.StatsAPIKey:
 			got = row.ReasoningToken
 		}
 		if got != metrics.ReasoningToken {
 			t.Errorf("%s reasoning tokens = %d, want %d", name, got, metrics.ReasoningToken)
 		}
+	}
+}
+
+func TestStatsServiceChannelKeyGetIsSideEffectFreeForUnusedKey(t *testing.T) {
+	service := NewStatsService()
+	got := service.ChannelKeyGet(19)
+	if got.ChannelKeyID != 19 || got.ChannelID != 0 {
+		t.Fatalf("unexpected unused key stats: %#v", got)
+	}
+	if dirty := service.takeDirtyChannelKeys(); len(dirty) != 0 {
+		t.Fatalf("unused key stats read marked dirty: %v", dirty)
+	}
+}
+
+func TestStatsServiceChannelKeyDeletePreventsStatsResurrection(t *testing.T) {
+	initTestDB(t)
+	service := NewStatsService()
+	if err := service.ChannelKeyUpdate(7, 42, model.StatsMetrics{RequestSuccess: 1}); err != nil {
+		t.Fatalf("seed channel key stats: %v", err)
+	}
+	if err := service.SaveDB(context.Background()); err != nil {
+		t.Fatalf("persist channel key stats: %v", err)
+	}
+	if err := service.ChannelKeyDel(42); err != nil {
+		t.Fatalf("delete channel key stats: %v", err)
+	}
+
+	if err := service.ChannelKeyUpdate(7, 42, model.StatsMetrics{RequestSuccess: 1}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("update after channel key deletion error = %v, want ErrNotFound", err)
+	}
+	if _, ok := service.channelKeys.Get(42); ok {
+		t.Fatal("deleted channel key stats were recreated in cache")
+	}
+	var count int64
+	if err := db.GetDB().Model(&model.StatsChannelKey{}).Where("channel_key_id = ?", 42).Count(&count).Error; err != nil {
+		t.Fatalf("count deleted channel key stats: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("deleted channel key stats rows = %d, want 0", count)
 	}
 }
 

@@ -188,7 +188,7 @@ func collectDumpUUID(seen map[string]int, value string, id int, path string) err
 
 func hasDumpStats(dump *model.DBDump) bool {
 	return len(dump.StatsTotal) > 0 || len(dump.StatsDaily) > 0 || len(dump.StatsHourly) > 0 ||
-		len(dump.StatsChannel) > 0 || len(dump.StatsAPIKey) > 0
+		len(dump.StatsChannel) > 0 || len(dump.StatsChannelKey) > 0 || len(dump.StatsAPIKey) > 0
 }
 
 func validateDumpChannels(dump *model.DBDump, state *backupValidationState) error {
@@ -649,6 +649,24 @@ func validateDumpStats(dump *model.DBDump, state *backupValidationState) error {
 			return invalidDump(path+".channel_id", "duplicate channel id %d", row.ChannelID)
 		}
 		channelStats[row.ChannelID] = struct{}{}
+		if err := validateStatsMetrics(path, row.StatsMetrics); err != nil {
+			return err
+		}
+	}
+	channelKeyStats := make(map[int]struct{}, len(dump.StatsChannelKey))
+	for i, row := range dump.StatsChannelKey {
+		path := fmt.Sprintf("stats_channel_key[%d]", i)
+		owner, exists := state.channelKeyOwner[row.ChannelKeyID]
+		if !exists {
+			return invalidDump(path+".channel_key_id", "references unknown channel key %d", row.ChannelKeyID)
+		}
+		if row.ChannelID != owner {
+			return invalidDump(path+".channel_id", "does not own channel key %d", row.ChannelKeyID)
+		}
+		if _, exists := channelKeyStats[row.ChannelKeyID]; exists {
+			return invalidDump(path+".channel_key_id", "duplicate channel key id %d", row.ChannelKeyID)
+		}
+		channelKeyStats[row.ChannelKeyID] = struct{}{}
 		if err := validateStatsMetrics(path, row.StatsMetrics); err != nil {
 			return err
 		}

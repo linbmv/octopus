@@ -70,8 +70,8 @@ function CodexQuotaListItem({ channel, keyData, quota }: { channel: Channel; key
                     {remark ? <span className="hidden shrink-0 truncate text-[10px] text-muted-foreground sm:inline" title={channel.name}>{channel.name}</span> : null}
                 </div>
                 <div className="mt-0.5 flex min-w-0 items-center gap-x-2 text-[10px] font-medium">
-                    <span className="shrink-0 text-emerald-600 dark:text-emerald-300">{t('success')} {formatCount(channel.stats?.request_success)}</span>
-                    <span className="shrink-0 text-rose-500 dark:text-rose-300">{t('failed')} {formatCount(channel.stats?.request_failed)}</span>
+                    <span className="shrink-0 text-emerald-600 dark:text-emerald-300">{t('success')} {formatCount(keyData.stats?.request_success)}</span>
+                    <span className="shrink-0 text-rose-500 dark:text-rose-300">{t('failed')} {formatCount(keyData.stats?.request_failed)}</span>
                     <span className="min-w-0 truncate text-muted-foreground">{t('plan')} <strong className="text-foreground">{quota?.plan_type || '—'}</strong></span>
                 </div>
                 <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[9px] text-muted-foreground">
