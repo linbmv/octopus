@@ -18,7 +18,7 @@ func init() {
 // can be reconstructed exactly using the same semantics as relay.go. Deleted
 // credentials are intentionally ignored because their IDs are no longer
 // present in channel_keys and must not reappear in the credential list.
-func backfillChannelKeyStats(db *gorm.DB) error {
+func backfillChannelKeyStats(db *gorm.DB) (err error) {
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
@@ -42,7 +42,11 @@ func backfillChannelKeyStats(db *gorm.DB) error {
 	if err != nil {
 		return fmt.Errorf("read relay logs for channel key stats backfill: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close relay logs for channel key stats backfill: %w", closeErr)
+		}
+	}()
 
 	for rows.Next() {
 		var relayLog model.RelayLog

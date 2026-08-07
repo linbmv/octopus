@@ -70,19 +70,6 @@ func (s *StatsService) ChannelKeyGet(id int) model.StatsChannelKey {
 	return model.StatsChannelKey{ChannelKeyID: id}
 }
 
-func StatsChannelKeyList() []model.StatsChannelKey {
-	return statsService.ChannelKeyList()
-}
-
-func (s *StatsService) ChannelKeyList() []model.StatsChannelKey {
-	rows := make([]model.StatsChannelKey, 0, s.channelKeys.Len())
-	for _, row := range s.channelKeys.GetAll() {
-		rows = append(rows, row)
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].ChannelKeyID < rows[j].ChannelKeyID })
-	return rows
-}
-
 func StatsAPIKeyGet(id int) model.StatsAPIKey {
 	return statsService.APIKeyGet(id)
 }
