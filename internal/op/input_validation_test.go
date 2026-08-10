@@ -59,6 +59,52 @@ func TestOperationLayerRejectsInvalidBusinessModels(t *testing.T) {
 	}
 }
 
+func TestChannelOperationsRejectDuplicateCredentials(t *testing.T) {
+	initTestDB(t)
+
+	channel := validOperationChannel("duplicate-create")
+	channel.Keys = append(channel.Keys, model.ChannelKey{Enabled: true, ChannelKey: " secret "})
+	if err := ChannelCreate(&channel, context.Background()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("ChannelCreate() error = %v, want ErrConflict", err)
+	}
+
+	channel = validOperationChannel("duplicate-update")
+	if err := ChannelCreate(&channel, context.Background()); err != nil {
+		t.Fatalf("ChannelCreate() error = %v", err)
+	}
+	_, err := ChannelUpdate(&model.ChannelUpdateRequest{
+		ID:        channel.ID,
+		KeysToAdd: []model.ChannelKeyAddRequest{{Enabled: true, ChannelKey: "secret"}},
+	}, context.Background())
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("ChannelUpdate() error = %v, want ErrConflict", err)
+	}
+}
+
+func TestAPIOperationsRequireExistingGroupReferences(t *testing.T) {
+	initTestDB(t)
+	apiKeyCache.Clear()
+	apiKeyIDMap.Clear()
+
+	missing := model.APIKey{Name: "missing-group", APIKey: "sk-missing-group", SupportedModels: "not-created"}
+	if err := APIKeyCreate(&missing, context.Background()); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("APIKeyCreate() error = %v, want ErrInvalidInput", err)
+	}
+
+	group := model.Group{Name: "created-group", Mode: model.GroupModeRoundRobin}
+	if err := GroupCreate(&group, context.Background()); err != nil {
+		t.Fatalf("GroupCreate() error = %v", err)
+	}
+	key := model.APIKey{Name: "valid-group", APIKey: "sk-valid-group", SupportedModels: group.Name}
+	if err := APIKeyCreate(&key, context.Background()); err != nil {
+		t.Fatalf("APIKeyCreate() with enabled group error = %v", err)
+	}
+	key.SupportedModels = "deleted-group"
+	if err := APIKeyUpdate(&key, context.Background()); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("APIKeyUpdate() error = %v, want ErrInvalidInput", err)
+	}
+}
+
 func TestChannelUpdateMissingKeyRollsBackPatch(t *testing.T) {
 	initTestDB(t)
 	channel := validOperationChannel("before")

@@ -116,7 +116,7 @@ func TestValidateDBDumpRejectsUnsafeInputs(t *testing.T) {
 		{name: "undeclared group item model", mutate: func(d *model.DBDump) { d.GroupItems[0].ModelName = "not-on-channel" }, field: "group_items[0].model_name"},
 		{name: "unknown setting", mutate: func(d *model.DBDump) { d.Settings[0].Key = model.SettingKey("unknown") }, field: "settings[0]"},
 		{name: "non-finite LLM price", mutate: func(d *model.DBDump) { d.LLMInfos[0].Input = math.NaN() }, field: "llm_infos[0]"},
-		{name: "unknown supported model", mutate: func(d *model.DBDump) { d.APIKeys[0].SupportedModels = "missing-group" }, field: "api_keys[0].supported_models"},
+		{name: "empty supported model", mutate: func(d *model.DBDump) { d.APIKeys[0].SupportedModels = "client-model," }, field: "api_keys[0]"},
 		{name: "dangling channel stats", mutate: func(d *model.DBDump) { d.StatsChannel[0].ChannelID = 999 }, field: "stats_channel[0].channel_id"},
 		{name: "dangling channel key stats", mutate: func(d *model.DBDump) { d.StatsChannelKey[0].ChannelKeyID = 999 }, field: "stats_channel_key[0].channel_key_id"},
 		{name: "negative reasoning stats", mutate: func(d *model.DBDump) { d.StatsTotal[0].ReasoningToken = -1 }, field: "stats_total[0]"},
@@ -369,6 +369,52 @@ func TestDBExportThenRestoreIntoNewDatabaseRoundTrip(t *testing.T) {
 	}
 	if channel.Name != "source-channel" || key.ChannelID != channel.ID || key.ChannelKey != "sk-upstream" {
 		t.Fatalf("roundtrip relation mismatch: channel=%#v key=%#v", channel, key)
+	}
+}
+
+func TestDBImportRestoresLegacyFormattingDuplicateKeysAndStaleAPIModels(t *testing.T) {
+	dump := validDBDump()
+	dump.Channels[0].Name = " source-channel "
+	dump.Channels[0].BaseUrls[0].URL = " https://api.example.test/v1 "
+	dump.ChannelKeys = append(dump.ChannelKeys, model.ChannelKey{
+		ID:         12,
+		UUID:       "00000000-0000-4000-8000-000000000012",
+		ChannelID:  10,
+		Enabled:    true,
+		ChannelKey: " sk-upstream ",
+	})
+	dump.Relations.ChannelKeys["00000000-0000-4000-8000-000000000012"] = "00000000-0000-4000-8000-000000000010"
+	dump.APIKeys[0].SupportedModels = " client-model,missing-group,CLIENT-MODEL "
+
+	initTestDB(t)
+	result, err := DBImportRestore(context.Background(), dump)
+	if err != nil {
+		t.Fatalf("DBImportRestore() rejected legacy-compatible dump: %v", err)
+	}
+	if result.RowsAffected["channel_keys"] != 2 {
+		t.Fatalf("restored channel key count = %d, want 2", result.RowsAffected["channel_keys"])
+	}
+
+	var channel model.Channel
+	if err := db.GetDB().First(&channel, 10).Error; err != nil {
+		t.Fatalf("load restored channel: %v", err)
+	}
+	if channel.Name != "source-channel" || channel.BaseUrls[0].URL != "https://api.example.test/v1" {
+		t.Fatalf("legacy channel fields were not normalized: %#v", channel)
+	}
+	var restoredKeyCount int64
+	if err := db.GetDB().Model(&model.ChannelKey{}).Where("channel_id = ?", 10).Count(&restoredKeyCount).Error; err != nil {
+		t.Fatalf("count restored channel keys: %v", err)
+	}
+	if restoredKeyCount != 2 {
+		t.Fatalf("restored channel key rows = %d, want 2", restoredKeyCount)
+	}
+	var apiKey model.APIKey
+	if err := db.GetDB().First(&apiKey, 40).Error; err != nil {
+		t.Fatalf("load restored API key: %v", err)
+	}
+	if apiKey.SupportedModels != "client-model,missing-group" {
+		t.Fatalf("stale API key models were not normalized/preserved: %q", apiKey.SupportedModels)
 	}
 }
 

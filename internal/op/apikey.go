@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
@@ -18,6 +19,9 @@ var apiKeyIDMap = cache.New[string, int](16)
 func APIKeyCreate(key *model.APIKey, ctx context.Context) error {
 	if err := model.ValidateAPIKey(key); err != nil {
 		return fmt.Errorf("%w: invalid API key: %v", ErrInvalidInput, err)
+	}
+	if err := validateAPIKeySupportedModels(key.SupportedModels, ctx); err != nil {
+		return err
 	}
 	if key.APIKey == "" {
 		return fmt.Errorf("%w: generated API key secret is empty", ErrInvalidInput)
@@ -40,6 +44,9 @@ func APIKeyUpdate(key *model.APIKey, ctx context.Context) error {
 	}
 	if err := model.ValidateAPIKey(key); err != nil {
 		return fmt.Errorf("%w: invalid API key: %v", ErrInvalidInput, err)
+	}
+	if err := validateAPIKeySupportedModels(key.SupportedModels, ctx); err != nil {
+		return err
 	}
 	statsMu := statsLockFor(&statsService.apiKeyUpdateLocks, key.ID)
 	statsMu.Lock()
@@ -70,6 +77,27 @@ func APIKeyUpdate(key *model.APIKey, ctx context.Context) error {
 	}
 	key.APIKey = existing.APIKey
 	apiKeyCache.Set(key.ID, *key)
+	return nil
+}
+
+func validateAPIKeySupportedModels(value string, ctx context.Context) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	groups, err := GroupList(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: cannot validate API key supported models: %v", ErrInvalidInput, err)
+	}
+	allowed := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		allowed[group.Name] = struct{}{}
+	}
+	for _, part := range strings.Split(value, ",") {
+		name := strings.TrimSpace(part)
+		if _, ok := allowed[name]; !ok {
+			return fmt.Errorf("%w: API key supported model %q does not reference an existing group", ErrInvalidInput, name)
+		}
+	}
 	return nil
 }
 

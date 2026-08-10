@@ -63,6 +63,7 @@ func validateDBDump(dump *model.DBDump) error {
 	if dump == nil {
 		return invalidDump("dump", "is required")
 	}
+	normalizeLegacyDBDumpFields(dump)
 	if dump.Version != dbDumpLegacyVersion && dump.Version != dbDumpVersion {
 		return invalidDump("version", "unsupported version %d (expected %d or %d)", dump.Version, dbDumpLegacyVersion, dbDumpVersion)
 	}
@@ -112,6 +113,84 @@ func validateDBDump(dump *model.DBDump) error {
 		return validateDumpV2Relations(dump)
 	}
 	return nil
+}
+
+// normalizeLegacyDBDumpFields keeps backups created by older releases
+// restorable after the live write paths became stricter. These fields already
+// use the same normalization rules when users create or edit them; applying
+// those rules at the import boundary repairs harmless legacy formatting while
+// preserving credentials, duplicate rows, and unknown API-key model entries.
+func normalizeLegacyDBDumpFields(dump *model.DBDump) {
+	for i := range dump.Channels {
+		channel := &dump.Channels[i]
+		channel.Name = strings.TrimSpace(channel.Name)
+		channel.Model = normalizeBackupCSV(channel.Model)
+		channel.CustomModel = normalizeBackupCSV(channel.CustomModel)
+		for j := range channel.BaseUrls {
+			channel.BaseUrls[j].URL = strings.TrimSpace(channel.BaseUrls[j].URL)
+		}
+		if channel.ChannelProxy != nil {
+			value := strings.TrimSpace(*channel.ChannelProxy)
+			channel.ChannelProxy = &value
+		}
+		if channel.ParamOverride != nil {
+			value := strings.TrimSpace(*channel.ParamOverride)
+			channel.ParamOverride = &value
+		}
+	}
+	for i := range dump.ChannelKeys {
+		dump.ChannelKeys[i].ChannelKey = strings.TrimSpace(dump.ChannelKeys[i].ChannelKey)
+	}
+	for i := range dump.Groups {
+		dump.Groups[i].Name = strings.TrimSpace(dump.Groups[i].Name)
+	}
+	for i := range dump.GroupItems {
+		dump.GroupItems[i].ModelName = strings.TrimSpace(dump.GroupItems[i].ModelName)
+	}
+	for i := range dump.LLMInfos {
+		dump.LLMInfos[i].Name = strings.ToLower(strings.TrimSpace(dump.LLMInfos[i].Name))
+	}
+	for i := range dump.APIKeys {
+		dump.APIKeys[i].Name = strings.TrimSpace(dump.APIKeys[i].Name)
+		dump.APIKeys[i].SupportedModels = normalizeBackupSupportedModels(dump.APIKeys[i].SupportedModels)
+	}
+}
+
+func normalizeBackupCSV(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	parts := strings.Split(value, ",")
+	seen := make(map[string]struct{}, len(parts))
+	normalized := make([]string, 0, len(parts))
+	for i := range parts {
+		part := strings.TrimSpace(parts[i])
+		if _, exists := seen[part]; exists {
+			continue
+		}
+		seen[part] = struct{}{}
+		normalized = append(normalized, part)
+	}
+	return strings.Join(normalized, ",")
+}
+
+func normalizeBackupSupportedModels(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	parts := strings.Split(value, ",")
+	seen := make(map[string]struct{}, len(parts))
+	normalized := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		canonical := strings.ToLower(part)
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		normalized = append(normalized, part)
+	}
+	return strings.Join(normalized, ",")
 }
 
 func validateDumpV2Relations(dump *model.DBDump) error {
@@ -271,7 +350,6 @@ func validateDumpChannels(dump *model.DBDump, state *backupValidationState) erro
 		state.channelModels[channel.ID] = models
 	}
 
-	keyValuesByChannel := make(map[int]map[string]struct{})
 	keysByChannel := make(map[int][]model.ChannelKey)
 	for i, key := range dump.ChannelKeys {
 		path := fmt.Sprintf("channel_keys[%d]", i)
@@ -299,13 +377,6 @@ func validateDumpChannels(dump *model.DBDump, state *backupValidationState) erro
 		if !finiteNonNegative(key.TotalCost) {
 			return invalidDump(path+".total_cost", "must be a finite non-negative number")
 		}
-		if _, ok := keyValuesByChannel[key.ChannelID]; !ok {
-			keyValuesByChannel[key.ChannelID] = make(map[string]struct{})
-		}
-		if _, exists := keyValuesByChannel[key.ChannelID][key.ChannelKey]; exists {
-			return invalidDump(path+".channel_key", "duplicate key value for channel %d", key.ChannelID)
-		}
-		keyValuesByChannel[key.ChannelID][key.ChannelKey] = struct{}{}
 		keysByChannel[key.ChannelID] = append(keysByChannel[key.ChannelID], key)
 		state.channelKeyIDs[key.ID] = key
 		state.channelKeyOwner[key.ID] = key.ChannelID
@@ -563,14 +634,8 @@ func validateDumpAPIKeys(keys []model.APIKey, state *backupValidationState) erro
 			return invalidDump(path+".max_cost", "must be a finite non-negative number")
 		}
 		if key.SupportedModels != "" {
-			models, err := parseBackupCSV(path+".supported_models", key.SupportedModels)
-			if err != nil {
+			if _, err := parseBackupCSV(path+".supported_models", key.SupportedModels); err != nil {
 				return err
-			}
-			for name := range models {
-				if _, exists := state.groupNames[name]; !exists {
-					return invalidDump(path+".supported_models", "references unknown group/model %q", name)
-				}
 			}
 		}
 		state.apiKeyIDs[key.ID] = key

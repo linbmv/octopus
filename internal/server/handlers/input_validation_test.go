@@ -56,6 +56,10 @@ func TestAPIKeyPartialUpdatePreservesOmittedFieldsAndAllowsExplicitClear(t *test
 	if err := op.InitCache(); err != nil {
 		t.Fatalf("InitCache() error = %v", err)
 	}
+	group := model.Group{Name: "gpt-5", Mode: model.GroupModeRoundRobin}
+	if err := op.GroupCreate(&group, context.Background()); err != nil {
+		t.Fatalf("GroupCreate() error = %v", err)
+	}
 	key := model.APIKey{
 		Name:            "before",
 		APIKey:          "generated-secret",

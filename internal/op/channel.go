@@ -57,6 +57,9 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	if err := model.ValidateChannel(channel); err != nil {
 		return fmt.Errorf("%w: invalid channel: %v", ErrInvalidInput, err)
 	}
+	if err := model.ValidateChannelKeyUniqueness(channel.Keys); err != nil {
+		return fmt.Errorf("%w: invalid channel: %v", ErrConflict, err)
+	}
 	for _, existing := range channelCache.GetAll() {
 		if existing.Name == channel.Name {
 			return fmt.Errorf("%w: channel name already exists", ErrConflict)
@@ -230,6 +233,10 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 			panic(r)
 		}
 	}()
+	if err := validateChannelKeyChangesTx(tx, req.ID, req); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	if expectedVersion != nil {
 		result := tx.Model(&model.Channel{}).
 			Where("id = ? AND config_version = ?", req.ID, *expectedVersion).
@@ -293,6 +300,60 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 
 	channel, _ := channelCache.Get(req.ID)
 	return &channel, nil
+}
+
+func validateChannelKeyChangesTx(tx *gorm.DB, channelID int, req *model.ChannelUpdateRequest) error {
+	if req == nil || (len(req.KeysToAdd) == 0 && len(req.KeysToUpdate) == 0 && len(req.KeysToDelete) == 0) {
+		return nil
+	}
+
+	var existing []model.ChannelKey
+	if err := tx.Select("id", "channel_key").Where("channel_id = ?", channelID).Find(&existing).Error; err != nil {
+		return fmt.Errorf("validate channel keys: %w", err)
+	}
+	sort.Slice(existing, func(i, j int) bool { return existing[i].ID < existing[j].ID })
+	values := make(map[int]string, len(existing))
+	for _, key := range existing {
+		values[key.ID] = key.ChannelKey
+	}
+
+	for _, keyID := range req.KeysToDelete {
+		if _, ok := values[keyID]; !ok {
+			return fmt.Errorf("%w: channel key %d not found", ErrNotFound, keyID)
+		}
+		delete(values, keyID)
+	}
+	for _, update := range req.KeysToUpdate {
+		if _, ok := values[update.ID]; !ok {
+			return fmt.Errorf("%w: channel key %d not found", ErrNotFound, update.ID)
+		}
+		if update.ChannelKey != nil {
+			values[update.ID] = strings.TrimSpace(*update.ChannelKey)
+		}
+	}
+
+	seen := make(map[string]int, len(values)+len(req.KeysToAdd))
+	for _, key := range existing {
+		value, ok := values[key.ID]
+		if !ok {
+			continue
+		}
+		if previous, exists := seen[value]; exists {
+			return fmt.Errorf("%w: channel %d contains duplicate credentials (key ids %d and %d)", ErrConflict, channelID, previous, key.ID)
+		}
+		seen[value] = key.ID
+	}
+	for i, key := range req.KeysToAdd {
+		value := strings.TrimSpace(key.ChannelKey)
+		if previous, exists := seen[value]; exists {
+			if previous > 0 {
+				return fmt.Errorf("%w: channel %d new key %d duplicates key id %d", ErrConflict, channelID, i, previous)
+			}
+			return fmt.Errorf("%w: channel %d contains duplicate new credentials", ErrConflict, channelID)
+		}
+		seen[value] = -(i + 1)
+	}
+	return nil
 }
 
 func validateChannelAuthenticationUpdate(current model.Channel, req *model.ChannelUpdateRequest) error {

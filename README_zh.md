@@ -125,6 +125,7 @@ Octopus 当前按**单应用实例**设计。调度器、粘性路由、熔断�
 [备份加密指南](docs/backup-encryption.md)。无论明文还是加密备份都应视同密钥；一旦泄露
 应立即轮换其中凭据。当前备份数据版本 2 支持 dry-run 和基于 UUID 的增量
 `reject`/`skip`/`replace`/`merge`；旧版数据版本 1 仍只支持恢复到空目标数据库。
+导入会兼容旧数据中的名称、URL、key 首尾空白、重复 key 和已删除分组的 API Key 模型项：只做安全规范化并保留凭据与权限范围，不会因为这些历史数据阻断恢复；新建或更新渠道、key、API Key 时会提前拒绝再次产生同类问题。
 
 当前候选版本已在 Go 1.26.5 上通过全仓 race、`go vet`、Go build/module verify、
 golangci-lint 2.12.2（0 issues）、Staticcheck 2026.1、deadcode 0.48.0、

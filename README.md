@@ -132,6 +132,11 @@ memory limit, and import procedure. Treat every plaintext or encrypted export
 as a secret, and rotate credentials after any exposure. Current payload version
 2 supports dry-run and UUID-based incremental `reject`/`skip`/`replace`/`merge`;
 legacy payload version 1 remains an empty-target restore format.
+The import boundary remains compatible with legacy names, URLs, and key
+whitespace, duplicate channel credentials, and API-key model entries for groups
+removed from the source: it applies safe normalization and preserves credentials
+and access scope instead of blocking the restore. New and updated channels,
+keys, and API keys reject the same problems before they are persisted.
 
 On Go 1.26.5, the current candidate has passed the full repository race suite,
 `go vet`, Go build/module verification, golangci-lint 2.12.2 with 0 issues,

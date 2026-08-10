@@ -113,6 +113,25 @@ func ValidateChannel(channel *Channel) error {
 		channel.RPMLimit, channel.MaxConcurrency, channel.Model, channel.CustomModel, channel.UserAgent)
 }
 
+// ValidateChannelKeyUniqueness rejects duplicate credentials in one channel.
+// Credentials are compared after the same whitespace normalization used by
+// ValidateChannel, so two values that would be persisted identically cannot
+// be added as separate routing candidates.
+func ValidateChannelKeyUniqueness(keys []ChannelKey) error {
+	seen := make(map[string]int, len(keys))
+	for i, key := range keys {
+		value := strings.TrimSpace(key.ChannelKey)
+		if value == "" {
+			continue
+		}
+		if previous, ok := seen[value]; ok {
+			return fmt.Errorf("channel key %d duplicates channel key %d", i, previous)
+		}
+		seen[value] = i
+	}
+	return nil
+}
+
 // ValidateChannelUpdate validates fields supplied by a partial channel update.
 func ValidateChannelUpdate(req *ChannelUpdateRequest) error {
 	if req == nil || req.ID <= 0 {
