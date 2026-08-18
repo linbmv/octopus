@@ -105,6 +105,74 @@ func TestAPIOperationsRequireExistingGroupReferences(t *testing.T) {
 	}
 }
 
+func TestAPIKeySupportedModelsAcceptRuntimeSuffixVariants(t *testing.T) {
+	initTestDB(t)
+	apiKeyCache.Clear()
+	apiKeyIDMap.Clear()
+
+	group := model.Group{Name: "suffix-base", Mode: model.GroupModeRoundRobin}
+	if err := GroupCreate(&group, context.Background()); err != nil {
+		t.Fatalf("GroupCreate() error = %v", err)
+	}
+	// 运行时 GetEnabledTree 会剥离能力后缀后再匹配分组，写入校验必须同样放行。
+	key := model.APIKey{
+		Name:            "suffix-key",
+		APIKey:          "sk-suffix-key",
+		SupportedModels: "suffix-base-thinking,suffix-base[1m],suffix-base",
+	}
+	if err := APIKeyCreate(&key, context.Background()); err != nil {
+		t.Fatalf("APIKeyCreate() with suffix variants error = %v", err)
+	}
+}
+
+func TestAPIKeyUpdateGrandfathersLegacySupportedModels(t *testing.T) {
+	initTestDB(t)
+	apiKeyCache.Clear()
+	apiKeyIDMap.Clear()
+
+	group := model.Group{Name: "legacy-group", Mode: model.GroupModeRoundRobin}
+	if err := GroupCreate(&group, context.Background()); err != nil {
+		t.Fatalf("GroupCreate() error = %v", err)
+	}
+	key := model.APIKey{Name: "legacy-key", APIKey: "sk-legacy-key", SupportedModels: group.Name}
+	if err := APIKeyCreate(&key, context.Background()); err != nil {
+		t.Fatalf("APIKeyCreate() error = %v", err)
+	}
+
+	// 模拟旧备份导入产生的失效引用：直接写库并同步缓存，绕过写入校验。
+	legacyModels := group.Name + ",grok"
+	if err := db.GetDB().Model(&model.APIKey{}).Where("id = ?", key.ID).
+		Update("supported_models", legacyModels).Error; err != nil {
+		t.Fatalf("seed legacy supported_models: %v", err)
+	}
+	seeded := key
+	seeded.SupportedModels = legacyModels
+	apiKeyCache.Set(seeded.ID, seeded)
+
+	// 保留历史失效条目、只改其他字段：必须成功，不能被 grok 卡死。
+	update := seeded
+	update.Name = "legacy-key-renamed"
+	if err := APIKeyUpdate(&update, context.Background()); err != nil {
+		t.Fatalf("APIKeyUpdate() keeping legacy entry error = %v", err)
+	}
+
+	// 新增另一个未知分组引用：仍然拒绝。
+	update.SupportedModels = legacyModels + ",another-unknown"
+	if err := APIKeyUpdate(&update, context.Background()); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("APIKeyUpdate() adding unknown entry error = %v, want ErrInvalidInput", err)
+	}
+
+	// 删除历史失效条目后再想加回来：按新规则拒绝。
+	update.SupportedModels = group.Name
+	if err := APIKeyUpdate(&update, context.Background()); err != nil {
+		t.Fatalf("APIKeyUpdate() removing legacy entry error = %v", err)
+	}
+	update.SupportedModels = legacyModels
+	if err := APIKeyUpdate(&update, context.Background()); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("APIKeyUpdate() re-adding removed legacy entry error = %v, want ErrInvalidInput", err)
+	}
+}
+
 func TestChannelUpdateMissingKeyRollsBackPatch(t *testing.T) {
 	initTestDB(t)
 	channel := validOperationChannel("before")

@@ -20,7 +20,7 @@ func APIKeyCreate(key *model.APIKey, ctx context.Context) error {
 	if err := model.ValidateAPIKey(key); err != nil {
 		return fmt.Errorf("%w: invalid API key: %v", ErrInvalidInput, err)
 	}
-	if err := validateAPIKeySupportedModels(key.SupportedModels, ctx); err != nil {
+	if err := validateAPIKeySupportedModels(key.SupportedModels, nil, ctx); err != nil {
 		return err
 	}
 	if key.APIKey == "" {
@@ -45,9 +45,6 @@ func APIKeyUpdate(key *model.APIKey, ctx context.Context) error {
 	if err := model.ValidateAPIKey(key); err != nil {
 		return fmt.Errorf("%w: invalid API key: %v", ErrInvalidInput, err)
 	}
-	if err := validateAPIKeySupportedModels(key.SupportedModels, ctx); err != nil {
-		return err
-	}
 	statsMu := statsLockFor(&statsService.apiKeyUpdateLocks, key.ID)
 	statsMu.Lock()
 	defer statsMu.Unlock()
@@ -55,6 +52,9 @@ func APIKeyUpdate(key *model.APIKey, ctx context.Context) error {
 	existing, ok := apiKeyCache.Get(key.ID)
 	if !ok {
 		return fmt.Errorf("%w: API key not found", ErrNotFound)
+	}
+	if err := validateAPIKeySupportedModels(key.SupportedModels, supportedModelSet(existing.SupportedModels), ctx); err != nil {
+		return err
 	}
 	result := db.GetDB().WithContext(ctx).Model(&model.APIKey{}).Where("id = ?", key.ID).Updates(map[string]any{
 		"name":             key.Name,
@@ -80,7 +80,11 @@ func APIKeyUpdate(key *model.APIKey, ctx context.Context) error {
 	return nil
 }
 
-func validateAPIKeySupportedModels(value string, ctx context.Context) error {
+// validateAPIKeySupportedModels 的接受规则必须与运行时 GetEnabledTree 一致：
+// 条目精确匹配分组名，或剥离能力后缀（-thinking、[1m] 等）后匹配分组名。
+// grandfathered 中的条目（更新前已存储的值，通常来自旧备份导入）即使已失效
+// 也放行，避免一条历史脏引用阻塞该 Key 其他字段的编辑。
+func validateAPIKeySupportedModels(value string, grandfathered map[string]struct{}, ctx context.Context) error {
 	if strings.TrimSpace(value) == "" {
 		return nil
 	}
@@ -94,11 +98,32 @@ func validateAPIKeySupportedModels(value string, ctx context.Context) error {
 	}
 	for _, part := range strings.Split(value, ",") {
 		name := strings.TrimSpace(part)
-		if _, ok := allowed[name]; !ok {
-			return fmt.Errorf("%w: API key supported model %q does not reference an existing group", ErrInvalidInput, name)
+		if _, ok := allowed[name]; ok {
+			continue
 		}
+		if base := stripModelSuffix(name); base != name {
+			if _, ok := allowed[base]; ok {
+				continue
+			}
+		}
+		if _, ok := grandfathered[name]; ok {
+			continue
+		}
+		return fmt.Errorf("%w: API key supported model %q does not reference an existing group; create the group first or remove this entry", ErrInvalidInput, name)
 	}
 	return nil
+}
+
+func supportedModelSet(value string) map[string]struct{} {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	set := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		set[strings.TrimSpace(part)] = struct{}{}
+	}
+	return set
 }
 
 func APIKeyList(ctx context.Context) ([]model.APIKey, error) {
