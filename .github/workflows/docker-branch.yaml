@@ -1,0 +1,116 @@
+name: docker-branch
+
+on:
+  push:
+    branches:
+      - 'integration/**'
+      - 'wip/**'
+  pull_request:
+    branches:
+      - 'integration/**'
+      - 'wip/**'
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: Push the built branch image to GHCR
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    name: branch image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'latest'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: '11.10.0'
+          cache: true
+          cache_dependency_path: web/pnpm-lock.yaml
+
+      - name: Build frontend
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build Linux binaries for Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            build/docker/linux/amd64 \
+            build/docker/linux/arm64 \
+            build/docker/linux/386 \
+            build/docker/linux/arm/v7
+
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+            go build -trimpath -tags=jsoniter -o build/docker/linux/amd64/octopus .
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+            go build -trimpath -tags=jsoniter -o build/docker/linux/arm64/octopus .
+          GOOS=linux GOARCH=386 CGO_ENABLED=0 \
+            go build -trimpath -tags=jsoniter -o build/docker/linux/386/octopus .
+          GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
+            go build -trimpath -tags=jsoniter -o build/docker/linux/arm/v7/octopus .
+
+          go run github.com/google/go-licenses/v2@v2.0.1 report . \
+            --ignore github.com/bestruirui/octopus > build/THIRD_PARTY_LICENSES.csv
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch,prefix=branch-
+            type=sha,prefix=branch-,format=short
+            type=ref,event=pr,prefix=pr-
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push_image)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build branch image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./scripts/dockerfile/Dockerfile
+          push: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push_image) }}
+          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            TARGETPLATFORM
