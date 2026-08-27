@@ -61,7 +61,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		}
 
 		// 客户端请求的模型名称即分组名称; 分组不存在说明模型名错误, 等待也不会出现该分组。
-		if _, err := op.GroupGetByName(metadata.Model); err != nil {
+		if _, err := op.GroupGetEnabledByName(metadata.Model); err != nil {
 			rejectRequest(c, inbound, errors.New("model not found"))
 			return
 		}
@@ -69,8 +69,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		// 登记进程内请求状态, 返回的记录是后续全部状态写入和前端可视化推送的入口。
 		request := newRequestState(metadata.Model, string(raw.Body), c.GetInt("api_key_id"))
 		ctx := c.Request.Context()
-		failedItemID := 0 // 当前累计连续失败次数的成员 ID。
-		failures := 0     // 该成员包含首次请求的连续失败次数。
+		type failedMember struct {
+			groupID int
+			itemID  int
+		}
+		failedKey := failedMember{} // 当前累计连续失败次数的叶子成员。
+		failures := 0               // 该叶子成员包含首次请求的连续失败次数。
 
 		for {
 			if ctx.Err() != nil {
@@ -79,8 +83,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 
 			// 分组配置和成员随时可改, 故每轮重新读取; 分组被删除时等待它重新出现。
-			group, err := op.GroupGetByName(metadata.Model)
-			if err != nil {
+			rootGroup, err := op.GroupGetByName(metadata.Model)
+			if err != nil || !rootGroup.Enabled {
 				if !request.wait(ctx, model.DefaultGroupRelayConfig().MemberRetryIntervalSeconds) {
 					return
 				}
@@ -89,13 +93,19 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 
 			// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员。
 			// 没有目标时等待重新选择, 期间人工切换渠道, 补齐成员或成员冷却到期即可让请求继续。
-			item := pickGroupItem(group)
-			if item.ID == 0 {
-				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+			target, err := pickGroupLeaf(ctx, rootGroup)
+			if err != nil && ctx.Err() != nil {
+				request.markCanceled(ctx.Err(), "", nil)
+				return
+			}
+			if target == nil {
+				if !request.wait(ctx, rootGroup.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
 				continue
 			}
+			group := target.group
+			item := target.item
 
 			channelModel := item.ChannelModel
 			if channelModel == nil {
@@ -181,13 +191,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				request.finishRound(err.Error())
 				// 父上下文结束说明客户端已经取消, 归还探测占用并以取消终态结束请求。
 				if ctx.Err() != nil {
-					releaseRouteProbe(group, item.ID)
+					releaseRouteProbePath(target.path)
 					request.markCanceled(ctx.Err(), "", nil)
 					return
 				}
 				// 仅人工中止本轮时不计失败也不等待; 响应超时属于真实失败并消耗尝试次数。
 				if context.Cause(roundCtx) == context.Canceled {
-					releaseRouteProbe(group, item.ID)
+					releaseRouteProbePath(target.path)
 					continue
 				}
 				cancelRound()
@@ -197,14 +207,15 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				_ = op.ChannelModelStatsUpdate(channelModel.ID, metrics)
 
 				// 成员改变时重新开始累计该成员在本请求内的连续失败次数。
-				if failedItemID == item.ID {
+				key := failedMember{groupID: group.ID, itemID: item.ID}
+				if failedKey == key {
 					failures++
 				} else {
-					failedItemID = item.ID
+					failedKey = key
 					failures = 1
 				}
 				// 达到总尝试次数时成员进入冷却并立即重新选路, 否则等待后重试。
-				if recordRouteFailure(group, item.ID, failures) {
+				if recordRouteFailurePath(target.path, failures) {
 					continue
 				}
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
@@ -216,7 +227,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			request.finishRound("")
 			roundWaitTime := time.Since(roundStartedAt).Milliseconds() // 流式响应只统计等待首帧的时间。
 			// 上游成功后解除该成员的冷却与探测占用, 并按路由配置开始亲和。
-			recordRouteSuccess(group, item.ID)
+			recordRouteSuccessPath(target.path)
 			// 同协议透传时原样返回上游响应头; 跨协议响应没有需要透传的响应头。
 			for key, values := range result.header {
 				c.Writer.Header()[key] = values

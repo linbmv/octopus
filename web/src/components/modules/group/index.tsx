@@ -81,7 +81,7 @@ export function Group() {
                 for (const cooldownUntil of Object.values(group.runtime?.cooldowns ?? {})) {
                     deadline = Math.max(deadline, cooldownUntil);
                 }
-                return <GroupCard group={group} now={deadline > runtimeNow ? runtimeNow : deadline} />;
+                return <GroupCard group={group} allGroups={groups ?? []} now={deadline > runtimeNow ? runtimeNow : deadline} />;
             }}
         />
     );

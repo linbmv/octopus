@@ -1,5 +1,5 @@
 import { memo, useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Trash2, X, Pencil } from 'lucide-react';
+import { Trash2, X, Pencil, Power } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { type Group, type GroupUpdateRequest, useDeleteGroup, useUpdateGroup, useUpdateGroupActiveItem } from '@/api/group';
 import { useChannelList } from '@/api/channel';
@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import type { SelectedMember } from './ItemList';
 import { MemberList } from './ItemList';
 import { GroupEditor, type GroupEditorValues } from './Editor';
+import { cn } from '@/lib/utils';
 import {
     MorphingDialog,
     MorphingDialogClose,
@@ -45,6 +46,7 @@ function EditDialogContent({ group, displayMembers, isSubmitting, onSubmit }: Ed
                 <GroupEditor
                     key={`edit-group-${group.id}`}
                     initial={{
+                        id: group.id,
                         name: group.name,
                         mode: group.mode,
                         relay_config: group.relay_config,
@@ -61,7 +63,7 @@ function EditDialogContent({ group, displayMembers, isSubmitting, onSubmit }: Ed
     );
 }
 
-export const GroupCard = memo(function GroupCard({ group, now }: { group: Group; now: number }) {
+export const GroupCard = memo(function GroupCard({ group, allGroups, now }: { group: Group; allGroups: Group[]; now: number }) {
     const t = useTranslations('group');
     const updateGroup = useUpdateGroup();
     const updateActiveItem = useUpdateGroupActiveItem();
@@ -81,22 +83,40 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         });
         return map;
     }, [channelsData]);
+    const groupByID = useMemo(() => new Map(
+        allGroups.filter((candidate) => candidate.id !== undefined).map((candidate) => [candidate.id!, candidate])
+    ), [allGroups]);
 
     const displayMembers = useMemo((): SelectedMember[] =>
         (group.items || []).map((item) => {
+            if (item.type === 'group') {
+                const target = item.target_group_id === undefined ? undefined : groupByID.get(item.target_group_id);
+                return {
+                    id: `group:${item.target_group_id ?? item.id ?? 0}`,
+                    type: 'group',
+                    target_group_id: item.target_group_id,
+                    name: target?.name ?? `Group ${item.target_group_id ?? '?'}`,
+                    enabled: target?.enabled ?? false,
+                    disabled: item.disabled,
+                    channel_name: t('form.nestedGroup'),
+                    item_id: item.id,
+                };
+            }
             const channelModel = item.channel_model;
-            const channel = channelByModelID.get(item.channel_model_id);
+            const channel = item.channel_model_id === undefined ? undefined : channelByModelID.get(item.channel_model_id);
             return {
-                id: String(item.channel_model_id),
+                id: `model:${item.channel_model_id ?? item.id ?? 0}`,
+                type: 'channel_model',
                 channel_model_id: item.channel_model_id,
                 name: channelModel?.name ?? `Model ${item.channel_model_id}`,
                 enabled: channel?.enabled ?? true,
+                disabled: item.disabled,
                 channel_id: channelModel?.channel_id ?? 0,
                 channel_name: channel?.channel_name ?? 'Unknown channel',
                 item_id: item.id,
             };
         }),
-        [group.items, channelByModelID]
+        [group.items, channelByModelID, groupByID, t]
     );
 
     useEffect(() => {
@@ -139,6 +159,16 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
         updateActiveItem.mutate({ groupId: group.id, itemId }, { onSuccess, onError });
     }, [group.active_item_id, group.id, group.mode, onError, onSuccess, updateActiveItem]);
 
+    const handleToggleGroup = useCallback(() => {
+        if (!group.id || updateGroup.isPending) return;
+        updateGroup.mutate({ id: group.id, enabled: !group.enabled }, { onSuccess, onError });
+    }, [group.enabled, group.id, onError, onSuccess, updateGroup]);
+
+    const handleToggleMember = useCallback((itemId: number, disabled: boolean) => {
+        if (!group.id || updateGroup.isPending) return;
+        updateGroup.mutate({ id: group.id, items_to_update: [{ id: itemId, disabled }] }, { onSuccess, onError });
+    }, [group.id, onError, onSuccess, updateGroup]);
+
     const handleSubmitEdit = useCallback((values: GroupEditorValues, onDone?: () => void) => {
         if (!group.id) return;
 
@@ -160,7 +190,9 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
             .map((m, idx) => ({ m, priority: idx + 1 }))
             .filter(({ m }) => typeof m.item_id !== 'number')
             .map(({ m, priority }) => ({
+                type: m.type,
                 channel_model_id: m.channel_model_id,
+                target_group_id: m.target_group_id,
                 priority,
             }));
 
@@ -208,14 +240,32 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
     return (
     <article className="flex flex-col rounded-3xl border border-border bg-card text-card-foreground p-4">
             <header className="flex items-start justify-between mb-3 relative overflow-visible rounded-xl -mx-1 px-1 -my-1 py-1">
-                <div className="relative flex-1 mr-2 min-w-0 group/title">
+                <div className="relative flex flex-1 items-center gap-2 mr-2 min-w-0 group/title">
                     <Tooltip>
                         <TooltipTrigger asChild>
-                            <h3 className="text-lg font-bold truncate">{group.name}</h3>
+                            <button
+                                type="button"
+                                aria-pressed={group.enabled}
+                                aria-label={group.enabled ? t('detail.actions.disableGroup') : t('detail.actions.enableGroup')}
+                                disabled={!group.id || updateGroup.isPending}
+                                onClick={handleToggleGroup}
+                                className={cn(
+                                    'flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50',
+                                    group.enabled ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                )}
+                            >
+                                <Power className="size-4" />
+                            </button>
                         </TooltipTrigger>
-                        <TooltipContent key={group.name} side="top" sideOffset={10} align="center">
-                            {group.name}
+                        <TooltipContent side="top" sideOffset={10} align="center">
+                            {group.enabled ? t('detail.actions.disableGroup') : t('detail.actions.enableGroup')}
                         </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <h3 className={cn('text-lg font-bold truncate', !group.enabled && 'text-muted-foreground')}>{group.name}</h3>
+                        </TooltipTrigger>
+                        <TooltipContent key={group.name} side="top" sideOffset={10} align="center">{group.name}</TooltipContent>
                     </Tooltip>
                 </div>
 
@@ -294,6 +344,7 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                     onReorder={setMembers}
                     onRemove={handleRemoveMember}
                     onActivate={group.mode === 'manual' ? handleActivate : undefined}
+                    onToggleDisabled={handleToggleMember}
                     activeItemId={group.mode === 'failover' ? group.runtime?.current_item_id : group.active_item_id}
                     group={group}
                     now={now}

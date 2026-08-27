@@ -64,6 +64,8 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 	if dump == nil {
 		return nil, fmt.Errorf("empty dump")
 	}
+	groupMutationMu.Lock()
+	defer groupMutationMu.Unlock()
 
 	if dump.Version != 0 && dump.Version != dbDumpVersion {
 		return nil, fmt.Errorf("unsupported dump version: %d", dump.Version)
@@ -100,6 +102,13 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			return fmt.Errorf("import group_items: %w", err)
 		} else {
 			res.RowsAffected["group_items"] = n
+		}
+		// Imports can contain nested group members as well as the regular
+		// channel-model members. Validate the complete graph before committing so
+		// an import cannot introduce self references, cycles, missing targets, or
+		// a nesting depth the relay cannot safely expand.
+		if err := validateGroupGraph(tx); err != nil {
+			return fmt.Errorf("import group graph: %w", err)
 		}
 		if n, err := createUpsertAll(tx, dump.LLMInfos, []clause.Column{{Name: "name"}}); err != nil {
 			return fmt.Errorf("import llm_infos: %w", err)

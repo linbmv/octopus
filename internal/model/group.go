@@ -59,27 +59,41 @@ func NormalizeGroupRelayConfig(config *GroupRelayConfig) {
 
 // 客户端模型名称及其可手动选择或故障转移的上游分组。
 type Group struct {
-	ID             int              `json:"id" gorm:"primaryKey"`                                                          // 分组主键。
-	Name           string           `json:"name" gorm:"unique;not null"`                                                   // 客户端请求使用的模型名称。
-	Mode           GroupMode        `json:"mode" gorm:"not null;default:manual" binding:"omitempty,oneof=manual failover"` // 选择成员的模式。
-	ActiveItemID   int              `json:"active_item_id" gorm:"not null;default:0"`                                   // 手动模式指定的成员，故障转移模式忽略该值，0 表示未指定。
-	RelayConfig    GroupRelayConfig `json:"relay_config" gorm:"serializer:json"`                                           // 该分组的 Relay 路由配置。
-	Items          []GroupItem      `json:"items,omitempty" gorm:"foreignKey:GroupID;constraint:OnDelete:CASCADE"`      // 该分组可手动选择或故障转移的分组项。
+	ID           int              `json:"id" gorm:"primaryKey"`                                                          // 分组主键。
+	Name         string           `json:"name" gorm:"unique;not null"`                                                   // 客户端请求使用的模型名称。
+	Enabled      bool             `json:"enabled" gorm:"not null;default:true"`                                          // 临时禁用时保留配置，但不再作为可用模型或嵌套目标参与路由。
+	Mode         GroupMode        `json:"mode" gorm:"not null;default:manual" binding:"omitempty,oneof=manual failover"` // 选择成员的模式。
+	ActiveItemID int              `json:"active_item_id" gorm:"not null;default:0"`                                      // 手动模式指定的成员，故障转移模式忽略该值，0 表示未指定。
+	RelayConfig  GroupRelayConfig `json:"relay_config" gorm:"serializer:json"`                                           // 该分组的 Relay 路由配置。
+	Items        []GroupItem      `json:"items,omitempty" gorm:"foreignKey:GroupID;constraint:OnDelete:CASCADE"`         // 该分组可手动选择或故障转移的分组项。
 }
 
-// 分组内一个可选择的渠道模型分组项。
+// GroupItemType 区分直接渠道模型成员和嵌套分组成员。
+type GroupItemType string
+
+const (
+	GroupItemTypeChannelModel GroupItemType = "channel_model"
+	GroupItemTypeGroup        GroupItemType = "group"
+)
+
+// 分组内一个可选择的渠道模型或嵌套分组项。
 type GroupItem struct {
-	ID             int           `json:"id" gorm:"primaryKey"`                                                                    // 分组项主键。
-	GroupID        int           `json:"group_id" gorm:"not null;index:idx_group_channel_model,unique"`                           // 所属分组 ID。
-	ChannelModelID int           `json:"channel_model_id" gorm:"not null;index:idx_group_channel_model,unique"`                  // 引用的渠道模型 ID。
+	ID             int           `json:"id" gorm:"primaryKey"`                                                                               // 分组项主键。
+	GroupID        int           `json:"group_id" gorm:"not null;uniqueIndex:idx_group_channel_model;uniqueIndex:idx_group_target"`          // 所属分组 ID。
+	Type           GroupItemType `json:"type" gorm:"not null;default:channel_model"`                                                         // 成员类型。
+	ChannelModelID *int          `json:"channel_model_id,omitempty" gorm:"uniqueIndex:idx_group_channel_model"`                              // 渠道模型成员引用的渠道模型 ID。
 	ChannelModel   *ChannelModel `json:"channel_model,omitempty" gorm:"foreignKey:ChannelModelID;references:ID;constraint:OnDelete:CASCADE"` // 分组项引用的渠道模型。
-	Priority       int           `json:"priority" gorm:"not null"`                                                                // Priority 决定界面展示和故障转移模式下的成员切换顺序。
+	TargetGroupID  *int          `json:"target_group_id,omitempty" gorm:"uniqueIndex:idx_group_target"`                                      // 嵌套成员引用的分组 ID。
+	TargetGroup    *Group        `json:"-" gorm:"foreignKey:TargetGroupID;references:ID;constraint:OnDelete:RESTRICT"`                       // 仅用于数据库外键，不递归序列化。
+	Priority       int           `json:"priority" gorm:"not null"`                                                                           // Priority 决定界面展示和故障转移模式下的成员切换顺序。
+	Disabled       bool          `json:"disabled" gorm:"not null;default:false"`                                                             // 临时禁用该成员，不影响其渠道模型或目标分组本身。
 }
 
 // 分组普通配置和成员变更请求。
 type GroupUpdateRequest struct {
 	ID            int                      `json:"id" binding:"required"`                                    // 待更新的分组主键。
 	Name          *string                  `json:"name,omitempty"`                                           // Name 仅在名称变更时发送。
+	Enabled       *bool                    `json:"enabled,omitempty"`                                        // Enabled 仅在临时启用状态变更时发送。
 	Mode          *GroupMode               `json:"mode,omitempty" binding:"omitempty,oneof=manual failover"` // Mode 仅在选择模式变更时发送。
 	RelayConfig   *GroupRelayConfig        `json:"relay_config,omitempty"`                                   // RelayConfig 仅在 Relay 配置变更时发送完整配置。
 	ItemsToAdd    []GroupItemAddRequest    `json:"items_to_add,omitempty"`                                   // 待新增的分组项。
@@ -94,12 +108,15 @@ type GroupActiveItemUpdateRequest struct {
 
 // 新增分组项请求。
 type GroupItemAddRequest struct {
-	ChannelModelID int `json:"channel_model_id" binding:"required"` // 待引用的渠道模型 ID。
-	Priority       int `json:"priority,omitempty"`                   // 分组项的界面展示和故障转移顺序。
+	Type           GroupItemType `json:"type,omitempty" binding:"omitempty,oneof=channel_model group"` // 待新增成员类型，省略时兼容为渠道模型。
+	ChannelModelID int           `json:"channel_model_id,omitempty"`                                   // 渠道模型成员引用的渠道模型 ID。
+	TargetGroupID  int           `json:"target_group_id,omitempty"`                                    // 嵌套成员引用的分组 ID。
+	Priority       int           `json:"priority,omitempty"`                                           // 分组项的界面展示和故障转移顺序。
 }
 
-// 分组项展示和故障转移顺序更新请求。
+// 分组项展示顺序和临时启用状态更新请求。
 type GroupItemUpdateRequest struct {
-	ID       int `json:"id" binding:"required"` // 待更新的分组项主键。
-	Priority int `json:"priority,omitempty"`    // 新的界面展示和故障转移顺序。
+	ID       int   `json:"id" binding:"required"` // 待更新的分组项主键。
+	Priority int   `json:"priority,omitempty"`    // 新的界面展示和故障转移顺序，0 表示不变。
+	Disabled *bool `json:"disabled,omitempty"`    // 临时禁用状态。
 }

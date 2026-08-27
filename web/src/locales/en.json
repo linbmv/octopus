@@ -329,6 +329,8 @@
         "card": {
             "empty": "No rules",
             "activate": "Set as active",
+            "enableMember": "Enable this member",
+            "disableMember": "Disable this member",
             "cooling": "Cooling {seconds}s",
             "affinity": "Affinity {seconds}s"
         },
@@ -338,6 +340,8 @@
                 "cancel": "Cancel",
                 "save": "Save",
                 "copyName": "Copy Name",
+                "enableGroup": "Enable group",
+                "disableGroup": "Disable group",
                 "delete": "Delete",
                 "confirmDelete": "Confirm Delete"
             }
@@ -364,6 +368,8 @@
             "affinityHint": "Time to keep the fallback member after its first successful request",
             "items": "Member Order",
             "addItem": "Add Model",
+            "nestedGroups": "Nested Groups",
+            "nestedGroup": "Nested group",
             "autoAdd": "Auto Add",
             "clear": "Clear"
         }

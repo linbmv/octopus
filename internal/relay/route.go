@@ -22,7 +22,7 @@ type RouteState struct {
 const routeStreamBuffer = 16 // 单个路由流连接的非阻塞消息缓冲容量。
 
 var (
-	routeMu      sync.Mutex                      // routeMu 保护全部分组路由状态。
+	routeMu      sync.Mutex                           // routeMu 保护全部分组路由状态。
 	routes       = make(map[int]*RouteState)          // routes 按分组 ID 保存路由状态。
 	routeStreams = make(map[chan RouteState]struct{}) // 全部路由 SSE 连接。
 )
@@ -30,9 +30,18 @@ var (
 // pickGroupItem 按分组模式选择本轮目标成员, 没有可用成员时返回零值; group.Items 已按 Priority 升序排列。
 // 渠道是否可用不在此判断: 渠道禁用或缺少密钥由调用方发现并作为一轮失败上报, 该成员随即进入冷却而在后续轮次被跳过。
 func pickGroupItem(group model.Group) model.GroupItem {
+	return pickGroupItemSkipping(group, nil)
+}
+
+// pickGroupItemSkipping 与 pickGroupItem 相同，但允许一次展开过程暂时跳过
+// 已知不可用的嵌套成员。临时禁用的子分组不是上游故障，不应被写入冷却。
+func pickGroupItemSkipping(group model.Group, skipped map[int]struct{}) model.GroupItem {
+	if !group.Enabled {
+		return model.GroupItem{}
+	}
 	if group.Mode == model.GroupModeManual {
 		for _, item := range group.Items {
-			if item.ID == group.ActiveItemID {
+			if item.ID == group.ActiveItemID && !item.Disabled && !isSkippedItem(skipped, item.ID) {
 				return item
 			}
 		}
@@ -49,11 +58,14 @@ func pickGroupItem(group model.Group) model.GroupItem {
 	}
 
 	// 亲和期内沿用当前成员, 不提前探测已恢复的高优先级成员。
-	if route.CurrentItemID != 0 && route.AffinityUntil > now {
+	if route.CurrentItemID != 0 && route.AffinityUntil > now && !isSkippedItem(skipped, route.CurrentItemID) {
 		return itemOf(group, route.CurrentItemID)
 	}
 
 	for _, item := range group.Items {
+		if item.Disabled || isSkippedItem(skipped, item.ID) {
+			continue
+		}
 		// 遍历到当前成员说明比它优先级更高的成员都不可选, 沿用当前成员。
 		if item.ID == route.CurrentItemID {
 			break
@@ -76,9 +88,20 @@ func pickGroupItem(group model.Group) model.GroupItem {
 		return item
 	}
 	if route.CurrentItemID != 0 {
+		if isSkippedItem(skipped, route.CurrentItemID) {
+			return model.GroupItem{}
+		}
 		return itemOf(group, route.CurrentItemID)
 	}
 	return model.GroupItem{}
+}
+
+func isSkippedItem(skipped map[int]struct{}, itemID int) bool {
+	if len(skipped) == 0 {
+		return false
+	}
+	_, ok := skipped[itemID]
+	return ok
 }
 
 // recordRouteSuccess 上报一轮成功: 结束该成员的冷却与探测占用, 并在故障切换后按配置开始亲和。
@@ -174,7 +197,9 @@ func groupRouteLocked(group model.Group) *RouteState {
 	}
 	items := make(map[int]bool, len(group.Items))
 	for _, item := range group.Items {
-		items[item.ID] = true
+		if !item.Disabled {
+			items[item.ID] = true
+		}
 	}
 	for itemID := range route.Cooldowns {
 		if !items[itemID] {
@@ -195,7 +220,7 @@ func groupRouteLocked(group model.Group) *RouteState {
 // itemOf 返回分组内指定 ID 的成员, 不存在时返回零值。
 func itemOf(group model.Group, itemID int) model.GroupItem {
 	for _, item := range group.Items {
-		if item.ID == itemID {
+		if item.ID == itemID && !item.Disabled {
 			return item
 		}
 	}

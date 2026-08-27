@@ -303,7 +303,7 @@ func migrateLegacyGroupItems(db *gorm.DB, modelsByKey map[channelModelKey]*model
 		items = append(items, model.GroupItem{
 			ID:             item.ID,
 			GroupID:        item.GroupID,
-			ChannelModelID: channelModel.ID,
+			ChannelModelID: &channelModel.ID,
 			Priority:       item.Priority,
 		})
 	}

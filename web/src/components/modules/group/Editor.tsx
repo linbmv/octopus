@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type FormEvent } from 'react';
-import { Check, ChevronDownIcon, HelpCircle, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
+import { Check, ChevronDownIcon, HelpCircle, Network, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import * as AccordionPrimitive from '@radix-ui/react-accordion';
 import { useChannelList } from '@/api/channel';
@@ -12,10 +12,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { getModelIcon } from '@/lib/model-icons';
-import type { GroupMode, GroupRelayConfig } from '@/api/group';
+import { useGroupList, type GroupMode, type GroupRelayConfig } from '@/api/group';
 import type { SelectedMember } from './ItemList';
 import { MemberList } from './ItemList';
-import { matchesGroupName, memberKey, normalizeKey } from './utils';
+import { canAddNestedGroup, matchesGroupName, memberKey, normalizeKey } from './utils';
 
 export type GroupEditorValues = {
     name: string;
@@ -50,12 +50,14 @@ function FieldHelp({ text }: { text: string }) {
 
 function ModelPickerSection({
     modelChannels,
+    nestedGroups,
     selectedMembers,
     onAdd,
     onAutoAdd,
     autoAddDisabled,
 }: {
     modelChannels: SelectedMember[];
+    nestedGroups: SelectedMember[];
     selectedMembers: SelectedMember[];
     onAdd: (channel: SelectedMember) => void;
     onAutoAdd: () => void;
@@ -70,6 +72,7 @@ function ModelPickerSection({
     const channels = useMemo(() => {
         const byId = new Map<number, { id: number; name: string; models: SelectedMember[] }>();
         modelChannels.forEach((mc) => {
+            if (mc.channel_id === undefined) return;
             const existing = byId.get(mc.channel_id);
             if (existing) existing.models.push(mc);
             else byId.set(mc.channel_id, { id: mc.channel_id, name: mc.channel_name, models: [mc] });
@@ -93,6 +96,9 @@ function ModelPickerSection({
             return acc;
         }, []);
     }, [channels, normalizedSearch]);
+    const filteredGroups = useMemo(() => nestedGroups.filter((group) =>
+        !normalizedSearch || group.name.toLowerCase().includes(normalizedSearch)
+    ), [nestedGroups, normalizedSearch]);
 
     return (
         <div className="rounded-xl border border-border/50 bg-muted/30 flex flex-col min-h-0">
@@ -129,6 +135,34 @@ function ModelPickerSection({
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto p-2">
+                {filteredGroups.length > 0 && (
+                    <div className="mb-3 space-y-1.5">
+                        <div className="px-1 text-xs font-medium text-muted-foreground">{t('form.nestedGroups')}</div>
+                        {filteredGroups.map((group) => {
+                            const isSelected = selectedKeys.has(memberKey(group));
+                            return (
+                                <button
+                                    key={memberKey(group)}
+                                    type="button"
+                                    onClick={() => !isSelected && onAdd(group)}
+                                    disabled={isSelected}
+                                    className={cn(
+                                        'w-full flex items-center justify-between gap-2 rounded-lg border border-border/50 bg-background px-2.5 py-2 text-left transition-colors',
+                                        isSelected ? 'opacity-60 cursor-not-allowed' : 'hover:bg-muted'
+                                    )}
+                                >
+                                    <span className="flex items-center gap-2 min-w-0">
+                                        <Network className="size-4 shrink-0 text-primary" />
+                                        <span className="text-sm font-medium truncate">{group.name}</span>
+                                    </span>
+                                    <span className="shrink-0 text-muted-foreground">
+                                        {isSelected ? <Check className="size-4 text-primary" /> : <Plus className="size-4" />}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
                 <Accordion type="multiple" className="w-full space-y-2">
                     {filteredChannels.map((channel) => {
                         const total = channel.models.length;
@@ -256,6 +290,7 @@ export function GroupEditor({
     onCancel,
 }: {
     initial?: {
+        id?: number;
         name?: string;
         mode?: GroupMode;
         relay_config?: Partial<GroupRelayConfig>;
@@ -269,16 +304,31 @@ export function GroupEditor({
 }) {
     const t = useTranslations('group');
     const { data: channelsData = [] } = useChannelList();
+    const { data: groupsData = [] } = useGroupList();
     const modelChannels = useMemo<SelectedMember[]>(() => channelsData.flatMap(({ raw: channel }) =>
         channel.models.map((channelModel) => ({
-            id: String(channelModel.id),
+            id: `model:${channelModel.id}`,
+            type: 'channel_model',
             channel_model_id: channelModel.id,
             name: channelModel.name,
             enabled: channel.enabled,
+            disabled: false,
             channel_id: channelModel.channel_id,
             channel_name: channel.name,
         }))
     ), [channelsData]);
+    const nestedGroups = useMemo<SelectedMember[]>(() => groupsData
+        .filter((group) => group.id !== undefined && group.id !== initial?.id)
+        .filter((group) => canAddNestedGroup(groupsData, initial?.id, group.id!))
+        .map((group) => ({
+            id: `group:${group.id}`,
+            type: 'group',
+            target_group_id: group.id,
+            name: group.name,
+            enabled: group.enabled,
+            disabled: false,
+            channel_name: t('form.nestedGroup'),
+        })), [groupsData, initial?.id, t]);
 
     const [groupName, setGroupName] = useState(initial?.name ?? '');
     const [mode, setMode] = useState<GroupMode>(initial?.mode ?? 'manual');
@@ -392,6 +442,7 @@ export function GroupEditor({
                             <div className="grid h-full min-h-0 grid-cols-1 gap-4 md:grid-cols-2">
                                 <ModelPickerSection
                                     modelChannels={modelChannels}
+                                    nestedGroups={nestedGroups}
                                     selectedMembers={selectedMembers}
                                     onAdd={handleAddMember}
                                     onAutoAdd={handleAutoAdd}

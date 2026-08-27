@@ -329,6 +329,8 @@
         "card": {
             "empty": "暂无规则",
             "activate": "设为活动项",
+            "enableMember": "启用此成员",
+            "disableMember": "禁用此成员",
             "cooling": "冷却 {seconds}s",
             "affinity": "亲和 {seconds}s"
         },
@@ -338,6 +340,8 @@
                 "cancel": "取消",
                 "save": "保存",
                 "copyName": "复制名称",
+                "enableGroup": "启用分组",
+                "disableGroup": "禁用分组",
                 "delete": "删除",
                 "confirmDelete": "确认删除"
             }
@@ -364,6 +368,8 @@
             "affinityHint": "备用成员首次请求成功后继续使用该成员的时间",
             "items": "成员顺序",
             "addItem": "添加模型",
+            "nestedGroups": "嵌套分组",
+            "nestedGroup": "嵌套分组",
             "autoAdd": "自动添加",
             "clear": "清空"
         }

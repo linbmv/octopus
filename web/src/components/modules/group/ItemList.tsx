@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Layers, GripVertical, X, Trash2 } from 'lucide-react';
+import { Layers, GripVertical, Network, Power, X, Trash2 } from 'lucide-react';
 import {
     DragDropContext,
     Draggable,
@@ -17,10 +17,13 @@ import { MemberStatus } from './MemberStatus';
 
 export interface SelectedMember {
     id: string;
-    channel_model_id: number;
+    type: 'channel_model' | 'group';
+    channel_model_id?: number;
+    target_group_id?: number;
     name: string;
     enabled: boolean;
-    channel_id: number;
+    disabled?: boolean;
+    channel_id?: number;
     channel_name: string;
     item_id?: number;
 }
@@ -44,6 +47,7 @@ function MemberItem({
     member,
     onRemove,
     onActivate,
+    onToggleDisabled,
     isActive,
     group,
     now,
@@ -55,6 +59,7 @@ function MemberItem({
     member: SelectedMember;
     onRemove: (id: string) => void;
     onActivate?: (itemId: number) => void;
+    onToggleDisabled?: (itemId: number, disabled: boolean) => void;
     isActive?: boolean;
     group?: Group; // group 提供成员当前的冷却和亲和时间。
     now: number; // now 是成员列表共享的当前 Unix 毫秒时间。
@@ -64,10 +69,13 @@ function MemberItem({
     dnd: MemberItemDnd;
 }) {
     const t = useTranslations('group');
-    const { Icon, className: iconClassName } = getModelIcon(member.name);
+    const modelIcon = getModelIcon(member.name);
+    const Icon = member.type === 'group' ? Network : modelIcon.Icon;
+    const iconClassName = member.type === 'group' ? 'text-primary' : modelIcon.className;
     const [confirmDelete, setConfirmDelete] = useState(false);
-    const isDisabled = member.enabled === false;
-    const activationTitle = onActivate && member.item_id !== undefined && !isActive
+    const memberDisabled = member.disabled === true;
+    const isDisabled = memberDisabled || member.enabled === false;
+    const activationTitle = onActivate && member.item_id !== undefined && !isActive && !isDisabled
         ? t('card.activate')
         : undefined;
 
@@ -94,14 +102,14 @@ function MemberItem({
                 isDisabled && 'opacity-60 grayscale',
                 onActivate && member.item_id !== undefined && 'cursor-pointer'
             )}
-                onClick={() => member.item_id !== undefined && onActivate?.(member.item_id)}
+                onClick={() => !isDisabled && member.item_id !== undefined && onActivate?.(member.item_id)}
                 onKeyDown={(event) => {
-                    if (event.target !== event.currentTarget || member.item_id === undefined || !onActivate || (event.key !== 'Enter' && event.key !== ' ')) return;
+                    if (isDisabled || event.target !== event.currentTarget || member.item_id === undefined || !onActivate || (event.key !== 'Enter' && event.key !== ' ')) return;
                     event.preventDefault();
                     onActivate(member.item_id);
                 }}
-                role={onActivate && member.item_id !== undefined ? 'button' : undefined}
-                tabIndex={onActivate && member.item_id !== undefined ? 0 : undefined}
+                role={onActivate && member.item_id !== undefined && !isDisabled ? 'button' : undefined}
+                tabIndex={onActivate && member.item_id !== undefined && !isDisabled ? 0 : undefined}
                 title={activationTitle}
             >
                 <div
@@ -140,6 +148,33 @@ function MemberItem({
                 </div>
 
                 {group && <MemberStatus group={group} itemId={member.item_id} now={now} active={isActive} activeClassName="p-1" />}
+
+                {onToggleDisabled && member.item_id !== undefined && (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                aria-pressed={!memberDisabled}
+                                aria-label={memberDisabled ? t('card.enableMember') : t('card.disableMember')}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onToggleDisabled(member.item_id!, !memberDisabled);
+                                }}
+                                className={cn(
+                                    'p-1 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                                    memberDisabled
+                                        ? 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                        : 'text-primary hover:bg-primary/10'
+                                )}
+                            >
+                                <Power className="size-3.5" />
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" sideOffset={10} align="center">
+                            {memberDisabled ? t('card.enableMember') : t('card.disableMember')}
+                        </TooltipContent>
+                    </Tooltip>
+                )}
 
                 {(!showConfirmDelete || !confirmDelete) && (
                     <motion.button
@@ -199,6 +234,7 @@ interface MemberListProps {
     onReorder: (members: SelectedMember[]) => void;
     onRemove: (id: string) => void;
     onActivate?: (itemId: number) => void;
+    onToggleDisabled?: (itemId: number, disabled: boolean) => void;
     activeItemId?: number;
     group?: Group; // group 提供当前模式和成员运行状态。
     now?: number; // now 是页面共享的当前 Unix 毫秒时间，仅展示运行态时需要。
@@ -233,6 +269,7 @@ export function MemberList({
     onReorder,
     onRemove,
     onActivate,
+    onToggleDisabled,
     activeItemId,
     group,
     now = 0,
@@ -328,6 +365,7 @@ export function MemberList({
                                 member={members[rubric.source.index]}
                                 onRemove={onRemove}
                                 onActivate={onActivate}
+                                onToggleDisabled={onToggleDisabled}
                                 isActive={members[rubric.source.index].item_id === activeItemId}
                                 group={group}
                                 now={now}
@@ -361,6 +399,7 @@ export function MemberList({
                                                 member={member}
                                                 onRemove={onRemove}
                                                 onActivate={onActivate}
+                                                onToggleDisabled={onToggleDisabled}
                                                 isActive={member.item_id === activeItemId}
                                                 group={group}
                                                 now={now}

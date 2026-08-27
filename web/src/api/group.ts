@@ -6,6 +6,7 @@ import type { ChannelModel } from './channel';
 
 // GroupMode 表示分组的手动或故障转移路由模式。
 export type GroupMode = 'manual' | 'failover';
+export type GroupItemType = 'channel_model' | 'group';
 
 // GroupRelayConfig 保存分组 Relay 配置。
 export interface GroupRelayConfig {
@@ -21,9 +22,12 @@ export interface GroupRelayConfig {
 export interface GroupItem {
     id?: number;
     group_id?: number;
-    channel_model_id: number;
+    type: GroupItemType;
+    channel_model_id?: number;
     channel_model?: ChannelModel;
+    target_group_id?: number;
     priority: number;
+    disabled: boolean;
 }
 
 // GroupRuntimeStatus 表示 Relay 当前进程内的实时路由状态。
@@ -39,6 +43,7 @@ export interface GroupRuntimeStatus {
 export interface Group {
     id?: number;
     name: string;
+    enabled: boolean;
     mode: GroupMode;
     active_item_id: number;
     relay_config: GroupRelayConfig;
@@ -48,20 +53,24 @@ export interface Group {
 
 // GroupItemAddRequest 是待新增的分组项。
 interface GroupItemAddRequest {
-    channel_model_id: number;
+    type: GroupItemType;
+    channel_model_id?: number;
+    target_group_id?: number;
     priority: number;
 }
 
 // GroupItemUpdateRequest 是待更新展示和故障转移顺序的分组项。
 interface GroupItemUpdateRequest {
     id: number;
-    priority: number;
+    priority?: number;
+    disabled?: boolean;
 }
 
 // GroupUpdateRequest 是分组普通配置和成员变更。
 export interface GroupUpdateRequest {
     id: number;
     name?: string;
+    enabled?: boolean;
     mode?: GroupMode;
     relay_config?: GroupRelayConfig;
     items_to_add?: GroupItemAddRequest[];

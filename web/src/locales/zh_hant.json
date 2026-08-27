@@ -329,6 +329,8 @@
         "card": {
             "empty": "暫無規則",
             "activate": "設為活動項",
+            "enableMember": "啟用此成員",
+            "disableMember": "停用此成員",
             "cooling": "冷卻 {seconds}s",
             "affinity": "親和 {seconds}s"
         },
@@ -338,6 +340,8 @@
                 "cancel": "取消",
                 "save": "儲存",
                 "copyName": "複製名稱",
+                "enableGroup": "啟用分組",
+                "disableGroup": "停用分組",
                 "delete": "刪除",
                 "confirmDelete": "確認刪除"
             }
@@ -364,6 +368,8 @@
             "affinityHint": "備用成員首次請求成功後繼續使用該成員的時間",
             "items": "成員順序",
             "addItem": "新增模型",
+            "nestedGroups": "巢狀分組",
+            "nestedGroup": "巢狀分組",
             "autoAdd": "自動新增",
             "clear": "清空"
         }
