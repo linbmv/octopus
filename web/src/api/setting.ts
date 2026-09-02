@@ -63,6 +63,7 @@ export function useSetSetting() {
  */
 interface DBImportResult {
     rows_affected: Record<string, number>;
+    warnings?: string[];
 }
 
 function parseFilename(contentDisposition: string | null): string | null {
@@ -76,7 +77,7 @@ function exportFallbackFilename() {
     const d = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    return `octopus-export-${ts}.json`;
+    return `octopus-config-${ts}.octopus-backup`;
 }
 
 async function downloadBlob(blob: Blob, filename: string) {
@@ -98,9 +99,10 @@ async function downloadBlob(blob: Blob, filename: string) {
  */
 export function useExportDB() {
     return useMutation({
-        mutationFn: async () => {
-            const res = await fetch('/api/v1/setting/export', {
+        mutationFn: async (password: string) => {
+            const res = await fetch('/api/v1/setting/export-config', {
                 method: 'GET',
+                headers: { 'X-Octopus-Backup-Password': password },
                 credentials: 'include',
             });
 
@@ -122,13 +124,14 @@ export function useExportDB() {
  */
 export function useImportDB() {
     return useMutation({
-        mutationFn: async (file: File) => {
+        mutationFn: async ({ file, password }: { file: File; password: string }) => {
             const form = new FormData();
             form.append('file', file);
 
-            const res = await fetch('/api/v1/setting/import', {
+            const res = await fetch('/api/v1/setting/import-config', {
                 method: 'POST',
                 body: form,
+                headers: { 'X-Octopus-Backup-Password': password },
                 credentials: 'include',
             });
 

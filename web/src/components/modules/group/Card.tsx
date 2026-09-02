@@ -98,6 +98,7 @@ export const GroupCard = memo(function GroupCard({ group, allGroups, now }: { gr
                     name: target?.name ?? `Group ${item.target_group_id ?? '?'}`,
                     enabled: target?.enabled ?? false,
                     disabled: item.disabled,
+                    weight: item.weight,
                     channel_name: t('form.nestedGroup'),
                     item_id: item.id,
                 };
@@ -111,6 +112,7 @@ export const GroupCard = memo(function GroupCard({ group, allGroups, now }: { gr
                 name: channelModel?.name ?? `Model ${item.channel_model_id}`,
                 enabled: channel?.enabled ?? true,
                 disabled: item.disabled,
+                weight: item.weight,
                 channel_id: channelModel?.channel_id ?? 0,
                 channel_name: channel?.channel_name ?? 'Unknown channel',
                 item_id: item.id,
@@ -145,7 +147,7 @@ export const GroupCard = memo(function GroupCard({ group, allGroups, now }: { gr
                 const origPriority = priorityByItemId.get(member.item_id);
                 return origPriority !== undefined && origPriority !== newPriority;
             })
-            .map(({ member, newPriority }) => ({ id: member.item_id!, priority: newPriority }));
+            .map(({ member, newPriority }) => ({ id: member.item_id!, priority: newPriority, weight: member.weight ?? 1 }));
         if (itemsToUpdate.length > 0) updateGroup.mutate({ id: group.id!, items_to_update: itemsToUpdate }, { onSuccess, onError });
     }, [group.id, priorityByItemId, updateGroup, onSuccess, onError]);
 
@@ -172,12 +174,12 @@ export const GroupCard = memo(function GroupCard({ group, allGroups, now }: { gr
     const handleSubmitEdit = useCallback((values: GroupEditorValues, onDone?: () => void) => {
         if (!group.id) return;
 
-        const originalById = new Map<number, number>();
+        const originalById = new Map<number, { priority: number; weight: number }>();
         const originalIds = new Set<number>();
         (group.items || []).forEach((it) => {
             if (typeof it.id === 'number') {
                 originalIds.add(it.id);
-                originalById.set(it.id, it.priority);
+                originalById.set(it.id, { priority: it.priority, weight: it.weight ?? 1 });
             }
         });
 
@@ -194,6 +196,7 @@ export const GroupCard = memo(function GroupCard({ group, allGroups, now }: { gr
                 channel_model_id: m.channel_model_id,
                 target_group_id: m.target_group_id,
                 priority,
+                weight: m.weight ?? 1,
             }));
 
         const items_to_update = values.members
@@ -201,11 +204,12 @@ export const GroupCard = memo(function GroupCard({ group, allGroups, now }: { gr
             .filter(({ m }) => typeof m.item_id === 'number')
             .map(({ m, priority }) => {
                 const id = m.item_id!;
-                const originalPriority = originalById.get(id);
-                if (originalPriority === undefined || originalPriority === priority) return null;
-                return { id, priority };
+                const original = originalById.get(id);
+                const weight = m.weight ?? 1;
+                if (original === undefined || (original.priority === priority && original.weight === weight)) return null;
+                return { id, priority, weight };
             })
-            .filter((item): item is { id: number; priority: number } => item !== null);
+            .filter((item): item is { id: number; priority: number; weight: number } => item !== null);
 
         const payload: GroupUpdateRequest = { id: group.id };
 
@@ -345,7 +349,7 @@ export const GroupCard = memo(function GroupCard({ group, allGroups, now }: { gr
                     onRemove={handleRemoveMember}
                     onActivate={group.mode === 'manual' ? handleActivate : undefined}
                     onToggleDisabled={handleToggleMember}
-                    activeItemId={group.mode === 'failover' ? group.runtime?.current_item_id : group.active_item_id}
+                    activeItemId={group.mode === 'manual' ? group.active_item_id : group.runtime?.current_item_id}
                     group={group}
                     now={now}
                     onDragStart={handleDragStart}

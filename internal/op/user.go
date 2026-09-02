@@ -39,6 +39,10 @@ func UserChangePassword(oldPassword, newPassword string) error {
 	if err := db.GetDB().Model(&userCache).Update("password", userCache.Password).Error; err != nil {
 		return fmt.Errorf("failed to update password: %w", err)
 	}
+	// 签名密钥已不含密码哈希，改密不再隐式失效旧 token，必须显式递增会话版本。
+	if err := TokenVersionBump(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -50,6 +54,9 @@ func UserChangeUsername(newUsername string) error {
 	userCache.Username = newUsername
 	if err := db.GetDB().Model(&userCache).Update("username", userCache.Username).Error; err != nil {
 		return fmt.Errorf("failed to update username: %w", err)
+	}
+	if err := TokenVersionBump(); err != nil {
+		return err
 	}
 	return nil
 }

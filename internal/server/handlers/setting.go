@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -34,8 +36,16 @@ func init() {
 				Handle(exportDB),
 		).
 		AddRoute(
+			router.NewRoute("/export-config", http.MethodGet).
+				Handle(exportConfig),
+		).
+		AddRoute(
 			router.NewRoute("/import", http.MethodPost).
 				Handle(importDB),
+		).
+		AddRoute(
+			router.NewRoute("/import-config", http.MethodPost).
+				Handle(importConfig),
 		)
 }
 
@@ -93,6 +103,27 @@ func exportDB(c *gin.Context) {
 	c.JSON(http.StatusOK, dump)
 }
 
+func exportConfig(c *gin.Context) {
+	password := []byte(c.GetHeader("X-Octopus-Backup-Password"))
+	c.Request.Header.Del("X-Octopus-Backup-Password")
+	defer clear(password)
+	encrypted, err := op.DBExportConfigEncrypted(c.Request.Context(), password)
+	if err != nil {
+		if errors.Is(err, op.ErrDBBackupPasswordRequired) || errors.Is(err, op.ErrDBBackupPasswordInvalid) {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+		} else {
+			resp.Error(c, http.StatusInternalServerError, "config backup export failed")
+		}
+		return
+	}
+
+	c.Header("Cache-Control", "no-store")
+	c.Header("Content-Type", op.EncryptedDBBackupContentType)
+	c.Header("Content-Disposition", "attachment; filename=\"octopus-config-"+time.Now().Format("20060102150405")+op.EncryptedDBBackupExtension+"\"")
+	c.Data(http.StatusOK, op.EncryptedDBBackupContentType, encrypted)
+	clear(encrypted)
+}
+
 func importDB(c *gin.Context) {
 	var dump model.DBDump
 
@@ -148,7 +179,7 @@ func importDB(c *gin.Context) {
 			dump.Groups[i].Mode = model.GroupModeManual
 		}
 		model.NormalizeGroupRelayConfig(&dump.Groups[i].RelayConfig)
-		if dump.Groups[i].Mode != model.GroupModeManual && dump.Groups[i].Mode != model.GroupModeFailover {
+		if !isSupportedGroupMode(dump.Groups[i].Mode) {
 			resp.Error(c, http.StatusBadRequest, "invalid group relay mode")
 			return
 		}
@@ -168,6 +199,81 @@ func importDB(c *gin.Context) {
 	resp.Success(c, result)
 }
 
+func importConfig(c *gin.Context) {
+	password := []byte(c.GetHeader("X-Octopus-Backup-Password"))
+	c.Request.Header.Del("X-Octopus-Backup-Password")
+	defer clear(password)
+	body, err := readImportBody(c)
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	dump, err := op.DecodeConfigDump(body, password)
+	clear(body)
+	if err != nil {
+		if errors.Is(err, op.ErrDBBackupPasswordRequired) || errors.Is(err, op.ErrDBBackupPasswordInvalid) || errors.Is(err, op.ErrDBBackupAuthentication) || errors.Is(err, op.ErrDBBackupUnsupported) || errors.Is(err, op.ErrDBBackupInvalidEnvelope) {
+			resp.Error(c, http.StatusBadRequest, "invalid or undecryptable configuration backup")
+		} else {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	for i := range dump.Groups {
+		if dump.Groups[i].Mode == "" {
+			dump.Groups[i].Mode = model.GroupModeManual
+		}
+		model.NormalizeGroupRelayConfig(&dump.Groups[i].RelayConfig)
+		if !isSupportedGroupMode(dump.Groups[i].Mode) {
+			resp.Error(c, http.StatusBadRequest, "invalid group relay mode")
+			return
+		}
+	}
+
+	result, err := op.DBImportConfig(c.Request.Context(), dump)
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := op.InitCache(); err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, result)
+}
+
+func readImportBody(c *gin.Context) ([]byte, error) {
+	maxBytes := int64(op.ConfigBackupMaxBytes) + op.DBBackupEnvelopeOverhead
+	contentType := c.GetHeader("Content-Type")
+	if strings.Contains(contentType, "multipart/form-data") {
+		fh, err := c.FormFile("file")
+		if err != nil {
+			return nil, fmt.Errorf("missing upload file field 'file'")
+		}
+		f, err := fh.Open()
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		body, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(body)) > maxBytes {
+			return nil, op.ErrDBBackupTooLarge
+		}
+		return body, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, op.ErrDBBackupTooLarge
+	}
+	return body, nil
+}
+
 func decodeDBDump(body []byte, dump *model.DBDump) error {
 	if dump == nil {
 		return json.Unmarshal(body, &struct{}{})
@@ -179,6 +285,7 @@ func decodeDBDump(body []byte, dump *model.DBDump) error {
 
 	if dump.Version == 0 &&
 		len(dump.Channels) == 0 &&
+		len(dump.ChannelKeys) == 0 &&
 		len(dump.Groups) == 0 &&
 		len(dump.ChannelModels) == 0 &&
 		len(dump.GroupItems) == 0 &&
@@ -200,4 +307,13 @@ func decodeDBDump(body []byte, dump *model.DBDump) error {
 	}
 
 	return nil
+}
+
+func isSupportedGroupMode(mode model.GroupMode) bool {
+	switch mode {
+	case model.GroupModeManual, model.GroupModeFailover, model.GroupModeRoundRobin, model.GroupModeRandom, model.GroupModeWeighted:
+		return true
+	default:
+		return false
+	}
 }

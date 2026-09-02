@@ -23,6 +23,7 @@ export interface SelectedMember {
     name: string;
     enabled: boolean;
     disabled?: boolean;
+    weight?: number;
     channel_id?: number;
     channel_name: string;
     item_id?: number;
@@ -48,6 +49,7 @@ function MemberItem({
     onRemove,
     onActivate,
     onToggleDisabled,
+    onWeightChange,
     isActive,
     group,
     now,
@@ -60,6 +62,7 @@ function MemberItem({
     onRemove: (id: string) => void;
     onActivate?: (itemId: number) => void;
     onToggleDisabled?: (itemId: number, disabled: boolean) => void;
+    onWeightChange?: (memberId: string, weight: number) => void;
     isActive?: boolean;
     group?: Group; // group 提供成员当前的冷却和亲和时间。
     now: number; // now 是成员列表共享的当前 Unix 毫秒时间。
@@ -149,6 +152,22 @@ function MemberItem({
 
                 {group && <MemberStatus group={group} itemId={member.item_id} now={now} active={isActive} activeClassName="p-1" />}
 
+                {onWeightChange && (
+                    <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={String(member.weight ?? 1)}
+                        aria-label={t('form.weight')}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => {
+                            const value = Number.parseInt(event.target.value, 10);
+                            onWeightChange(member.id, Number.isFinite(value) && value > 0 ? value : 1);
+                        }}
+                        className="h-7 w-14 rounded-md border border-border/60 bg-background px-1 text-center text-xs"
+                    />
+                )}
+
                 {onToggleDisabled && member.item_id !== undefined && (
                     <Tooltip>
                         <TooltipTrigger asChild>
@@ -235,6 +254,7 @@ interface MemberListProps {
     onRemove: (id: string) => void;
     onActivate?: (itemId: number) => void;
     onToggleDisabled?: (itemId: number, disabled: boolean) => void;
+    onWeightChange?: (memberId: string, weight: number) => void;
     activeItemId?: number;
     group?: Group; // group 提供当前模式和成员运行状态。
     now?: number; // now 是页面共享的当前 Unix 毫秒时间，仅展示运行态时需要。
@@ -270,6 +290,7 @@ export function MemberList({
     onRemove,
     onActivate,
     onToggleDisabled,
+    onWeightChange,
     activeItemId,
     group,
     now = 0,
@@ -366,6 +387,7 @@ export function MemberList({
                                 onRemove={onRemove}
                                 onActivate={onActivate}
                                 onToggleDisabled={onToggleDisabled}
+                                onWeightChange={onWeightChange}
                                 isActive={members[rubric.source.index].item_id === activeItemId}
                                 group={group}
                                 now={now}
@@ -400,6 +422,7 @@ export function MemberList({
                                                 onRemove={onRemove}
                                                 onActivate={onActivate}
                                                 onToggleDisabled={onToggleDisabled}
+                                                onWeightChange={onWeightChange}
                                                 isActive={member.item_id === activeItemId}
                                                 group={group}
                                                 now={now}

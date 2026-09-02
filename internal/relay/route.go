@@ -2,6 +2,7 @@ package relay
 
 import (
 	"maps"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -27,14 +28,9 @@ var (
 	routeStreams = make(map[chan RouteState]struct{}) // 全部路由 SSE 连接。
 )
 
-// pickGroupItem 按分组模式选择本轮目标成员, 没有可用成员时返回零值; group.Items 已按 Priority 升序排列。
+// pickGroupItemSkipping 按分组模式选择本轮目标成员, 没有可用成员时返回零值; group.Items 已按 Priority 升序排列。
 // 渠道是否可用不在此判断: 渠道禁用或缺少密钥由调用方发现并作为一轮失败上报, 该成员随即进入冷却而在后续轮次被跳过。
-func pickGroupItem(group model.Group) model.GroupItem {
-	return pickGroupItemSkipping(group, nil)
-}
-
-// pickGroupItemSkipping 与 pickGroupItem 相同，但允许一次展开过程暂时跳过
-// 已知不可用的嵌套成员。临时禁用的子分组不是上游故障，不应被写入冷却。
+// skipped 允许一次展开过程暂时跳过已知不可用的嵌套成员: 临时禁用的子分组不是上游故障, 不应被写入冷却。
 func pickGroupItemSkipping(group model.Group, skipped map[int]struct{}) model.GroupItem {
 	if !group.Enabled {
 		return model.GroupItem{}
@@ -57,6 +53,62 @@ func pickGroupItemSkipping(group model.Group, skipped map[int]struct{}) model.Gr
 		route.AffinityUntil = 0
 	}
 
+	if group.Mode == model.GroupModeRoundRobin || group.Mode == model.GroupModeRandom || group.Mode == model.GroupModeWeighted {
+		candidates := make([]model.GroupItem, 0, len(group.Items))
+		for _, item := range group.Items {
+			if item.Disabled || isSkippedItem(skipped, item.ID) {
+				continue
+			}
+			if deadline, cooling := route.Cooldowns[item.ID]; cooling && deadline > now {
+				continue
+			}
+			candidates = append(candidates, item)
+		}
+		if len(candidates) == 0 {
+			return model.GroupItem{}
+		}
+		var selected model.GroupItem
+		switch group.Mode {
+		case model.GroupModeRoundRobin:
+			start := 0
+			for i, item := range candidates {
+				if item.ID == route.CurrentItemID {
+					start = (i + 1) % len(candidates)
+					break
+				}
+			}
+			selected = candidates[start]
+		case model.GroupModeWeighted:
+			total := 0
+			for _, item := range candidates {
+				if item.Weight > 0 {
+					total += item.Weight
+				} else {
+					total++
+				}
+			}
+			n := rand.Intn(total)
+			for _, item := range candidates {
+				weight := item.Weight
+				if weight <= 0 {
+					weight = 1
+				}
+				if n < weight {
+					selected = item
+					break
+				}
+				n -= weight
+			}
+		default:
+			selected = candidates[rand.Intn(len(candidates))]
+		}
+		route.CurrentItemID = selected.ID
+		route.AffinityUntil = 0
+		route.affinityArmed = false
+		publishRouteLocked(route)
+		return selected
+	}
+
 	// 亲和期内沿用当前成员, 不提前探测已恢复的高优先级成员。
 	if route.CurrentItemID != 0 && route.AffinityUntil > now && !isSkippedItem(skipped, route.CurrentItemID) {
 		return itemOf(group, route.CurrentItemID)
@@ -67,7 +119,9 @@ func pickGroupItemSkipping(group model.Group, skipped map[int]struct{}) model.Gr
 			continue
 		}
 		// 遍历到当前成员说明比它优先级更高的成员都不可选, 沿用当前成员。
-		if item.ID == route.CurrentItemID {
+		// 若当前成员只是被本请求的熔断/慢恢复门控暂时跳过, 继续向低优先级
+		// 成员寻找替代项; 这种跳过不应把整个故障转移组锁死在当前成员上。
+		if item.ID == route.CurrentItemID && !isSkippedItem(skipped, item.ID) {
 			break
 		}
 		deadline, cooling := route.Cooldowns[item.ID]
@@ -131,7 +185,7 @@ func recordRouteSuccess(group model.Group, itemID int) {
 		changed = true
 	}
 	// 亲和只在故障切换后的首次成功时开始, 使请求在一段时间内稳定留在备用成员上。
-	if route.CurrentItemID == itemID && route.affinityArmed {
+	if group.Mode == model.GroupModeFailover && route.CurrentItemID == itemID && route.affinityArmed {
 		route.affinityArmed = false
 		if group.RelayConfig.MemberAffinitySeconds > 0 {
 			route.AffinityUntil = now + int64(group.RelayConfig.MemberAffinitySeconds)*1000
@@ -171,7 +225,7 @@ func recordRouteFailure(group model.Group, itemID, failures int) bool {
 	if route.CurrentItemID == itemID {
 		route.CurrentItemID = 0
 		route.AffinityUntil = 0
-		route.affinityArmed = true
+		route.affinityArmed = group.Mode == model.GroupModeFailover
 	}
 	publishRouteLocked(route)
 	return true

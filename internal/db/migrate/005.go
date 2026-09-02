@@ -27,6 +27,13 @@ func migrateChannelToSingleURLAndKey(db *gorm.DB) error {
 	if !db.Migrator().HasColumn("channels", "base_url") || !db.Migrator().HasColumn("channels", "key") {
 		return fmt.Errorf("channels.base_url or channels.key not found")
 	}
+	// Since the compatibility fields were restored on the upstream/C06 base,
+	// AutoMigrate creates both markers before after-migrations run. Version 5
+	// is the historical Edge-to-upstream destructive conversion; never run it
+	// against the new additive schema (and never use it as the Edge bridge).
+	if db.Migrator().HasColumn("channels", "base_urls") && db.Migrator().HasTable("channel_keys") {
+		return nil
+	}
 
 	if db.Migrator().HasColumn("channels", "base_urls") {
 		type legacyBaseURL struct {

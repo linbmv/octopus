@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	TaskPriceUpdate  = "price_update"
-	TaskStatsSave    = "stats_save"
-	TaskSyncLLM      = "sync_llm"
-	TaskCleanLLM     = "clean_llm"
+	TaskPriceUpdate          = "price_update"
+	TaskStatsSave            = "stats_save"
+	TaskSyncLLM              = "sync_llm"
+	TaskCleanLLM             = "clean_llm"
+	TaskChannelKeyHealthSave = "channel_key_health_save"
 )
 
 func Init() {
@@ -52,4 +53,13 @@ func Init() {
 	}
 	statsSaveInterval := time.Duration(statsSaveIntervalMinutes) * time.Minute
 	Register(TaskStatsSave, statsSaveInterval, false, op.StatsSaveDBTask)
+
+	// 凭据健康态与统计同周期落库: 冷却判定运行时读缓存, 持久化只为重启后保留冷却。
+	Register(TaskChannelKeyHealthSave, statsSaveInterval, false, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := op.ChannelKeyHealthSaveDB(ctx); err != nil {
+			log.Warnf("failed to save channel key health: %v", err)
+		}
+	})
 }

@@ -161,6 +161,10 @@
         "saved": "已儲存",
         "backup": {
             "title": "備份 / 復原",
+            "password": {
+                "placeholder": "請輸入備份密碼（至少 8 位元組）",
+                "invalid": "備份密碼至少需要 8 位元組"
+            },
             "export": {
                 "title": "匯出",
                 "button": "匯出",
@@ -171,10 +175,11 @@
                 "title": "匯入",
                 "button": "匯入",
                 "importing": "匯入中...",
-                "noFile": "請先選擇 JSON 檔案",
+                "noFile": "請先選擇加密配置備份檔案",
                 "success": "匯入成功",
                 "failed": "匯入失敗",
-                "result": "匯入結果"
+                "result": "匯入結果",
+                "warnings": "相容性提示"
             }
         },
         "apiKey": {
@@ -352,6 +357,10 @@
             "modeHint": "手動固定選中成員；故障轉移按成員順序並在失敗時切換",
             "manual": "手動",
             "failover": "故障轉移",
+            "roundRobin": "輪詢",
+            "random": "隨機",
+            "weighted": "加權隨機",
+            "weight": "權重",
             "members": "成員",
             "relay": "路由策略",
             "retryCount": "總嘗試次數",
@@ -451,6 +460,7 @@
             "delete": "刪除",
             "confirmDelete": "確認刪除",
             "cancel": "取消",
+            "keyCooling": "{total} 個憑據中 {count} 個被限流，冷卻結束前不參與調度",
             "toast": {
                 "enabled": "供應源已啟用",
                 "disabled": "供應源已停用"
@@ -481,6 +491,14 @@
             "customHeaderKey": "Header Key",
             "customHeaderValue": "Header Value",
             "customHeaderAdd": "新增 Header",
+            "headerRules": "Header 改寫規則",
+            "headerRulesAdd": "新增規則",
+            "headerRulesHint": "在自定義 Header 之後依序生效；憑據類 Header 不可改寫。",
+            "jsonRewriteRules": "請求體改寫規則",
+            "jsonRewriteRulesAdd": "新增規則",
+            "jsonRewriteRulesHint": "僅對 JSON 請求體生效；值必須是合法 JSON。",
+            "jsonRewritePathPlaceholder": "/tools/0/type",
+            "jsonRewriteValuePlaceholder": "\"custom\"",
             "channelProxy": "供應源代理",
             "channelProxyPlaceholder": "可選：僅對該供應源生效（覆蓋全域代理）",
             "paramOverride": "參數覆蓋",

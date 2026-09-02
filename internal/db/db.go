@@ -38,9 +38,16 @@ func InitDB(dbType, dsn string, debug bool) error {
 	if err != nil {
 		return err
 	}
-
 	sqlDB, err := db.DB()
 	if err != nil {
+		return err
+	}
+	// Edge and upstream reused numeric migration versions for different schema
+	// operations. Refuse to run destructive upstream migrations on an Edge
+	// database until the explicit bridge migration is available.
+	if err := migrate.EnsureUpstreamSchemaCompatible(db); err != nil {
+		_ = sqlDB.Close()
+		db = nil
 		return err
 	}
 
@@ -55,6 +62,7 @@ func InitDB(dbType, dsn string, debug bool) error {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.Channel{},
+		&model.ChannelKey{},
 		&model.ChannelModel{},
 		&model.Group{},
 		&model.GroupItem{},

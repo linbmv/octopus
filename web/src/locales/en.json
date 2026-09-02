@@ -161,6 +161,10 @@
         "saved": "Saved",
         "backup": {
             "title": "Backup / Restore",
+            "password": {
+                "placeholder": "Enter backup password (at least 8 bytes)",
+                "invalid": "Backup password must be at least 8 bytes"
+            },
             "export": {
                 "title": "Export",
                 "button": "Export",
@@ -171,10 +175,11 @@
                 "title": "Import",
                 "button": "Import",
                 "importing": "Importing...",
-                "noFile": "Please select a JSON file first",
+                "noFile": "Please select an encrypted configuration backup first",
                 "success": "Import successful",
                 "failed": "Import failed",
-                "result": "Import result"
+                "result": "Import result",
+                "warnings": "Compatibility warnings"
             }
         },
         "apiKey": {
@@ -352,6 +357,10 @@
             "modeHint": "Manual fixes one member; failover follows member order and switches on failures",
             "manual": "Manual",
             "failover": "Failover",
+            "roundRobin": "Round robin",
+            "random": "Random",
+            "weighted": "Weighted random",
+            "weight": "Weight",
             "members": "Members",
             "relay": "Routing",
             "retryCount": "Maximum Attempts",
@@ -451,6 +460,7 @@
             "delete": "Delete",
             "confirmDelete": "Confirm Delete",
             "cancel": "Cancel",
+            "keyCooling": "{count} of {total} credentials rate-limited, skipped until cooldown ends",
             "toast": {
                 "enabled": "Channel enabled",
                 "disabled": "Channel disabled"
@@ -481,6 +491,14 @@
             "customHeaderKey": "Header Key",
             "customHeaderValue": "Header Value",
             "customHeaderAdd": "Add Header",
+            "headerRules": "Header Rules",
+            "headerRulesAdd": "Add Rule",
+            "headerRulesHint": "Applied in order after Custom Headers. Credential headers cannot be rewritten.",
+            "jsonRewriteRules": "Body Rewrite Rules",
+            "jsonRewriteRulesAdd": "Add Rule",
+            "jsonRewriteRulesHint": "Applied to JSON request bodies only. Value must be valid JSON.",
+            "jsonRewritePathPlaceholder": "/tools/0/type",
+            "jsonRewriteValuePlaceholder": "\"custom\"",
             "channelProxy": "Channel Proxy",
             "channelProxyPlaceholder": "Optional: proxy for this channel (overrides global proxy)",
             "paramOverride": "Param Override",

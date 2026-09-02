@@ -5,6 +5,7 @@ import (
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/server"
+	"github.com/bestruirui/octopus/internal/server/auth"
 	"github.com/bestruirui/octopus/internal/task"
 	"github.com/bestruirui/octopus/internal/utils/shutdown"
 	"github.com/charmbracelet/log"
@@ -39,6 +40,17 @@ var startCmd = &cobra.Command{
 
 		if err := op.UserInit(); err != nil {
 			log.Errorf("user init error: %v", err)
+			return
+		}
+
+		// 会话版本与签名密钥都依赖设置缓存，且必须在开始处理请求前就绪：
+		// 任一失败即终止启动，不允许服务以未初始化的签名密钥对外提供认证。
+		if err := op.TokenVersionInit(); err != nil {
+			log.Errorf("token version init error: %v", err)
+			return
+		}
+		if err := auth.EnsureSigningKey(); err != nil {
+			log.Errorf("jwt signing key init error: %v", err)
 			return
 		}
 

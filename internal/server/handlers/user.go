@@ -51,7 +51,7 @@ func login(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
 		return
 	}
-	c.SetCookie("auth", token, maxAge, "/", "", false, false)
+	auth.SetAuthCookie(c, token, maxAge)
 	resp.Success(c, "login successfully")
 }
 

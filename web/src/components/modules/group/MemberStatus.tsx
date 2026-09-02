@@ -21,7 +21,7 @@ export function useRuntimeClock(source?: Group | Group[]) {
     let enabled = false;
     let lastDeadline = 0;
     for (const group of groups) {
-        if (group.mode !== 'failover' || !group.runtime) continue;
+        if (group.mode === 'manual' || !group.runtime) continue;
         enabled = true;
         lastDeadline = Math.max(lastDeadline, group.runtime.affinity_until);
         for (const cooldownUntil of Object.values(group.runtime.cooldowns)) {
@@ -55,7 +55,7 @@ export function useRuntimeClock(source?: Group | Group[]) {
 export function MemberStatus({ group, itemId, now, active = false, activeClassName }: MemberStatusProps) {
     const t = useTranslations('group.card');
 
-    if (group.mode === 'failover' && itemId !== undefined && group.runtime) {
+    if (group.mode !== 'manual' && itemId !== undefined && group.runtime) {
         const cooldownUntil = group.runtime.cooldowns[itemId] ?? 0;
         const affinityUntil = group.runtime.current_item_id === itemId
             ? group.runtime.affinity_until

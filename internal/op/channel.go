@@ -2,14 +2,18 @@ package op
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/requestrewrite"
 	"github.com/bestruirui/octopus/internal/utils/cache"
 	"github.com/charmbracelet/log"
+	"github.com/looplj/axonhub/llm/httpclient"
 	"gorm.io/gorm"
 )
 
@@ -32,8 +36,22 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	if channel == nil {
 		return fmt.Errorf("channel is required")
 	}
+	normalizeChannelCompatibility(channel)
+	if err := validateHeaderRules(channel.HeaderRules); err != nil {
+		return err
+	}
+	if err := validateJSONRewriteRules(channel.JSONRewriteRules); err != nil {
+		return err
+	}
 	channel.ID = 0
 	channel.StatsMetrics = model.StatsMetrics{}
+	for i := range channel.Keys {
+		channel.Keys[i].ID = 0
+		channel.Keys[i].ChannelID = 0
+		if strings.TrimSpace(channel.Keys[i].ChannelKey) == "" {
+			return fmt.Errorf("channel key is required")
+		}
+	}
 	for i := range channel.Models {
 		channel.Models[i].ID = 0
 		channel.Models[i].ChannelID = 0
@@ -81,6 +99,27 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	if req.BaseURL != nil {
 		selectFields = append(selectFields, "base_url")
 		updates.BaseURL = *req.BaseURL
+		if req.BaseUrls == nil {
+			selectFields = append(selectFields, "base_urls")
+			if strings.TrimSpace(*req.BaseURL) == "" {
+				updates.BaseUrls = []model.BaseUrl{}
+			} else {
+				updates.BaseUrls = []model.BaseUrl{{URL: *req.BaseURL}}
+			}
+		}
+	}
+	if req.BaseUrls != nil {
+		baseURLs := append([]model.BaseUrl(nil), (*req.BaseUrls)...)
+		selectFields = append(selectFields, "base_urls")
+		updates.BaseUrls = baseURLs
+		if req.BaseURL == nil {
+			selectFields = append(selectFields, "base_url")
+			if len(baseURLs) > 0 {
+				updates.BaseURL = baseURLs[0].URL
+			} else {
+				updates.BaseURL = ""
+			}
+		}
 	}
 	if req.Key != nil {
 		selectFields = append(selectFields, "key")
@@ -97,6 +136,20 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	if req.CustomHeader != nil {
 		selectFields = append(selectFields, "custom_header")
 		updates.CustomHeader = *req.CustomHeader
+	}
+	if req.HeaderRules != nil {
+		if err := validateHeaderRules(*req.HeaderRules); err != nil {
+			return nil, err
+		}
+		selectFields = append(selectFields, "header_rules")
+		updates.HeaderRules = *req.HeaderRules
+	}
+	if req.JSONRewriteRules != nil {
+		if err := validateJSONRewriteRules(*req.JSONRewriteRules); err != nil {
+			return nil, err
+		}
+		selectFields = append(selectFields, "json_rewrite_rules")
+		updates.JSONRewriteRules = *req.JSONRewriteRules
 	}
 	if req.ChannelProxy != nil {
 		selectFields = append(selectFields, "channel_proxy")
@@ -124,12 +177,30 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 				return err
 			}
 		}
+		if req.Key != nil {
+			if err := syncPrimaryChannelKey(tx, req.ID, *req.Key); err != nil {
+				return err
+			}
+		}
+		if req.BaseUrls != nil {
+			if err := validateBaseURLs(*req.BaseUrls); err != nil {
+				return err
+			}
+		}
+		if err := syncChannelKeys(tx, req.ID, req.KeysToAdd, req.KeysToUpdate, req.KeysToDelete); err != nil {
+			return err
+		}
+		if req.Key == nil && (len(req.KeysToAdd) > 0 || len(req.KeysToUpdate) > 0 || len(req.KeysToDelete) > 0) {
+			if err := syncChannelKeyAlias(tx, req.ID); err != nil {
+				return err
+			}
+		}
 		if req.Models != nil {
 			if err := tx.Where("channel_id = ?", req.ID).Find(&currentModels).Error; err != nil {
 				return fmt.Errorf("failed to load channel models: %w", err)
 			}
 		}
-		if err := tx.First(&channel, req.ID).Error; err != nil {
+		if err := tx.Preload("Keys").First(&channel, req.ID).Error; err != nil {
 			return fmt.Errorf("failed to load updated channel: %w", err)
 		}
 		return nil
@@ -257,7 +328,7 @@ func ChannelModelGet(id int) (model.ChannelModel, error) {
 // channelRefreshCache 从数据库刷新渠道和渠道模型缓存。
 func channelRefreshCache(ctx context.Context) error {
 	channels := []model.Channel{}
-	if err := db.GetDB().WithContext(ctx).Find(&channels).Error; err != nil {
+	if err := db.GetDB().WithContext(ctx).Preload("Keys").Find(&channels).Error; err != nil {
 		log.Warnf("failed to get channels: %v", err)
 		return err
 	}
@@ -273,6 +344,168 @@ func channelRefreshCache(ctx context.Context) error {
 	}
 	for _, channelModel := range channelModels {
 		channelModelCache.Set(channelModel.ID, channelModel)
+	}
+	return nil
+}
+
+func normalizeChannelCompatibility(channel *model.Channel) {
+	if channel == nil {
+		return
+	}
+	if len(channel.BaseUrls) == 0 && strings.TrimSpace(channel.BaseURL) != "" {
+		channel.BaseUrls = []model.BaseUrl{{URL: channel.BaseURL}}
+	}
+	if strings.TrimSpace(channel.BaseURL) == "" && len(channel.BaseUrls) > 0 {
+		channel.BaseURL = channel.BaseUrls[0].URL
+	}
+	if len(channel.Keys) == 0 && strings.TrimSpace(channel.Key) != "" {
+		channel.Keys = []model.ChannelKey{{Enabled: true, ChannelKey: channel.Key}}
+	}
+	if strings.TrimSpace(channel.Key) == "" && len(channel.Keys) > 0 {
+		for _, key := range channel.Keys {
+			if strings.TrimSpace(key.ChannelKey) != "" {
+				channel.Key = key.ChannelKey
+				break
+			}
+		}
+	}
+}
+
+func validateBaseURLs(urls []model.BaseUrl) error {
+	for _, baseURL := range urls {
+		if strings.TrimSpace(baseURL.URL) == "" {
+			return fmt.Errorf("channel base URL is required")
+		}
+		if baseURL.Delay < 0 {
+			return fmt.Errorf("channel base URL delay cannot be negative")
+		}
+	}
+	return nil
+}
+
+// validateHeaderRules 在写库前拒绝非法规则, 避免坏配置留到转发时才失败。
+// 凭据类 Header 由 relay 在应用时静默跳过, 这里提前报错让管理员看到原因。
+func validateHeaderRules(rules []model.HeaderRule) error {
+	for i, rule := range rules {
+		if strings.TrimSpace(rule.HeaderKey) == "" {
+			return fmt.Errorf("header rule %d: header key is required", i)
+		}
+		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
+		case "set", "append", "remove":
+		default:
+			return fmt.Errorf("header rule %d: action must be set, append or remove", i)
+		}
+		if requestrewrite.IsProtectedHeader(rule.HeaderKey) || httpclient.IsSensitiveHeader(rule.HeaderKey) {
+			return fmt.Errorf("header rule %d: %s carries upstream credentials and cannot be rewritten", i, rule.HeaderKey)
+		}
+	}
+	return nil
+}
+
+// validateJSONRewriteRules 校验 Pointer 语法与 override 取值, 保证转发时不会因
+// 配置错误中断请求。
+func validateJSONRewriteRules(rules []model.JSONRewriteRule) error {
+	for i, rule := range rules {
+		if _, err := requestrewrite.ParseJSONPointer(strings.TrimSpace(rule.Path)); err != nil {
+			return fmt.Errorf("json rewrite rule %d: %w", i, err)
+		}
+		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
+		case "remove":
+		case "override":
+			if rule.Value == nil {
+				return fmt.Errorf("json rewrite rule %d: override requires a value", i)
+			}
+			if !json.Valid([]byte(*rule.Value)) {
+				return fmt.Errorf("json rewrite rule %d: value must be valid JSON", i)
+			}
+		default:
+			return fmt.Errorf("json rewrite rule %d: action must be override or remove", i)
+		}
+	}
+	return nil
+}
+
+func syncPrimaryChannelKey(tx *gorm.DB, channelID int, value string) error {
+	value = strings.TrimSpace(value)
+	var key model.ChannelKey
+	err := tx.Where("channel_id = ?", channelID).Order("id ASC").First(&key).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if value == "" {
+			return nil
+		}
+		return tx.Create(&model.ChannelKey{ChannelID: channelID, Enabled: true, ChannelKey: value}).Error
+	}
+	if err != nil {
+		return fmt.Errorf("failed to load primary channel key: %w", err)
+	}
+	if err := tx.Model(&model.ChannelKey{}).Where("id = ?", key.ID).Update("channel_key", value).Error; err != nil {
+		return fmt.Errorf("failed to update primary channel key: %w", err)
+	}
+	return nil
+}
+
+func syncChannelKeyAlias(tx *gorm.DB, channelID int) error {
+	var key model.ChannelKey
+	err := tx.Where("channel_id = ?", channelID).Order("id ASC").First(&key).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return tx.Model(&model.Channel{}).Where("id = ?", channelID).Update("key", "").Error
+	}
+	if err != nil {
+		return fmt.Errorf("failed to load channel key alias: %w", err)
+	}
+	return tx.Model(&model.Channel{}).Where("id = ?", channelID).Update("key", key.ChannelKey).Error
+}
+
+func syncChannelKeys(tx *gorm.DB, channelID int, adds []model.ChannelKeyAddRequest, updates []model.ChannelKeyUpdateRequest, deletes []int) error {
+	for _, add := range adds {
+		value := strings.TrimSpace(add.ChannelKey)
+		if value == "" {
+			return fmt.Errorf("channel key is required")
+		}
+		if err := tx.Create(&model.ChannelKey{ChannelID: channelID, Enabled: add.Enabled, ChannelKey: value, Remark: add.Remark}).Error; err != nil {
+			return fmt.Errorf("failed to add channel key: %w", err)
+		}
+	}
+	for _, update := range updates {
+		var fields map[string]any
+		if update.Enabled != nil {
+			fields = map[string]any{"enabled": *update.Enabled}
+		}
+		if update.ChannelKey != nil {
+			value := strings.TrimSpace(*update.ChannelKey)
+			if value == "" {
+				return fmt.Errorf("channel key is required")
+			}
+			if fields == nil {
+				fields = map[string]any{}
+			}
+			fields["channel_key"] = value
+		}
+		if update.Remark != nil {
+			if fields == nil {
+				fields = map[string]any{}
+			}
+			fields["remark"] = *update.Remark
+		}
+		if len(fields) == 0 {
+			continue
+		}
+		result := tx.Model(&model.ChannelKey{}).Where("id = ? AND channel_id = ?", update.ID, channelID).Updates(fields)
+		if result.Error != nil {
+			return fmt.Errorf("failed to update channel key: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("channel key not found: %d", update.ID)
+		}
+	}
+	if len(deletes) > 0 {
+		result := tx.Where("id IN ? AND channel_id = ?", deletes, channelID).Delete(&model.ChannelKey{})
+		if result.Error != nil {
+			return fmt.Errorf("failed to delete channel keys: %w", result.Error)
+		}
+		if result.RowsAffected != int64(len(deletes)) {
+			return fmt.Errorf("one or more channel keys not found")
+		}
 	}
 	return nil
 }

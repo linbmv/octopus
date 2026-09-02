@@ -21,14 +21,72 @@ func TestPickGroupItemSkipsDisabledMembers(t *testing.T) {
 			{ID: 11, Priority: 2},
 		},
 	}
-	if item := pickGroupItem(group); item.ID != 11 {
-		t.Fatalf("pickGroupItem() = %d, want 11", item.ID)
+	if item := pickGroupItemSkipping(group, nil); item.ID != 11 {
+		t.Fatalf("pickGroupItemSkipping() = %d, want 11", item.ID)
 	}
 
 	group.Mode = model.GroupModeManual
 	group.ActiveItemID = 10
-	if item := pickGroupItem(group); item.ID != 0 {
+	if item := pickGroupItemSkipping(group, nil); item.ID != 0 {
 		t.Fatalf("manual disabled item = %d, want no item", item.ID)
+	}
+}
+
+func TestPickGroupItemSupportsRoundRobinAndWeightedModes(t *testing.T) {
+	routeMu.Lock()
+	delete(routes, 2001)
+	delete(routes, 2002)
+	routeMu.Unlock()
+	t.Cleanup(func() {
+		routeMu.Lock()
+		delete(routes, 2001)
+		delete(routes, 2002)
+		routeMu.Unlock()
+	})
+	roundRobin := model.Group{ID: 2001, Enabled: true, Mode: model.GroupModeRoundRobin, Items: []model.GroupItem{
+		{ID: 1, Priority: 1, Weight: 1}, {ID: 2, Priority: 2, Weight: 1},
+	}}
+	if first := pickGroupItemSkipping(roundRobin, nil); first.ID != 1 {
+		t.Fatalf("round robin first = %d, want 1", first.ID)
+	}
+	if second := pickGroupItemSkipping(roundRobin, nil); second.ID != 2 {
+		t.Fatalf("round robin second = %d, want 2", second.ID)
+	}
+	weighted := model.Group{ID: 2002, Enabled: true, Mode: model.GroupModeWeighted, Items: []model.GroupItem{
+		{ID: 3, Priority: 1, Weight: 100}, {ID: 4, Priority: 2, Weight: 1, Disabled: true},
+	}}
+	if selected := pickGroupItemSkipping(weighted, nil); selected.ID != 3 {
+		t.Fatalf("weighted disabled selection = %d, want 3", selected.ID)
+	}
+}
+
+func TestPickGroupItemSkippingFallsBackWhenCurrentIsSkipped(t *testing.T) {
+	routeMu.Lock()
+	delete(routes, 3001)
+	routeMu.Unlock()
+	t.Cleanup(func() {
+		routeMu.Lock()
+		delete(routes, 3001)
+		routeMu.Unlock()
+	})
+
+	group := model.Group{
+		ID:      3001,
+		Enabled: true,
+		Mode:    model.GroupModeFailover,
+		Items: []model.GroupItem{
+			{ID: 3011, Priority: 1},
+			{ID: 3012, Priority: 2},
+		},
+	}
+	current := pickGroupItemSkipping(group, nil)
+	if current.ID != 3011 {
+		t.Fatalf("initial selection = %d, want 3011", current.ID)
+	}
+
+	fallback := pickGroupItemSkipping(group, map[int]struct{}{current.ID: {}})
+	if fallback.ID != 3012 {
+		t.Fatalf("skipped current selection = %d, want 3012", fallback.ID)
 	}
 }
 
@@ -92,7 +150,7 @@ func TestRecordRouteFailurePathBubblesManualNestedFailure(t *testing.T) {
 		Items: []model.GroupItem{{ID: 1002, Priority: 1}},
 	}
 	child := model.Group{ID: 1003, Enabled: true, Mode: model.GroupModeManual, Items: []model.GroupItem{{ID: 1004}}}
-	if selected := pickGroupItem(parent); selected.ID != 1002 {
+	if selected := pickGroupItemSkipping(parent, nil); selected.ID != 1002 {
 		t.Fatalf("parent selection = %d, want 1002", selected.ID)
 	}
 	if cooled := recordRouteFailurePath([]groupPathItem{

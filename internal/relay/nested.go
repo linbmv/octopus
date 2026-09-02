@@ -28,6 +28,21 @@ func pickGroupLeaf(ctx context.Context, root model.Group) (*groupLeaf, error) {
 }
 
 func pickGroupLeafAt(ctx context.Context, group model.Group, depth int, visited map[int]struct{}) (*groupLeaf, error) {
+	return pickGroupLeafAtWithSkipped(ctx, group, depth, visited, nil)
+}
+
+// pickGroupLeafSkipping is used by one request to skip a candidate that is
+// temporarily ineligible because of a circuit or passive slow-recovery
+// backoff. The skip is not persisted in RouteState and therefore does not turn
+// a cross-request health decision into a group-member failure.
+func pickGroupLeafSkipping(ctx context.Context, root model.Group, skipped map[int]struct{}) (*groupLeaf, error) {
+	if skipped == nil {
+		skipped = make(map[int]struct{})
+	}
+	return pickGroupLeafAtWithSkipped(ctx, root, 0, map[int]struct{}{}, skipped)
+}
+
+func pickGroupLeafAtWithSkipped(ctx context.Context, group model.Group, depth int, visited, externalSkipped map[int]struct{}) (*groupLeaf, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -48,7 +63,10 @@ func pickGroupLeafAt(ctx context.Context, group model.Group, depth int, visited 
 
 	// 每次上游失败都会让故障转移分组冷却当前成员；配置上暂时不可用的
 	// 嵌套项只在本次展开中跳过，最多检查一次当前快照中的每个成员。
-	skipped := make(map[int]struct{})
+	skipped := make(map[int]struct{}, len(externalSkipped))
+	for itemID := range externalSkipped {
+		skipped[itemID] = struct{}{}
+	}
 	for checked := 0; checked < len(group.Items); checked++ {
 		item := pickGroupItemSkipping(group, skipped)
 		if item.ID == 0 {
@@ -80,7 +98,7 @@ func pickGroupLeafAt(ctx context.Context, group model.Group, depth int, visited 
 			child, err := op.GroupGetByID(*item.TargetGroupID)
 			if err == nil && child.Enabled {
 				var leaf *groupLeaf
-				leaf, err = pickGroupLeafAt(ctx, child, depth+1, nextVisited)
+				leaf, err = pickGroupLeafAtWithSkipped(ctx, child, depth+1, nextVisited, externalSkipped)
 				if err == nil && leaf != nil {
 					leaf.path = append([]groupPathItem{{group: group, item: item}}, leaf.path...)
 					return leaf, nil
@@ -96,6 +114,9 @@ func pickGroupLeafAt(ctx context.Context, group model.Group, depth int, visited 
 				// Disabled or temporarily exhausted child groups are configuration
 				// skips, not upstream failures; do not cool the parent member.
 				skipped[item.ID] = struct{}{}
+				if externalSkipped != nil {
+					externalSkipped[item.ID] = struct{}{}
+				}
 				continue
 			}
 			// 嵌套目标不可用时立即让出该父成员，继续父分组中的下一项。

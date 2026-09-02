@@ -8,19 +8,41 @@ import (
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/cache"
+	"gorm.io/gorm/clause"
 )
 
 var settingCache = cache.New[model.SettingKey, string](16)
 
+// SettingList 返回可对外展示的设置。签名密钥与会话版本被排除，
+// 因为该结果同时服务设置页与配置备份，两者都不应携带可伪造凭据的字段。
 func SettingList(ctx context.Context) ([]model.Setting, error) {
 	settings := make([]model.Setting, 0, settingCache.Len())
 	for key, value := range settingCache.GetAll() {
+		if key.IsSecret() {
+			continue
+		}
 		settings = append(settings, model.Setting{
 			Key:   key,
 			Value: value,
 		})
 	}
 	return settings, nil
+}
+
+// SettingSetSecret 写入敏感设置，缺失时插入。普通 SettingSetString 要求键已存在，
+// 而签名密钥在旧库升级时并不存在，需要首次写入路径。
+func SettingSetSecret(key model.SettingKey, value string) error {
+	if !key.IsSecret() {
+		return fmt.Errorf("setting %s is not a secret", key)
+	}
+	if err := db.GetDB().Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&model.Setting{Key: key, Value: value}).Error; err != nil {
+		return fmt.Errorf("failed to set secret setting: %w", err)
+	}
+	settingCache.Set(key, value)
+	return nil
 }
 
 func SettingGetString(key model.SettingKey) (string, error) {
@@ -32,6 +54,9 @@ func SettingGetString(key model.SettingKey) (string, error) {
 }
 
 func SettingSetString(key model.SettingKey, value string) error {
+	if key.IsSecret() {
+		return fmt.Errorf("setting %s is not writable", key)
+	}
 	valueCache, ok := settingCache.Get(key)
 	if !ok {
 		return fmt.Errorf("setting not found")

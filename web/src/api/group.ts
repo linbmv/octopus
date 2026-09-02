@@ -4,8 +4,8 @@ import { apiRequest } from './client';
 import { groupListQueryOptions } from './queries';
 import type { ChannelModel } from './channel';
 
-// GroupMode 表示分组的手动或故障转移路由模式。
-export type GroupMode = 'manual' | 'failover';
+// GroupMode 表示分组的路由策略。
+export type GroupMode = 'manual' | 'failover' | 'round_robin' | 'random' | 'weighted';
 export type GroupItemType = 'channel_model' | 'group';
 
 // GroupRelayConfig 保存分组 Relay 配置。
@@ -27,6 +27,7 @@ export interface GroupItem {
     channel_model?: ChannelModel;
     target_group_id?: number;
     priority: number;
+    weight: number;
     disabled: boolean;
 }
 
@@ -57,12 +58,14 @@ interface GroupItemAddRequest {
     channel_model_id?: number;
     target_group_id?: number;
     priority: number;
+    weight?: number;
 }
 
 // GroupItemUpdateRequest 是待更新展示和故障转移顺序的分组项。
 interface GroupItemUpdateRequest {
     id: number;
     priority?: number;
+    weight?: number;
     disabled?: boolean;
 }
 

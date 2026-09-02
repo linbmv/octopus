@@ -19,6 +19,39 @@ type CustomHeader = {
     header_value: string;
 };
 
+// HeaderRule 是有序的高级请求头改写规则，在 custom_header 之后生效。
+export type HeaderRule = {
+    action: 'set' | 'append' | 'remove';
+    header_key: string;
+    header_value?: string; // remove 时忽略。
+};
+
+// JSONRewriteRule 使用后端限定的 JSON Pointer 子集改写请求体。
+export type JSONRewriteRule = {
+    action: 'override' | 'remove';
+    path: string;
+    value?: string; // override 时必填，需为合法 JSON 值。
+};
+
+// ChannelKey 是渠道的独立凭据及其运行时健康态。
+// status_code / retry_after_until 由后端在每次上游调用后写回，仅 429 会产生冷却。
+export type ChannelKey = {
+    id: number;
+    channel_id: number;
+    enabled: boolean;
+    channel_key: string;
+    status_code?: number;
+    last_use_time_stamp?: number;
+    retry_after_until?: number; // 冷却截止的 Unix 秒；0 或缺省表示未冷却。
+    remark?: string;
+};
+
+// isChannelKeyCooling 判断凭据当前是否处于限流冷却中。
+// 后端以秒为单位记录截止时间，这里按当前时间比较，无需依赖后端下发剩余量。
+export function isChannelKeyCooling(key: ChannelKey, nowSec = Math.floor(Date.now() / 1000)): boolean {
+    return (key.retry_after_until ?? 0) > nowSec;
+}
+
 export type ChannelModelSource = 'auto' | 'manual';
 
 export type ChannelModel = StatsMetrics & {
@@ -43,18 +76,22 @@ export type Channel = StatsMetrics & {
     enabled: boolean;
     base_url: string;
     key: string;
+    keys: ChannelKey[];
     models: ChannelModel[];
     proxy: boolean;
     auto_sync: boolean;
     custom_header: CustomHeader[];
+    header_rules?: HeaderRule[];
+    json_rewrite_rules?: JSONRewriteRule[];
     param_override?: string | null;
     channel_proxy?: string | null;
     match_regex?: string | null;
 };
 
 // ChannelServer 表示后端可能返回空 custom_header 的原始渠道数据。
-export type ChannelServer = Omit<Channel, 'custom_header'> & {
+export type ChannelServer = Omit<Channel, 'custom_header' | 'keys'> & {
     custom_header: CustomHeader[] | null; // 渠道自定义请求头，空值会在页面查询时归一化为空数组。
+    keys: ChannelKey[] | null; // 独立凭据；仅使用单 Key 的渠道为空，页面查询时归一化为空数组。
 };
 
 // ChannelListItem 表示页面消费的渠道原始数据及格式化统计。
@@ -76,6 +113,8 @@ type CreateChannelRequest = {
     proxy?: boolean;
     auto_sync?: boolean;
     custom_header?: CustomHeader[];
+    header_rules?: HeaderRule[];
+    json_rewrite_rules?: JSONRewriteRule[];
     channel_proxy?: string | null;
     param_override?: string | null;
     match_regex?: string | null;
@@ -95,6 +134,8 @@ export type UpdateChannelRequest = {
     proxy?: boolean;
     auto_sync?: boolean;
     custom_header?: CustomHeader[];
+    header_rules?: HeaderRule[];
+    json_rewrite_rules?: JSONRewriteRule[];
     channel_proxy?: string | null;
     param_override?: string | null;
     match_regex?: string | null;
@@ -120,6 +161,7 @@ const channelListFormattedQueryOptions = queryOptions({
                 ...item,
                 models,
                 custom_header: item.custom_header ?? [],
+                keys: item.keys ?? [],
             }) satisfies Channel,
             formatted: {
                 input_token: formatCount(item.input_token),

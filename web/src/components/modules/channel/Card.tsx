@@ -5,9 +5,9 @@ import {
     MorphingDialogContent,
     MorphingDialogDescription,
 } from '@/components/ui/morphing-dialog';
-import { CheckCircle2, Check, DollarSign, Layers, MessageSquare, Pencil, Trash2, X, XCircle } from 'lucide-react';
+import { CheckCircle2, Check, DollarSign, Layers, MessageSquare, Pencil, Timer, Trash2, X, XCircle } from 'lucide-react';
 import { type StatsMetricsFormatted } from '@/api/stats';
-import { type Channel, useEnableChannel, useDeleteChannel } from '@/api/channel';
+import { type Channel, isChannelKeyCooling, useEnableChannel, useDeleteChannel } from '@/api/channel';
 import { ChannelStats } from './Stats';
 import { ChannelForm } from './Form';
 import { useTranslations } from 'use-intl';
@@ -26,6 +26,10 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
     const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
 
     const hoverActionClass = 'flex size-8 items-center justify-center rounded-lg transition-all active:scale-95 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100';
+
+    // 冷却是静默生效的：被限流的凭据会被调度跳过，界面上若不提示就容易误判成渠道故障。
+    // 列表查询每 30 秒刷新一次，冷却到期后徽标会随之消失。
+    const coolingKeys = channel.keys.filter((key) => isChannelKeyCooling(key));
 
     // 列表布局的统计项, 缺少 unit 时只显示数值
     const listMetrics: { icon: React.ReactNode; label: string; value: string | number; unit?: string }[] = [
@@ -73,6 +77,22 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
                             </TooltipContent>
                         </Tooltip>
                         <div className="flex shrink-0 items-center gap-1">
+                            {coolingKeys.length > 0 && (
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <span
+                                            aria-label={t('keyCooling', { count: coolingKeys.length, total: channel.keys.length })}
+                                            className="flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+                                        >
+                                            <Timer className="size-3.5" />
+                                            {coolingKeys.length}/{channel.keys.length}
+                                        </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" sideOffset={10} align="center">
+                                        {t('keyCooling', { count: coolingKeys.length, total: channel.keys.length })}
+                                    </TooltipContent>
+                                </Tooltip>
+                            )}
                             {isConfirmingDelete ? (
                                 <>
                                     <button

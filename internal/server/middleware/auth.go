@@ -14,14 +14,14 @@ import (
 
 func Auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token, err := c.Cookie("auth")
+		token, err := c.Cookie(auth.CookieName)
 		if err != nil || token == "" {
 			resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
 			c.Abort()
 			return
 		}
 		if !auth.VerifyJWTToken(token) {
-			c.SetCookie("auth", "", -1, "/", "", false, false)
+			auth.ClearAuthCookie(c)
 			resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
 			c.Abort()
 			return

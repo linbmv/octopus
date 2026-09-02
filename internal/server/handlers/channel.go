@@ -10,6 +10,7 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/price"
+	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
@@ -44,6 +45,14 @@ func init() {
 		AddRoute(
 			router.NewRoute("/fetch-model", http.MethodPost).
 				Handle(fetchModel),
+		).
+		AddRoute(
+			router.NewRoute("/:id/circuit", http.MethodGet).
+				Handle(getChannelCircuit),
+		).
+		AddRoute(
+			router.NewRoute("/reset-circuit", http.MethodPost).
+				Handle(resetChannelCircuit),
 		)
 	router.NewGroupRouter("/api/v1/channel").
 		Use(middleware.Auth()).
@@ -71,6 +80,7 @@ func createChannel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	relay.InvalidateChannelRuntimeState(channel.ID, "")
 	modelNames := make([]string, 0, len(channel.Models))
 	for _, channelModel := range channel.Models {
 		modelNames = append(modelNames, channelModel.Name)
@@ -93,6 +103,7 @@ func updateChannel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	relay.InvalidateChannelRuntimeState(channel.ID, "")
 	newModelNames := make([]string, 0, len(channel.Models))
 	for _, channelModel := range channel.Models {
 		newModelNames = append(newModelNames, channelModel.Name)
@@ -121,6 +132,7 @@ func enableChannel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	relay.InvalidateChannelRuntimeState(request.ID, "")
 	resp.Success(c, nil)
 }
 
@@ -134,10 +146,41 @@ func deleteChannel(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	relay.InvalidateChannelRuntimeState(id, "")
 	if err := op.LLMCleanupGhosts(c.Request.Context()); err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	resp.Success(c, nil)
+}
+
+func getChannelCircuit(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	if _, err := op.ChannelGet(id); err != nil {
+		resp.Error(c, http.StatusNotFound, "channel not found")
+		return
+	}
+	resp.Success(c, relay.CircuitSnapshotForChannel(id))
+}
+
+func resetChannelCircuit(c *gin.Context) {
+	var request struct {
+		ID    int    `json:"id"`
+		Model string `json:"model,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil || request.ID <= 0 {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	if _, err := op.ChannelGet(request.ID); err != nil {
+		resp.Error(c, http.StatusNotFound, "channel not found")
+		return
+	}
+	relay.InvalidateChannelRuntimeState(request.ID, strings.TrimSpace(request.Model))
 	resp.Success(c, nil)
 }
 

@@ -98,6 +98,9 @@ func GroupCreate(group *model.Group, ctx context.Context) error {
 	for i := range items {
 		items[i].ID = 0
 		items[i].GroupID = 0
+		if items[i].Weight <= 0 {
+			items[i].Weight = 1
+		}
 		if err := normalizeAndValidateGroupItem(&items[i]); err != nil {
 			return fmt.Errorf("item %d: %w", i+1, err)
 		}
@@ -216,12 +219,18 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 		}
 
 		for _, item := range req.ItemsToUpdate {
-			fields := make(map[string]interface{}, 2)
+			fields := make(map[string]interface{}, 3)
 			if item.Priority != 0 {
 				fields["priority"] = item.Priority
 			}
 			if item.Disabled != nil {
 				fields["disabled"] = *item.Disabled
+			}
+			if item.Weight != 0 {
+				if item.Weight < 1 {
+					return fmt.Errorf("group item %d weight must be positive", item.ID)
+				}
+				fields["weight"] = item.Weight
 			}
 			if len(fields) == 0 {
 				continue
@@ -391,10 +400,12 @@ func groupSnapshot(group model.Group) model.Group {
 }
 
 func validateGroupMode(mode model.GroupMode) error {
-	if mode != model.GroupModeManual && mode != model.GroupModeFailover {
+	switch mode {
+	case model.GroupModeManual, model.GroupModeFailover, model.GroupModeRoundRobin, model.GroupModeRandom, model.GroupModeWeighted:
+		return nil
+	default:
 		return fmt.Errorf("unsupported group mode: %s", mode)
 	}
-	return nil
 }
 
 func normalizeGroupItemType(itemType model.GroupItemType) model.GroupItemType {
@@ -427,7 +438,11 @@ func normalizeAndValidateGroupItem(item *model.GroupItem) error {
 
 func groupItemFromAddRequest(groupID int, req model.GroupItemAddRequest) model.GroupItem {
 	itemType := normalizeGroupItemType(req.Type)
-	item := model.GroupItem{GroupID: groupID, Type: itemType, Priority: req.Priority}
+	weight := req.Weight
+	if weight <= 0 {
+		weight = 1
+	}
+	item := model.GroupItem{GroupID: groupID, Type: itemType, Priority: req.Priority, Weight: weight}
 	if itemType == model.GroupItemTypeGroup {
 		item.TargetGroupID = intPointer(req.TargetGroupID)
 	} else {

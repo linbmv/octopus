@@ -255,7 +255,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                         const itemSwitching = item.id === switchingItemId;
                                         const itemCurrent = switchingItemId !== null
                                             ? itemSwitching
-                                            : activeGroup.mode === 'failover'
+                                            : activeGroup.mode !== 'manual'
                                                 ? activeGroup.runtime?.current_item_id === item.id
                                                 : itemActive;
                                         return (
@@ -263,9 +263,9 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                                 key={item.id ?? item.channel_model_id}
                                                 type="button"
                                                 aria-pressed={itemCurrent}
-                                                disabled={item.id === undefined || activeGroup.mode === 'failover' || switchingItemId !== null || stopRound.isPending}
+                                                disabled={item.id === undefined || activeGroup.mode !== 'manual' || switchingItemId !== null || stopRound.isPending}
                                                 onClick={async () => {
-                                                    if (!activeGroup.id || item.id === undefined || activeGroup.mode === 'failover') return;
+                                                    if (!activeGroup.id || item.id === undefined || activeGroup.mode !== 'manual') return;
                                                     setSwitchingItemId(item.id);
                                                     try {
                                                         await updateActiveItem.mutateAsync({ groupId: activeGroup.id, itemId: itemActive ? 0 : item.id });

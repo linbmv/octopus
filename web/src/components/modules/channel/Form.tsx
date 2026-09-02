@@ -2,6 +2,8 @@ import {
     ChannelType,
     type Channel,
     type ChannelModelInput,
+    type HeaderRule,
+    type JSONRewriteRule,
     type UpdateChannelRequest,
     useCreateChannel,
     useFetchModel,
@@ -36,6 +38,8 @@ interface ChannelFormData {
     base_url: string;
     key: string;
     custom_header: Channel['custom_header'];
+    header_rules: HeaderRule[];
+    json_rewrite_rules: JSONRewriteRule[];
     channel_proxy: string;
     param_override: string;
     models: ChannelModelInput[];
@@ -52,6 +56,8 @@ const emptyFormData: ChannelFormData = {
     base_url: '',
     key: '',
     custom_header: [{ header_key: '', header_value: '' }],
+    header_rules: [],
+    json_rewrite_rules: [],
     channel_proxy: '',
     param_override: '',
     models: [],
@@ -77,6 +83,8 @@ export function ChannelForm({ channel }: { channel?: Channel }) {
         base_url: channel.base_url,
         key: channel.key,
         custom_header: channel.custom_header.length > 0 ? channel.custom_header : [{ header_key: '', header_value: '' }],
+        header_rules: channel.header_rules ?? [],
+        json_rewrite_rules: channel.json_rewrite_rules ?? [],
         channel_proxy: channel.channel_proxy ?? '',
         param_override: channel.param_override ?? '',
         models: channel.models.map(({ name, source }) => ({ name, source })),
@@ -155,6 +163,16 @@ export function ChannelForm({ channel }: { channel?: Channel }) {
         setFormData({ ...formData, custom_header: next });
     };
 
+    const handleUpdateHeaderRule = (idx: number, patch: Partial<HeaderRule>) => {
+        const next = formData.header_rules.map((rule, i) => (i === idx ? { ...rule, ...patch } : rule));
+        setFormData({ ...formData, header_rules: next });
+    };
+
+    const handleUpdateJSONRule = (idx: number, patch: Partial<JSONRewriteRule>) => {
+        const next = formData.json_rewrite_rules.map((rule, i) => (i === idx ? { ...rule, ...patch } : rule));
+        setFormData({ ...formData, json_rewrite_rules: next });
+    };
+
     // 新建提交全部字段; 编辑只提交变化字段, 空串对应后端的清空语义
     const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -163,6 +181,21 @@ export function ChannelForm({ channel }: { channel?: Channel }) {
         const custom_header = formData.custom_header
             .map((h) => ({ header_key: h.header_key.trim(), header_value: h.header_value }))
             .filter((h) => h.header_key && h.header_value !== '');
+
+        // remove 不需要值, 其余动作要求值非空; 缺名规则直接丢弃而不是提交给后端报错
+        const header_rules = formData.header_rules
+            .map((rule) => ({ ...rule, header_key: rule.header_key.trim() }))
+            .filter((rule) => rule.header_key && (rule.action === 'remove' || (rule.header_value ?? '') !== ''))
+            .map((rule) => (rule.action === 'remove'
+                ? { action: rule.action, header_key: rule.header_key }
+                : rule));
+
+        const json_rewrite_rules = formData.json_rewrite_rules
+            .map((rule) => ({ ...rule, path: rule.path.trim() }))
+            .filter((rule) => rule.path && (rule.action === 'remove' || (rule.value ?? '').trim() !== ''))
+            .map((rule) => (rule.action === 'remove'
+                ? { action: rule.action, path: rule.path }
+                : { ...rule, value: (rule.value ?? '').trim() }));
 
         if (!channel) {
             createChannel.mutate({
@@ -175,6 +208,8 @@ export function ChannelForm({ channel }: { channel?: Channel }) {
                 proxy: formData.proxy,
                 auto_sync: formData.auto_sync,
                 custom_header,
+                header_rules,
+                json_rewrite_rules,
                 channel_proxy: formData.channel_proxy.trim(),
                 param_override: formData.param_override.trim(),
                 match_regex: formData.match_regex.trim(),
@@ -192,6 +227,8 @@ export function ChannelForm({ channel }: { channel?: Channel }) {
         if (formData.proxy !== channel.proxy) req.proxy = formData.proxy;
         if (formData.auto_sync !== channel.auto_sync) req.auto_sync = formData.auto_sync;
         if (JSON.stringify(custom_header) !== JSON.stringify(channel.custom_header)) req.custom_header = custom_header;
+        if (JSON.stringify(header_rules) !== JSON.stringify(channel.header_rules ?? [])) req.header_rules = header_rules;
+        if (JSON.stringify(json_rewrite_rules) !== JSON.stringify(channel.json_rewrite_rules ?? [])) req.json_rewrite_rules = json_rewrite_rules;
         for (const key of ['channel_proxy', 'param_override', 'match_regex'] as const) {
             const next = formData[key].trim();
             if (next !== (channel[key] ?? '')) req[key] = next;
@@ -424,6 +461,131 @@ export function ChannelForm({ channel }: { channel?: Channel }) {
                                             onClick={() => setFormData({ ...formData, custom_header: formData.custom_header.filter((_, i) => i !== idx) })}
                                             disabled={formData.custom_header.length <= 1}
                                             className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive hover:bg-transparent disabled:opacity-40"
+                                            title="Remove"
+                                        >
+                                            <X className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm font-medium text-card-foreground">
+                                    {t('headerRules')} {formData.header_rules.length > 0 ? `(${formData.header_rules.length})` : ''}
+                                </label>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setFormData({ ...formData, header_rules: [...formData.header_rules, { action: 'set', header_key: '', header_value: '' }] })}
+                                    className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
+                                >
+                                    <Plus className="h-3 w-3 mr-1" />
+                                    {t('headerRulesAdd')}
+                                </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground/70">{t('headerRulesHint')}</p>
+                            <div className="space-y-2">
+                                {formData.header_rules.map((rule, idx) => (
+                                    <div key={`hdr-rule-${idx}`} className="flex items-center gap-2">
+                                        <Select
+                                            value={rule.action}
+                                            onValueChange={(value) => handleUpdateHeaderRule(idx, { action: value as HeaderRule['action'] })}
+                                        >
+                                            <SelectTrigger className="rounded-xl w-28">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="set">set</SelectItem>
+                                                <SelectItem value="append">append</SelectItem>
+                                                <SelectItem value="remove">remove</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        <Input
+                                            type="text"
+                                            value={rule.header_key}
+                                            onChange={(e) => handleUpdateHeaderRule(idx, { header_key: e.target.value })}
+                                            placeholder={t('customHeaderKey')}
+                                            className="rounded-xl flex-1"
+                                        />
+                                        <Input
+                                            type="text"
+                                            value={rule.header_value ?? ''}
+                                            onChange={(e) => handleUpdateHeaderRule(idx, { header_value: e.target.value })}
+                                            placeholder={t('customHeaderValue')}
+                                            disabled={rule.action === 'remove'}
+                                            className="rounded-xl flex-1 disabled:opacity-40"
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => setFormData({ ...formData, header_rules: formData.header_rules.filter((_, i) => i !== idx) })}
+                                            className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive hover:bg-transparent"
+                                            title="Remove"
+                                        >
+                                            <X className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm font-medium text-card-foreground">
+                                    {t('jsonRewriteRules')} {formData.json_rewrite_rules.length > 0 ? `(${formData.json_rewrite_rules.length})` : ''}
+                                </label>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setFormData({ ...formData, json_rewrite_rules: [...formData.json_rewrite_rules, { action: 'override', path: '', value: '' }] })}
+                                    className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
+                                >
+                                    <Plus className="h-3 w-3 mr-1" />
+                                    {t('jsonRewriteRulesAdd')}
+                                </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground/70">{t('jsonRewriteRulesHint')}</p>
+                            <div className="space-y-2">
+                                {formData.json_rewrite_rules.map((rule, idx) => (
+                                    <div key={`json-rule-${idx}`} className="flex items-center gap-2">
+                                        <Select
+                                            value={rule.action}
+                                            onValueChange={(value) => handleUpdateJSONRule(idx, { action: value as JSONRewriteRule['action'] })}
+                                        >
+                                            <SelectTrigger className="rounded-xl w-28">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="override">override</SelectItem>
+                                                <SelectItem value="remove">remove</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        <Input
+                                            type="text"
+                                            value={rule.path}
+                                            onChange={(e) => handleUpdateJSONRule(idx, { path: e.target.value })}
+                                            placeholder={t('jsonRewritePathPlaceholder')}
+                                            className="rounded-xl flex-1"
+                                        />
+                                        <Input
+                                            type="text"
+                                            value={rule.value ?? ''}
+                                            onChange={(e) => handleUpdateJSONRule(idx, { value: e.target.value })}
+                                            placeholder={t('jsonRewriteValuePlaceholder')}
+                                            disabled={rule.action === 'remove'}
+                                            className="rounded-xl flex-1 disabled:opacity-40"
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => setFormData({ ...formData, json_rewrite_rules: formData.json_rewrite_rules.filter((_, i) => i !== idx) })}
+                                            className="h-8 w-8 p-0 rounded-xl text-muted-foreground hover:text-destructive hover:bg-transparent"
                                             title="Remove"
                                         >
                                             <X className="h-4 w-4" />

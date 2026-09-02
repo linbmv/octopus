@@ -43,6 +43,7 @@ export function CreateDialogContent() {
                             channel_model_id: member.channel_model_id,
                             target_group_id: member.target_group_id,
                             priority: index + 1,
+                            weight: member.weight ?? 1,
                             disabled: false,
                         }));
 
