@@ -286,6 +286,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 	if err != nil {
 		return nil, err
 	}
+	res.Warnings = append(res.Warnings, dump.Warnings...)
 	return res, nil
 }
 

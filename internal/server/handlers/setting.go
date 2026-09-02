@@ -279,34 +279,130 @@ func decodeDBDump(body []byte, dump *model.DBDump) error {
 		return json.Unmarshal(body, &struct{}{})
 	}
 
-	if err := json.Unmarshal(body, dump); err != nil {
-		return err
+	// Edge v2 plaintext exports use numeric group modes. Detect that format
+	// before unmarshalling into the current string-based GroupMode field, then
+	// reuse the same compatibility conversion as encrypted Edge backups.
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(body, &header); err == nil && header.Version == 2 {
+		return decodeEdgeV2Dump(body, dump)
 	}
 
-	if dump.Version == 0 &&
-		len(dump.Channels) == 0 &&
-		len(dump.ChannelKeys) == 0 &&
-		len(dump.Groups) == 0 &&
-		len(dump.ChannelModels) == 0 &&
-		len(dump.GroupItems) == 0 &&
-		len(dump.Settings) == 0 &&
-		len(dump.APIKeys) == 0 &&
-		len(dump.LLMInfos) == 0 &&
-		len(dump.StatsDaily) == 0 &&
-		len(dump.StatsHourly) == 0 &&
-		len(dump.StatsTotal) == 0 &&
-		len(dump.StatsAPIKey) == 0 {
+	decodeErr := json.Unmarshal(body, dump)
+	if decodeErr == nil {
+		if dumpHasPayload(*dump) {
+			return nil
+		}
 		var wrapper struct {
 			Code    int             `json:"code"`
 			Message string          `json:"message"`
 			Data    json.RawMessage `json:"data"`
 		}
 		if err := json.Unmarshal(body, &wrapper); err == nil && len(wrapper.Data) > 0 {
-			return json.Unmarshal(wrapper.Data, dump)
+			return decodeDBDump(wrapper.Data, dump)
 		}
+		return nil
 	}
 
+	// A wrapper can contain the same legacy Edge payload; try it after the
+	// direct parse so the old response-envelope compatibility remains intact.
+	var wrapper struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &wrapper); err == nil && len(wrapper.Data) > 0 {
+		return decodeDBDump(wrapper.Data, dump)
+	}
+	return fmt.Errorf("invalid database dump: %w", decodeErr)
+}
+
+func decodeEdgeV2Dump(body []byte, dump *model.DBDump) error {
+	converted, err := op.ConvertEdgeV2Config(body)
+	if err != nil {
+		return err
+	}
+	compatible := model.DBDump{
+		Version:       3,
+		Scope:         model.ConfigDumpScope,
+		ExportedAt:    converted.ExportedAt,
+		Channels:      make([]model.Channel, 0, len(converted.Channels)),
+		ChannelModels: make([]model.ChannelModel, 0, len(converted.ChannelModels)),
+		Groups:        make([]model.Group, 0, len(converted.Groups)),
+		GroupItems:    make([]model.GroupItem, 0, len(converted.GroupItems)),
+		APIKeys:       append([]model.APIKey(nil), converted.APIKeys...),
+		Settings:      append([]model.Setting(nil), converted.Settings...),
+		Warnings:      append([]string(nil), converted.Warnings...),
+	}
+	for _, channel := range converted.Channels {
+		item := model.Channel{
+			ID:               channel.ID,
+			Name:             channel.Name,
+			Type:             channel.Type,
+			Enabled:          channel.Enabled,
+			BaseURL:          channel.BaseURL,
+			BaseUrls:         append([]model.BaseUrl(nil), channel.BaseUrls...),
+			Key:              channel.Key,
+			Proxy:            channel.Proxy,
+			AutoSync:         channel.AutoSync,
+			CustomHeader:     append([]model.CustomHeader(nil), channel.CustomHeader...),
+			HeaderRules:      append([]model.HeaderRule(nil), channel.HeaderRules...),
+			JSONRewriteRules: append([]model.JSONRewriteRule(nil), channel.JSONRewriteRules...),
+			ParamOverride:    channel.ParamOverride,
+			ChannelProxy:     channel.ChannelProxy,
+			MatchRegex:       channel.MatchRegex,
+		}
+		for _, key := range channel.Keys {
+			item.Keys = append(item.Keys, model.ChannelKey{
+				ID:               key.ID,
+				ChannelID:        key.ChannelID,
+				Enabled:          key.Enabled,
+				ChannelKey:       key.ChannelKey,
+				StatusCode:       key.StatusCode,
+				LastUseTimeStamp: key.LastUseTimeStamp,
+				RetryAfterUntil:  key.RetryAfterUntil,
+				Remark:           key.Remark,
+			})
+		}
+		compatible.Channels = append(compatible.Channels, item)
+	}
+	for _, channelModel := range converted.ChannelModels {
+		compatible.ChannelModels = append(compatible.ChannelModels, model.ChannelModel{
+			ID: channelModel.ID, ChannelID: channelModel.ChannelID,
+			Name: channelModel.Name, Source: channelModel.Source,
+		})
+	}
+	for _, group := range converted.Groups {
+		compatible.Groups = append(compatible.Groups, model.Group{
+			ID: group.ID, Name: group.Name, Enabled: group.Enabled,
+			Mode: group.Mode, ActiveItemID: group.ActiveItemID,
+			RelayConfig: group.RelayConfig,
+		})
+	}
+	for _, item := range converted.GroupItems {
+		compatible.GroupItems = append(compatible.GroupItems, model.GroupItem{
+			ID: item.ID, GroupID: item.GroupID, Type: item.Type,
+			ChannelModelID: item.ChannelModelID, TargetGroupID: item.TargetGroupID,
+			Priority: item.Priority, Weight: item.Weight, Disabled: item.Disabled,
+		})
+	}
+	*dump = compatible
 	return nil
+}
+
+func dumpHasPayload(dump model.DBDump) bool {
+	return dump.Version != 0 ||
+		len(dump.Channels) > 0 ||
+		len(dump.ChannelKeys) > 0 ||
+		len(dump.Groups) > 0 ||
+		len(dump.ChannelModels) > 0 ||
+		len(dump.GroupItems) > 0 ||
+		len(dump.Settings) > 0 ||
+		len(dump.APIKeys) > 0 ||
+		len(dump.LLMInfos) > 0 ||
+		len(dump.StatsDaily) > 0 ||
+		len(dump.StatsHourly) > 0 ||
+		len(dump.StatsTotal) > 0 ||
+		len(dump.StatsAPIKey) > 0
 }
 
 func isSupportedGroupMode(mode model.GroupMode) bool {

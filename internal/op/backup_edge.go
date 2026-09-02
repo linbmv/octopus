@@ -79,11 +79,14 @@ type edgeV2GroupItem struct {
 	Disabled      bool   `json:"disabled"`
 }
 
-// convertEdgeV2Config turns an encrypted Edge v2 dump into the C06 config
+// ConvertEdgeV2Config turns an Edge v2 dump into the C06 config
 // wire format. Numeric IDs are retained for the empty-target migration path;
 // importing into a populated target remains subject to the normal incremental
 // ID conflict semantics and is reported by the import result.
-func convertEdgeV2Config(data []byte) (*model.ConfigDump, error) {
+//
+// The input is the decrypted JSON payload. Callers that accept an encrypted
+// backup must authenticate and decrypt it before calling this function.
+func ConvertEdgeV2Config(data []byte) (*model.ConfigDump, error) {
 	var edge edgeV2Dump
 	if err := json.Unmarshal(data, &edge); err != nil {
 		return nil, ErrDBBackupInvalidEnvelope

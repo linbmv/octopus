@@ -80,7 +80,7 @@ func DecodeConfigDump(input, password []byte) (*model.ConfigDump, error) {
 		return nil, ErrDBBackupInvalidEnvelope
 	}
 	if header.Version == 2 {
-		return convertEdgeV2Config(plaintext)
+		return ConvertEdgeV2Config(plaintext)
 	}
 	var dump model.ConfigDump
 	if err := json.Unmarshal(plaintext, &dump); err != nil {

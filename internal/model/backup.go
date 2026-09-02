@@ -22,6 +22,7 @@ type DBDump struct {
 	StatsDaily  []StatsDaily  `json:"stats_daily,omitempty"`
 	StatsHourly []StatsHourly `json:"stats_hourly,omitempty"`
 	StatsAPIKey []StatsAPIKey `json:"stats_api_key,omitempty"`
+	Warnings    []string      `json:"warnings,omitempty"`
 }
 
 // ConfigDump 是跨部署迁移使用的配置备份格式。
