@@ -26,3 +26,11 @@ internal/server/server_test.go:generic-api-key:217
 479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README_zh.md:generic-api-key:316
 479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README_zh.md:generic-api-key:335
 479454f96d2c340ca4559b1cdc3a040ff81c9a8f:README_zh.md:generic-api-key:364
+
+# Historical synthetic fixtures: a JWT-secret unit-test value, a local
+# Octopus API-key example in the now-removed Codex guide, and a metrics bearer
+# token used only by the server integration test. These exact fingerprints do
+# not suppress new findings at other paths or commits.
+1a1536c06a4f498f95b43f0a547c8bafb2eb02b0:internal/op/setting_secret_test.go:generic-api-key:13
+c595b9df475fea87f4fcca5ed05f9f18b75e275c:docs/codex-oauth-channel.md:curl-auth-header:30
+d47c9bfa2e16affa3714701faaa4b604ded3a23b:internal/server/server_test.go:generic-api-key:216
