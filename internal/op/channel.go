@@ -149,19 +149,10 @@ func ChannelKeySaveDB(ctx context.Context) error {
 }
 
 func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model.Channel, error) {
-	return channelUpdate(req, nil, ctx)
+	return channelUpdate(req, ctx)
 }
 
-// ChannelUpdateExpectedVersion atomically claims and updates one channel
-// configuration version so a stale writer cannot overwrite a concurrent edit.
-func ChannelUpdateExpectedVersion(req *model.ChannelUpdateRequest, expectedVersion int, ctx context.Context) (*model.Channel, error) {
-	if expectedVersion <= 0 {
-		return nil, fmt.Errorf("%w: expected channel config version must be positive", ErrInvalidInput)
-	}
-	return channelUpdate(req, &expectedVersion, ctx)
-}
-
-func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx context.Context) (*model.Channel, error) {
+func channelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model.Channel, error) {
 	if err := model.ValidateChannelUpdate(req); err != nil {
 		return nil, fmt.Errorf("%w: invalid channel update: %v", ErrInvalidInput, err)
 	}
@@ -191,20 +182,6 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 		tx.Rollback()
 		return nil, err
 	}
-	if expectedVersion != nil {
-		result := tx.Model(&model.Channel{}).
-			Where("id = ? AND config_version = ?", req.ID, *expectedVersion).
-			UpdateColumn("config_version", gorm.Expr("config_version + ?", 1))
-		if result.Error != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("claim channel config version: %w", result.Error)
-		}
-		if result.RowsAffected != 1 {
-			tx.Rollback()
-			return nil, fmt.Errorf("%w: channel configuration changed concurrently", ErrConflict)
-		}
-	}
-
 	if err := applyChannelPatchTx(tx, req); err != nil {
 		tx.Rollback()
 		return nil, err
@@ -221,7 +198,7 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 		tx.Rollback()
 		return nil, err
 	}
-	if expectedVersion == nil && channelUpdateHasChanges(req) {
+	if channelUpdateHasChanges(req) {
 		if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).
 			UpdateColumn("config_version", gorm.Expr("config_version + ?", 1)).Error; err != nil {
 			tx.Rollback()

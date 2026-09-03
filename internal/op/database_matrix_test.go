@@ -257,7 +257,7 @@ func assertDatabaseMatrixSchemaAndMigrations(t *testing.T, dbType string) {
 	if err := conn.Order("version ASC").Find(&records).Error; err != nil {
 		t.Fatalf("read migration records: %v", err)
 	}
-	wantVersions := []int{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	wantVersions := []int{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}
 	gotVersions := make([]int, len(records))
 	for i, record := range records {
 		gotVersions[i] = record.Version
