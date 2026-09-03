@@ -466,11 +466,12 @@ jobs:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
           TRIVY_IMAGE_SOURCE: docker
           XDG_CACHE_HOME: ${{ runner.temp }}/syft-cache
-        run: scripts/security/scan-container.sh \
-          "${{ steps.staging.outputs.image }}@${{ steps.build_staging.outputs.digest }}" \
-          "${{ matrix.variant }}-${{ matrix.arch }}" \
-          build/container-evidence \
-          "${{ matrix.platform }}"
+        run: |
+          scripts/security/scan-container.sh \
+            "${{ steps.staging.outputs.image }}@${{ steps.build_staging.outputs.digest }}" \
+            "${{ matrix.variant }}-${{ matrix.arch }}" \
+            build/container-evidence \
+            "${{ matrix.platform }}"
 
       - name: Validate exact image evidence set
         run: |
