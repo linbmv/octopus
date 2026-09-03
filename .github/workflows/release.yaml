@@ -437,6 +437,14 @@ jobs:
               run_attempt: $run_attempt
             }' >"build/container-evidence/octopus-${{ matrix.variant }}-${{ matrix.arch }}.digest.json"
 
+      - name: Pull exact image for local security scan
+        env:
+          IMAGE_REFERENCE: ${{ steps.staging.outputs.image }}@${{ steps.build_staging.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull --platform "${{ matrix.platform }}" "${IMAGE_REFERENCE}"
+          docker image inspect "${IMAGE_REFERENCE}" >/dev/null
+
       - name: Install pinned Syft
         id: syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
@@ -454,13 +462,9 @@ jobs:
         env:
           SBOM_VERSION: ${{ github.ref_name }}
           SYFT_BIN: ${{ steps.syft.outputs.cmd }}
-          SYFT_REGISTRY_AUTH_USERNAME: ${{ github.actor }}
-          SYFT_REGISTRY_AUTH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          SYFT_IMAGE_SOURCE: registry
+          SYFT_IMAGE_SOURCE: docker
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
-          TRIVY_IMAGE_SOURCE: remote
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_IMAGE_SOURCE: docker
           XDG_CACHE_HOME: ${{ runner.temp }}/syft-cache
         run: scripts/security/scan-container.sh \
           "${{ steps.staging.outputs.image }}@${{ steps.build_staging.outputs.digest }}" \
