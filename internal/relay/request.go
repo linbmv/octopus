@@ -449,8 +449,7 @@ func compactGroupItemRank(item dbmodel.GroupItem, channel *dbmodel.Channel) int 
 	}
 	switch channel.Type {
 	case llm.APIFormatOpenAIResponse,
-		llm.APIFormatOpenAIResponseCompact,
-		dbmodel.ChannelTypeOpenAICodex:
+		llm.APIFormatOpenAIResponseCompact:
 		return 3
 	default:
 		return 4

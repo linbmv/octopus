@@ -299,7 +299,6 @@ func (r *relayRun) popDeferredSlowAttempt() *relayAttempt {
 		r.metrics.ActualModel = attempt.groupItem.ModelName
 		r.metrics.ParamOverride = ""
 		r.metrics.OutboundRequestSummary = nil
-		r.metrics.OutboundRequestArtifact = nil
 		attempt.responseHeaderDuration = 0
 		outAdapter, err := newChannelOutbound(attempt.channel, r.internalRequest, attempt.baseURL, attempt.usedKey)
 		if err != nil {

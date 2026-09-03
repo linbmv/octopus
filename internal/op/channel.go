@@ -104,48 +104,6 @@ func ChannelKeyUpdate(key model.ChannelKey) error {
 	return nil
 }
 
-// ChannelKeyCredentialReplace durably persists a rotated credential before it
-// updates the in-memory caches. The compare-and-swap predicate prevents an
-// OAuth refresh from overwriting a concurrent administrator key replacement.
-func ChannelKeyCredentialReplace(ctx context.Context, channelID, keyID int, previous, next string) error {
-	previous = strings.TrimSpace(previous)
-	next = strings.TrimSpace(next)
-	if channelID <= 0 || keyID <= 0 || previous == "" || next == "" || len(next) > model.MaxChannelKeyBytes {
-		return fmt.Errorf("%w: invalid channel credential replacement", ErrInvalidInput)
-	}
-	if previous == next {
-		return nil
-	}
-	channelKeyPersistenceMu.Lock()
-	defer channelKeyPersistenceMu.Unlock()
-
-	result := db.GetDB().WithContext(ctx).Model(&model.ChannelKey{}).
-		Where("id = ? AND channel_id = ? AND channel_key = ?", keyID, channelID, previous).
-		Update("channel_key", next)
-	if result.Error != nil {
-		return fmt.Errorf("persist refreshed channel credential: %w", result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return fmt.Errorf("%w: channel credential changed concurrently", ErrConflict)
-	}
-
-	if cached, ok := channelKeyCache.Get(keyID); ok && cached.ChannelID == channelID && cached.ChannelKey == previous {
-		cached.ChannelKey = next
-		channelKeyCache.Set(keyID, cached)
-	}
-	if channel, ok := channelCache.Get(channelID); ok {
-		keys := append([]model.ChannelKey(nil), channel.Keys...)
-		for i := range keys {
-			if keys[i].ID == keyID && keys[i].ChannelKey == previous {
-				keys[i].ChannelKey = next
-				channel.Keys = keys
-				channelCache.Set(channelID, channel)
-				break
-			}
-		}
-	}
-	return nil
-}
 func ChannelBaseUrlUpdate(channelID int, baseUrl []model.BaseUrl) error {
 	ch, ok := channelCache.Get(channelID)
 	if !ok {
@@ -195,8 +153,7 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 }
 
 // ChannelUpdateExpectedVersion atomically claims and updates one channel
-// configuration version. It is used by self-healing apply/rollback so a stale
-// diagnosis can never overwrite a concurrent administrator edit.
+// configuration version so a stale writer cannot overwrite a concurrent edit.
 func ChannelUpdateExpectedVersion(req *model.ChannelUpdateRequest, expectedVersion int, ctx context.Context) (*model.Channel, error) {
 	if expectedVersion <= 0 {
 		return nil, fmt.Errorf("%w: expected channel config version must be positive", ErrInvalidInput)
@@ -208,12 +165,9 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 	if err := model.ValidateChannelUpdate(req); err != nil {
 		return nil, fmt.Errorf("%w: invalid channel update: %v", ErrInvalidInput, err)
 	}
-	currentChannel, ok := channelCache.Get(req.ID)
+	_, ok := channelCache.Get(req.ID)
 	if !ok {
 		return nil, fmt.Errorf("%w: channel not found", ErrNotFound)
-	}
-	if err := validateChannelAuthenticationUpdate(currentChannel, req); err != nil {
-		return nil, fmt.Errorf("%w: invalid channel update: %v", ErrInvalidInput, err)
 	}
 	if req.Name != nil {
 		for id, existing := range channelCache.GetAll() {
@@ -277,12 +231,6 @@ func channelUpdate(req *model.ChannelUpdateRequest, expectedVersion *int, ctx co
 	if err := invalidateCapabilityEvidenceForChannelUpdateTx(tx, req); err != nil {
 		tx.Rollback()
 		return nil, fmt.Errorf("invalidate channel capability evidence: %w", err)
-	}
-	if tx.Migrator().HasTable(&model.ChannelBaseline{}) {
-		if err := deleteChannelBaselinesKeysTx(tx, req.ID, req.KeysToDelete); err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("delete removed-key channel baselines: %w", err)
-		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
@@ -356,43 +304,6 @@ func validateChannelKeyChangesTx(tx *gorm.DB, channelID int, req *model.ChannelU
 	return nil
 }
 
-func validateChannelAuthenticationUpdate(current model.Channel, req *model.ChannelUpdateRequest) error {
-	channelType := current.Type
-	if req.Type != nil {
-		channelType = *req.Type
-	}
-	baseURLs := current.BaseUrls
-	if req.BaseUrls != nil {
-		baseURLs = *req.BaseUrls
-	}
-
-	keysByID := make(map[int]model.ChannelKey, len(current.Keys))
-	for _, key := range current.Keys {
-		keysByID[key.ID] = key
-	}
-	for _, id := range req.KeysToDelete {
-		delete(keysByID, id)
-	}
-	for _, update := range req.KeysToUpdate {
-		key, exists := keysByID[update.ID]
-		if !exists {
-			continue
-		}
-		if update.ChannelKey != nil {
-			key.ChannelKey = strings.TrimSpace(*update.ChannelKey)
-		}
-		keysByID[update.ID] = key
-	}
-	keys := make([]model.ChannelKey, 0, len(keysByID)+len(req.KeysToAdd))
-	for _, key := range keysByID {
-		keys = append(keys, key)
-	}
-	for _, key := range req.KeysToAdd {
-		keys = append(keys, model.ChannelKey{Enabled: key.Enabled, ChannelKey: strings.TrimSpace(key.ChannelKey), Remark: key.Remark})
-	}
-	return model.ValidateChannelAuthentication(channelType, baseURLs, keys)
-}
-
 func applyChannelPatchTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {
 	helper := NewPatchHelper()
 	helper.ApplyField("name", req.Name)
@@ -423,7 +334,6 @@ func applyChannelPatchTx(tx *gorm.DB, req *model.ChannelUpdateRequest) error {
 	helper.ApplyField("match_regex", req.MatchRegex)
 	helper.ApplyField("user_agent", req.UserAgent)
 	helper.ApplyField("policy_profile", req.PolicyProfile)
-	helper.ApplyField("self_healing_enabled", req.SelfHealingEnabled)
 	helper.ApplyField("first_token_timeout_exception_enabled", req.FirstTokenTimeoutExceptionEnabled)
 	helper.ApplyField("first_token_timeout_exception_seconds", req.FirstTokenTimeoutExceptionSeconds)
 
@@ -456,7 +366,7 @@ func channelUpdateHasChanges(req *model.ChannelUpdateRequest) bool {
 		req.JSONRewriteRules != nil || req.ChannelProxy != nil || req.ParamOverride != nil ||
 		req.RawPassthrough != nil || req.RPMLimit != nil || req.MaxConcurrency != nil ||
 		req.MatchRegex != nil || req.UserAgent != nil || req.PolicyProfile != nil ||
-		req.SelfHealingEnabled != nil || req.FirstTokenTimeoutExceptionEnabled != nil ||
+		req.FirstTokenTimeoutExceptionEnabled != nil ||
 		req.FirstTokenTimeoutExceptionSeconds != nil || len(req.KeysToAdd) > 0 ||
 		len(req.KeysToUpdate) > 0 || len(req.KeysToDelete) > 0
 }
@@ -658,17 +568,6 @@ func ChannelDel(id int, ctx context.Context) error {
 			return fmt.Errorf("failed to delete channel capability evidence: %w", err)
 		}
 	}
-	if tx.Migrator().HasTable(&model.ChannelBaseline{}) {
-		if err := deleteChannelBaselinesChannelTx(tx, id); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to delete channel baselines: %w", err)
-		}
-	}
-	if err := deleteSelfHealingChannelTx(tx, id); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to delete channel self-healing evidence: %w", err)
-	}
-
 	// 删除统计数据
 	if err := tx.Where("channel_id = ?", id).Delete(&model.StatsChannel{}).Error; err != nil {
 		tx.Rollback()

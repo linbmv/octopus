@@ -14,13 +14,10 @@ import (
 
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
-	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/relay/errorclass"
 	"github.com/bestruirui/octopus/internal/requestrewrite"
 	"github.com/looplj/axonhub/llm"
-	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/transformer"
-	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 )
 
 const maxProbeResponseBytes = 1 << 20
@@ -145,10 +142,6 @@ func buildProbeRequest(
 	if maxOutputTokens <= 0 {
 		return nil, errors.New("probe output token limit must be positive")
 	}
-	if channel.Type == model.ChannelTypeOpenAICodex {
-		return buildCodexProbeRequest(ctx, channel, key, endpoint, modelName, capability, maxOutputTokens)
-	}
-
 	var target string
 	var payload map[string]any
 	switch channel.Type {
@@ -199,60 +192,6 @@ func buildProbeRequest(
 		request.Header.Set("Authorization", "Bearer "+key.ChannelKey)
 	}
 	applyChannelProbeHeaders(request, channel)
-	return request, nil
-}
-
-func buildCodexProbeRequest(
-	ctx context.Context,
-	channel *model.Channel,
-	key model.ChannelKey,
-	endpoint string,
-	modelName string,
-	capability model.Capability,
-	maxOutputTokens int,
-) (*http.Request, error) {
-	payload := openAIResponsesProbePayload(modelName, capability, maxOutputTokens)
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("encode Codex probe request: %w", err)
-	}
-	raw := &httpclient.Request{
-		Method:      http.MethodPost,
-		Path:        "/v1/responses",
-		ContentType: "application/json",
-		Headers:     http.Header{"Content-Type": {"application/json"}},
-		Body:        body,
-	}
-	internalRequest, err := responses.NewInboundTransformer().TransformRequest(ctx, raw)
-	if err != nil {
-		return nil, fmt.Errorf("parse Codex probe request: %w", err)
-	}
-	internalRequest.RawRequest = raw
-	final, err := relay.BuildFinalOutboundRequest(ctx, channel, key, endpoint, internalRequest)
-	if err != nil {
-		return nil, fmt.Errorf("build Codex probe request: %w", err)
-	}
-	request, err := http.NewRequestWithContext(ctx, final.Request.Method, final.Request.URL, bytes.NewReader(final.Request.Body))
-	if err != nil {
-		return nil, fmt.Errorf("create Codex probe HTTP request: %w", err)
-	}
-	request.Header = final.Request.Headers.Clone()
-	if final.Request.ContentType != "" && request.Header.Get("Content-Type") == "" {
-		request.Header.Set("Content-Type", final.Request.ContentType)
-	}
-	if final.Request.Auth != nil {
-		switch final.Request.Auth.Type {
-		case httpclient.AuthTypeBearer:
-			request.Header.Set("Authorization", "Bearer "+final.Request.Auth.APIKey)
-		case httpclient.AuthTypeAPIKey:
-			if strings.TrimSpace(final.Request.Auth.HeaderKey) == "" {
-				return nil, errors.New("codex probe API key header is empty")
-			}
-			request.Header.Set(final.Request.Auth.HeaderKey, final.Request.Auth.APIKey)
-		default:
-			return nil, fmt.Errorf("unsupported Codex probe authentication type %q", final.Request.Auth.Type)
-		}
-	}
 	return request, nil
 }
 

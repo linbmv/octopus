@@ -6,7 +6,7 @@
 
 让 Octopus 能够安全导入、刷新、持久化并调用 CPA/CLIProxyAPI、AxonHub、
 MeowCLI 等系统使用的 xAI/Grok 与 Antigravity 凭据，同时保持现有普通 API Key
-和 Codex OAuth 行为不变。
+渠道行为不变。
 
 兼容性必须分别通过四层验收，不能以其中一层代替端到端能力：
 

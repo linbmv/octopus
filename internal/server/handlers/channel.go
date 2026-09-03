@@ -261,7 +261,6 @@ type channelCreateRequest struct {
 	MatchRegex                        *string                      `json:"match_regex,omitempty"`
 	UserAgent                         string                       `json:"user_agent,omitempty"`
 	PolicyProfile                     model.ChannelPolicyProfile   `json:"policy_profile,omitempty"`
-	SelfHealingEnabled                bool                         `json:"self_healing_enabled,omitempty"`
 	FirstTokenTimeoutExceptionEnabled bool                         `json:"first_token_timeout_exception_enabled,omitempty"`
 	FirstTokenTimeoutExceptionSeconds int                          `json:"first_token_timeout_exception_seconds,omitempty"`
 }
@@ -297,7 +296,6 @@ func (r channelCreateRequest) channel() model.Channel {
 		MatchRegex:                        r.MatchRegex,
 		UserAgent:                         r.UserAgent,
 		PolicyProfile:                     r.PolicyProfile,
-		SelfHealingEnabled:                r.SelfHealingEnabled,
 		FirstTokenTimeoutExceptionEnabled: r.FirstTokenTimeoutExceptionEnabled,
 		FirstTokenTimeoutExceptionSeconds: r.FirstTokenTimeoutExceptionSeconds,
 	}

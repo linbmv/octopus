@@ -84,58 +84,6 @@ var (
 			Help:      "Total number of failed relay log database flush attempts.",
 		},
 	)
-	SelfHealingSentinelTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "octopus",
-			Subsystem: "self_healing",
-			Name:      "sentinel_total",
-			Help:      "Self-healing sentinel outcomes by channel and result.",
-		},
-		[]string{"channel_id", "result"},
-	)
-	SelfHealingDiagnosticTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "octopus",
-			Subsystem: "self_healing",
-			Name:      "diagnostic_total",
-			Help:      "Self-healing diagnostic sessions by channel, root cause, and result.",
-		},
-		[]string{"channel_id", "root_cause", "result"},
-	)
-	SelfHealingVariantTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "octopus",
-			Subsystem: "self_healing",
-			Name:      "variant_total",
-			Help:      "Self-healing diagnostic variants by changed dimension and result.",
-		},
-		[]string{"variant_dimension", "result"},
-	)
-	SelfHealingPatchTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "octopus",
-			Subsystem: "self_healing",
-			Name:      "patch_total",
-			Help:      "Self-healing patch actions by action, status, and confidence.",
-		},
-		[]string{"action", "status", "confidence"},
-	)
-	SelfHealingProbeInFlight = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "octopus",
-			Subsystem: "self_healing",
-			Name:      "probe_inflight",
-			Help:      "Current number of in-flight self-healing diagnostic probes.",
-		},
-	)
-	SelfHealingAutoRollbackTotal = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "octopus",
-			Subsystem: "self_healing",
-			Name:      "auto_rollback_total",
-			Help:      "Self-healing automatic rollbacks after failed patch verification.",
-		},
-	)
 )
 
 func Middleware() gin.HandlerFunc {
@@ -169,58 +117,6 @@ func RecordRelayLogDropped(reason string, count uint64) {
 		return
 	}
 	RelayLogDroppedTotal.WithLabelValues(reason).Add(float64(count))
-}
-
-func RecordSelfHealingSentinel(channelID int, result string) {
-	if result == "" {
-		result = "unknown"
-	}
-	SelfHealingSentinelTotal.WithLabelValues(strconv.Itoa(channelID), result).Inc()
-}
-
-func RecordSelfHealingDiagnostic(channelID int, rootCause, result string) {
-	if rootCause == "" {
-		rootCause = "unknown"
-	}
-	if result == "" {
-		result = "unknown"
-	}
-	SelfHealingDiagnosticTotal.WithLabelValues(strconv.Itoa(channelID), rootCause, result).Inc()
-}
-
-func RecordSelfHealingVariant(dimension, result string) {
-	if dimension == "" {
-		dimension = "baseline"
-	}
-	if result == "" {
-		result = "unknown"
-	}
-	SelfHealingVariantTotal.WithLabelValues(dimension, result).Inc()
-}
-
-func RecordSelfHealingPatch(action, status, confidence string) {
-	if action == "" {
-		action = "unknown"
-	}
-	if status == "" {
-		status = "unknown"
-	}
-	if confidence == "" {
-		confidence = "unknown"
-	}
-	SelfHealingPatchTotal.WithLabelValues(action, status, confidence).Inc()
-}
-
-func IncSelfHealingProbeInFlight() {
-	SelfHealingProbeInFlight.Inc()
-}
-
-func DecSelfHealingProbeInFlight() {
-	SelfHealingProbeInFlight.Dec()
-}
-
-func RecordSelfHealingAutoRollback() {
-	SelfHealingAutoRollbackTotal.Inc()
 }
 
 func RecordRelayLogFlushFailure() {

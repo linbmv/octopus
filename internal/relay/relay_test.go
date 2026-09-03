@@ -9,12 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/bestruirui/octopus/internal/conf"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/relay/errorclass"
@@ -674,60 +672,6 @@ func TestMiddlewareOnOutboundRawRequestInitializesHeaders(t *testing.T) {
 	}
 	if got.Headers == nil {
 		t.Fatal("Headers 未初始化")
-	}
-}
-
-func TestMiddlewareCapturesRedactedFinalRequestArtifact(t *testing.T) {
-	originalConfig := conf.Current()
-	t.Cleanup(func() {
-		if err := conf.Set(originalConfig); err != nil {
-			t.Errorf("restore config: %v", err)
-		}
-	})
-	enabled := originalConfig
-	enabled.SelfHealing.Enabled = true
-	if err := conf.Set(enabled); err != nil {
-		t.Fatalf("enable self-healing: %v", err)
-	}
-	ra := newTestAttempt(&dbmodel.Channel{Type: llm.APIFormatOpenAIResponse})
-	m := &relayPipelineMiddleware{attempt: ra}
-	request := &httpclient.Request{
-		Method: "POST",
-		URL:    "https://provider.test/v1/responses?key=query-secret-value",
-		Headers: http.Header{
-			"Authorization":    {"Bearer secret"},
-			"Content-Type":     {"application/json"},
-			"User-Agent":       {"codex-tui/0.144.6"},
-			"X-Private-Header": {"header-secret-value"},
-		},
-		ContentType: "application/json",
-		Body:        []byte(`{"model":"test-model","input":[{"role":"user","content":"user-secret-prompt"}],"stream":true}`),
-	}
-	if _, err := m.OnOutboundRawRequest(context.Background(), request); err != nil {
-		t.Fatalf("OnOutboundRawRequest error: %v", err)
-	}
-	artifact := ra.metrics.OutboundRequestArtifact
-	if artifact == nil {
-		t.Fatal("final request artifact was not captured")
-		return
-	}
-	if artifact.Protocol != string(llm.APIFormatOpenAIResponse) || artifact.Model != "test-model" {
-		t.Fatalf("artifact metadata = %#v", artifact)
-	}
-	if artifact.Headers["authorization"] != "[redacted]" || artifact.Headers["x-private-header"] != "[present]" {
-		t.Fatalf("artifact headers = %#v", artifact.Headers)
-	}
-	if strings.Contains(artifact.URL, "query-secret-value") {
-		t.Fatalf("artifact URL leaked query value: %q", artifact.URL)
-	}
-	encoded, err := json.Marshal(artifact)
-	if err != nil {
-		t.Fatalf("marshal artifact: %v", err)
-	}
-	for _, secret := range []string{"Bearer secret", "header-secret-value", "user-secret-prompt", "query-secret-value"} {
-		if strings.Contains(string(encoded), secret) {
-			t.Fatalf("artifact retained secret %q: %s", secret, encoded)
-		}
 	}
 }
 

@@ -17,8 +17,7 @@ const (
 )
 
 const (
-	ChannelTypeDoubao      llm.APIFormat = "doubao"
-	ChannelTypeOpenAICodex llm.APIFormat = "openai/codex"
+	ChannelTypeDoubao llm.APIFormat = "doubao"
 )
 
 type ChannelPolicyProfile string
@@ -66,9 +65,6 @@ type Channel struct {
 	// 部分上游按客户端标识放行（如"仅 Claude Code 客户端"的中转站），需在此填对应 UA。
 	UserAgent     string               `json:"user_agent" gorm:"default:''"`
 	PolicyProfile ChannelPolicyProfile `json:"policy_profile" gorm:"size:32;not null;default:standard"`
-	// SelfHealingEnabled is the per-channel safety gate. The global switch alone
-	// never authorizes sentinel or diagnostic traffic for a channel.
-	SelfHealingEnabled bool `json:"self_healing_enabled" gorm:"not null;default:false"`
 	// FirstTokenTimeoutExceptionEnabled explicitly opts this channel into a
 	// first-event timeout above the normal 120-second safety ceiling. It is
 	// deliberately channel-scoped so a known-slow provider does not relax the
@@ -142,7 +138,6 @@ type ChannelUpdateRequest struct {
 	MatchRegex                        *string               `json:"match_regex,omitempty"`
 	UserAgent                         *string               `json:"user_agent,omitempty"`
 	PolicyProfile                     *ChannelPolicyProfile `json:"policy_profile,omitempty"`
-	SelfHealingEnabled                *bool                 `json:"self_healing_enabled,omitempty"`
 	FirstTokenTimeoutExceptionEnabled *bool                 `json:"first_token_timeout_exception_enabled,omitempty"`
 	FirstTokenTimeoutExceptionSeconds *int                  `json:"first_token_timeout_exception_seconds,omitempty"`
 

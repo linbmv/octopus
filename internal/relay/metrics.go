@@ -13,7 +13,6 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/price"
-	"github.com/bestruirui/octopus/internal/requestartifact"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -41,10 +40,6 @@ type RelayMetrics struct {
 
 	// 出站请求摘要；raw passthrough 会绕过标准化 llm.Request，日志需记录最终出站语义摘要用于审计。
 	OutboundRequestSummary *OutboundRequestSummary
-	// OutboundRequestArtifact is the redacted final request shape captured after
-	// channel rewrites. It is kept in memory for the future baseline sink and is
-	// never serialized into the ordinary relay log automatically.
-	OutboundRequestArtifact *requestartifact.Artifact
 }
 
 type OutboundRequestSummary struct {
@@ -55,9 +50,8 @@ type OutboundRequestSummary struct {
 	RequestRewriteApplied bool `json:"request_rewrite_applied,omitempty"`
 	BodyBytes             int  `json:"body_bytes"`
 	// BodySHA256 hashes the exact outbound body bytes so logs can be compared
-	// against captured upstream traffic; ShapeSHA256 hashes the redacted shape.
+	// against captured upstream traffic.
 	BodySHA256    string         `json:"body_sha256"`
-	ShapeSHA256   string         `json:"shape_sha256,omitempty"`
 	Model         string         `json:"model,omitempty"`
 	Stream        *bool          `json:"stream,omitempty"`
 	StreamOptions map[string]any `json:"stream_options,omitempty"`
@@ -117,9 +111,7 @@ func (m *RelayMetrics) RecordOutboundRequestSummary(
 		return
 	}
 	// The summary is audit metadata on the hot path: it hashes and inspects the
-	// body directly instead of building a full requestartifact shape. The
-	// redacted ShapeSHA256 is backfilled by the pipeline middleware after codex
-	// stripping, when self-healing has artifact capture enabled.
+	// body directly without retaining the request body in memory.
 	bodyHash := sha256.Sum256(request.Body)
 	summary := &OutboundRequestSummary{
 		RawPassthrough:        rawPassthrough,

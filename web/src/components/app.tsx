@@ -17,7 +17,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { CONTENT_MAP } from '@/route';
 import { apiClient } from '@/api/client';
 import { logger } from '@/lib/logger';
-import { GlobalCodexQuota } from '@/components/modules/channel/GlobalCodexQuota';
 
 function timeout(ms: number) {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -260,7 +259,6 @@ export function AppContainer() {
                             </motion.div>
                         </AnimatePresence>
                     </div>
-                    <GlobalCodexQuota />
                     <div className="ml-auto">
                         <Toolbar />
                     </div>

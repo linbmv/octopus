@@ -118,10 +118,6 @@ func TestInitDBWithSQLiteAppliesSchemaAndConfiguresPool(t *testing.T) {
 		&model.WebAuthnCredential{},
 		&model.Channel{},
 		&model.CapabilityEvidence{},
-		&model.ChannelBaseline{},
-		&model.DiagnosticSession{},
-		&model.DiagnosticAttempt{},
-		&model.ChannelPatch{},
 		&model.Group{},
 		&migrate.MigrationRecord{},
 	} {
@@ -142,17 +138,6 @@ func TestInitDBWithSQLiteAppliesSchemaAndConfiguresPool(t *testing.T) {
 	if !got.Migrator().HasColumn(&model.CapabilityEvidence{}, "error_level") {
 		t.Error("expected migrated capability_evidence.error_level column")
 	}
-	for _, column := range []string{"request_shape", "scope_fingerprint", "expires_at"} {
-		if !got.Migrator().HasColumn(&model.ChannelBaseline{}, column) {
-			t.Errorf("expected migrated channel_baselines.%s column", column)
-		}
-	}
-	for _, table := range []interface{}{&model.DiagnosticSession{}, &model.DiagnosticAttempt{}, &model.ChannelPatch{}} {
-		if !got.Migrator().HasTable(table) {
-			t.Errorf("expected migrated table for %T", table)
-		}
-	}
-
 	sqlDB, err := got.DB()
 	if err != nil {
 		t.Fatalf("DB() error = %v", err)

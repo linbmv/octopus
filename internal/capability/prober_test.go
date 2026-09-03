@@ -109,29 +109,6 @@ func TestProbeClassifiesHTTP200QuotaEnvelopeAsKeyFailure(t *testing.T) {
 	}
 }
 
-func TestCodexProbeUsesDedicatedOAuthAdapterInsteadOfJSONAsBearer(t *testing.T) {
-	const accessToken = "codex-access-secret"
-	credential := `{"type":"codex","access_token":"` + accessToken + `","refresh_token":"refresh-secret","account_id":"account-id","expired":"2099-01-01T00:00:00Z"}`
-	key := model.ChannelKey{ID: 71, ChannelID: 31, Enabled: true, ChannelKey: credential}
-	channel := &model.Channel{
-		ID: 31, Type: model.ChannelTypeOpenAICodex,
-		BaseUrls: []model.BaseUrl{{URL: "https://chatgpt.com/backend-api/codex"}}, Keys: []model.ChannelKey{key},
-	}
-	request, err := buildProbeRequest(context.Background(), channel, key, channel.BaseUrls[0].URL, "gpt-5.3-codex", model.CapabilityText, 8)
-	if err != nil {
-		t.Fatalf("buildProbeRequest() error = %v", err)
-	}
-	if request.URL.String() != "https://chatgpt.com/backend-api/codex/responses" {
-		t.Fatalf("probe URL = %q", request.URL)
-	}
-	if request.Header.Get("Authorization") != "Bearer "+accessToken || strings.Contains(request.Header.Get("Authorization"), "refresh-secret") {
-		t.Fatal("Codex probe did not isolate the access token from its credential JSON")
-	}
-	if request.Header.Get("Chatgpt-Account-Id") != "account-id" || request.Header.Get("Originator") == "" {
-		t.Fatalf("Codex probe headers = %#v", request.Header)
-	}
-}
-
 func fakeProbeProvider(t *testing.T, handler func(*http.Request, string) *http.Response) HTTPProber {
 	t.Helper()
 	return HTTPProber{ClientForChannel: func(*model.Channel) (*http.Client, error) {

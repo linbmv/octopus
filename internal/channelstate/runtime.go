@@ -11,8 +11,7 @@ import (
 )
 
 // Invalidate clears every channel-derived runtime state after a configuration
-// change. Normal updates, self-healing apply/rollback, enable, and delete must
-// all call this shared path.
+// change. Normal updates, enable, and delete all call this shared path.
 func Invalidate(channelID int, channels ...*model.Channel) {
 	balancer.InvalidateChannel(channelID)
 	relay.InvalidateRuntimeURLState(channelID)

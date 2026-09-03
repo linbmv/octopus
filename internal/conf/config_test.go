@@ -70,82 +70,8 @@ func TestLoadUsesDefaultValues(t *testing.T) {
 	if config.WebAuthn.Enabled || config.WebAuthn.RPID != "" || config.WebAuthn.RPDisplayName != APP_NAME || len(config.WebAuthn.RPOrigins) != 0 {
 		t.Fatalf("WebAuthn defaults = %#v", config.WebAuthn)
 	}
-	if config.SelfHealing.Enabled || config.SelfHealing.CaptureSuccessBaselines ||
-		config.SelfHealing.BaselineTTLSeconds != 86400 ||
-		config.SelfHealing.SentinelIntervalSeconds != 1800 ||
-		config.SelfHealing.FailureThreshold != 3 ||
-		config.SelfHealing.FailureWindowSeconds != 300 {
-		t.Fatalf("SelfHealing defaults = %#v", config.SelfHealing)
-	}
-	diagnostic := config.SelfHealing.Diagnostic
-	if diagnostic.MaxVariants != 8 || diagnostic.MaxConcurrency != 1 || diagnostic.QueueDepth != 16 ||
-		diagnostic.RequestsPerMinute != 6 || diagnostic.TimeoutSeconds != 30 || diagnostic.SessionTTLSeconds != 300 ||
-		diagnostic.CostPerRequestUSD != 0.001 || diagnostic.MaxBatchCostUSD != 0.01 || diagnostic.MaxTotalCostUSD != 0.05 {
-		t.Fatalf("SelfHealing.Diagnostic defaults = %#v", diagnostic)
-	}
 	if config.Observability.Metrics.Host != "127.0.0.1" || config.Observability.Metrics.Port != 9090 || config.Observability.Metrics.BearerToken != "" || len(config.Observability.Metrics.Allowlist) != 0 {
 		t.Fatalf("Metrics defaults = %#v", config.Observability.Metrics)
-	}
-}
-
-func TestValidateSelfHealingBaselineTTL(t *testing.T) {
-	for _, ttl := range []int{59, 90*24*60*60 + 1} {
-		config := Default()
-		config.SelfHealing.BaselineTTLSeconds = ttl
-		if err := Validate(config); err == nil || !strings.Contains(err.Error(), "self_healing.baseline_ttl_seconds") {
-			t.Fatalf("Validate() ttl=%d error = %v, want self-healing TTL validation", ttl, err)
-		}
-	}
-}
-
-func TestValidateSelfHealingLimits(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		want string
-		set  func(*Config)
-	}{
-		{name: "sentinel interval low", want: "sentinel_interval_seconds", set: func(c *Config) { c.SelfHealing.SentinelIntervalSeconds = 59 }},
-		{name: "sentinel interval high", want: "sentinel_interval_seconds", set: func(c *Config) { c.SelfHealing.SentinelIntervalSeconds = 86401 }},
-		{name: "failure threshold low", want: "failure_threshold", set: func(c *Config) { c.SelfHealing.FailureThreshold = 0 }},
-		{name: "failure threshold high", want: "failure_threshold", set: func(c *Config) { c.SelfHealing.FailureThreshold = 101 }},
-		{name: "failure window low", want: "failure_window_seconds", set: func(c *Config) { c.SelfHealing.FailureWindowSeconds = 59 }},
-		{name: "failure window high", want: "failure_window_seconds", set: func(c *Config) { c.SelfHealing.FailureWindowSeconds = 86401 }},
-		{name: "variants low", want: "diagnostic.max_variants", set: func(c *Config) { c.SelfHealing.Diagnostic.MaxVariants = 0 }},
-		{name: "variants high", want: "diagnostic.max_variants", set: func(c *Config) { c.SelfHealing.Diagnostic.MaxVariants = 17 }},
-		{name: "concurrency low", want: "diagnostic.max_concurrency", set: func(c *Config) { c.SelfHealing.Diagnostic.MaxConcurrency = 0 }},
-		{name: "concurrency high", want: "diagnostic.max_concurrency", set: func(c *Config) { c.SelfHealing.Diagnostic.MaxConcurrency = 9 }},
-		{name: "queue low", want: "diagnostic.queue_depth", set: func(c *Config) { c.SelfHealing.Diagnostic.QueueDepth = 0 }},
-		{name: "queue high", want: "diagnostic.queue_depth", set: func(c *Config) { c.SelfHealing.Diagnostic.QueueDepth = 257 }},
-		{name: "rpm low", want: "diagnostic.requests_per_minute", set: func(c *Config) { c.SelfHealing.Diagnostic.RequestsPerMinute = 0 }},
-		{name: "rpm high", want: "diagnostic.requests_per_minute", set: func(c *Config) { c.SelfHealing.Diagnostic.RequestsPerMinute = 601 }},
-		{name: "timeout low", want: "diagnostic.timeout_seconds", set: func(c *Config) { c.SelfHealing.Diagnostic.TimeoutSeconds = 0 }},
-		{name: "timeout high", want: "diagnostic.timeout_seconds", set: func(c *Config) { c.SelfHealing.Diagnostic.TimeoutSeconds = 301 }},
-		{name: "session ttl low", want: "diagnostic.session_ttl_seconds", set: func(c *Config) { c.SelfHealing.Diagnostic.SessionTTLSeconds = 59 }},
-		{name: "session ttl high", want: "diagnostic.session_ttl_seconds", set: func(c *Config) { c.SelfHealing.Diagnostic.SessionTTLSeconds = 3601 }},
-		{name: "request cost zero", want: "diagnostic.cost_per_request_usd", set: func(c *Config) { c.SelfHealing.Diagnostic.CostPerRequestUSD = 0 }},
-		{name: "request cost high", want: "diagnostic.cost_per_request_usd", set: func(c *Config) { c.SelfHealing.Diagnostic.CostPerRequestUSD = 10.01 }},
-		{name: "batch cost zero", want: "diagnostic.max_batch_cost_usd", set: func(c *Config) { c.SelfHealing.Diagnostic.MaxBatchCostUSD = 0 }},
-		{name: "batch cost high", want: "diagnostic.max_batch_cost_usd", set: func(c *Config) { c.SelfHealing.Diagnostic.MaxBatchCostUSD = 1000.01 }},
-		{name: "total cost zero", want: "diagnostic.max_total_cost_usd", set: func(c *Config) { c.SelfHealing.Diagnostic.MaxTotalCostUSD = 0 }},
-		{name: "total cost high", want: "diagnostic.max_total_cost_usd", set: func(c *Config) { c.SelfHealing.Diagnostic.MaxTotalCostUSD = 10000.01 }},
-		{name: "batch exceeds total", want: "must not exceed", set: func(c *Config) {
-			c.SelfHealing.Diagnostic.MaxBatchCostUSD = 1
-			c.SelfHealing.Diagnostic.MaxTotalCostUSD = 0.5
-		}},
-		{name: "too many extra user agents", want: "extra_user_agents", set: func(c *Config) {
-			c.SelfHealing.Diagnostic.ExtraUserAgents = make([]string, 9)
-		}},
-		{name: "malformed extra header", want: "extra_headers", set: func(c *Config) {
-			c.SelfHealing.Diagnostic.ExtraHeaders = []string{"no-colon-entry"}
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			config := Default()
-			test.set(&config)
-			if err := Validate(config); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Validate() error = %v, want error containing %q", err, test.want)
-			}
-		})
 	}
 }
 

@@ -50,7 +50,6 @@ export interface Channel {
   match_regex?: string | null;
   user_agent: string;
   policy_profile: ChannelPolicyProfile;
-  self_healing_enabled: boolean;
   first_token_timeout_exception_enabled: boolean;
   first_token_timeout_exception_seconds: number;
   config_version: number;
@@ -135,7 +134,6 @@ export interface ChannelUpdateRequest {
   match_regex?: string | null;
   user_agent?: string | null;
   policy_profile?: ChannelPolicyProfile | null;
-  self_healing_enabled?: boolean | null;
   first_token_timeout_exception_enabled?: boolean | null;
   first_token_timeout_exception_seconds?: number | null;
   keys_to_add?: ChannelKeyAddRequest[];

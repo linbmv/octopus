@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
@@ -12,6 +13,13 @@ import (
 	"github.com/looplj/axonhub/llm/transformer/openai"
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 )
+
+func newChannelOutbound(channel *dbmodel.Channel, request *llm.Request, baseURL string, key dbmodel.ChannelKey) (transformer.Outbound, error) {
+	if channel == nil {
+		return nil, errors.New("channel is required")
+	}
+	return newOutbound(channel.Type, request, baseURL, key.ChannelKey)
+}
 
 func newInbound(format llm.APIFormat) transformer.Inbound {
 	switch format {
@@ -39,12 +47,6 @@ func newInbound(format llm.APIFormat) transformer.Inbound {
 }
 
 func newOutbound(channelType llm.APIFormat, request *llm.Request, baseURL, key string) (transformer.Outbound, error) {
-	if channelType == dbmodel.ChannelTypeOpenAICodex {
-		return newCodexOAuthOutbound(
-			&dbmodel.Channel{Type: channelType}, request, baseURL,
-			dbmodel.ChannelKey{ChannelKey: key},
-		)
-	}
 	requestType := llm.RequestTypeChat
 	if request != nil && request.RequestType != "" {
 		requestType = request.RequestType

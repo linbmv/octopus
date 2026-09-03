@@ -120,37 +120,6 @@ type CapabilityProbe struct {
 	MaxTotalCostUSD   float64 `mapstructure:"max_total_cost_usd"`
 }
 
-// SelfHealing controls runtime evidence collection and the future diagnostic
-// worker. It is disabled by default because even redacted baseline capture is
-// coupled to real provider traffic and must be an explicit operator choice.
-type SelfHealing struct {
-	Enabled                 bool                  `mapstructure:"enabled"`
-	CaptureSuccessBaselines bool                  `mapstructure:"capture_success_baselines"`
-	BaselineTTLSeconds      int                   `mapstructure:"baseline_ttl_seconds"`
-	SentinelIntervalSeconds int                   `mapstructure:"sentinel_interval_seconds"`
-	FailureThreshold        int                   `mapstructure:"failure_threshold"`
-	FailureWindowSeconds    int                   `mapstructure:"failure_window_seconds"`
-	Diagnostic              SelfHealingDiagnostic `mapstructure:"diagnostic"`
-}
-
-type SelfHealingDiagnostic struct {
-	MaxVariants       int     `mapstructure:"max_variants"`
-	MaxConcurrency    int     `mapstructure:"max_concurrency"`
-	QueueDepth        int     `mapstructure:"queue_depth"`
-	RequestsPerMinute int     `mapstructure:"requests_per_minute"`
-	TimeoutSeconds    int     `mapstructure:"timeout_seconds"`
-	SessionTTLSeconds int     `mapstructure:"session_ttl_seconds"`
-	CostPerRequestUSD float64 `mapstructure:"cost_per_request_usd"`
-	MaxBatchCostUSD   float64 `mapstructure:"max_batch_cost_usd"`
-	MaxTotalCostUSD   float64 `mapstructure:"max_total_cost_usd"`
-	// ExtraUserAgents and ExtraHeaders extend the built-in client-fingerprint
-	// candidates without a redeploy when upstream clients ship new versions.
-	// ExtraHeaders entries use "name: value" form; protected auth headers are
-	// dropped during variant normalization.
-	ExtraUserAgents []string `mapstructure:"extra_user_agents"`
-	ExtraHeaders    []string `mapstructure:"extra_headers"`
-}
-
 type Config struct {
 	Server          Server          `mapstructure:"server"`
 	Log             Log             `mapstructure:"log"`
@@ -160,7 +129,6 @@ type Config struct {
 	Observability   Observability   `mapstructure:"observability"`
 	WebAuthn        WebAuthn        `mapstructure:"webauthn"`
 	CapabilityProbe CapabilityProbe `mapstructure:"capability_probe"`
-	SelfHealing     SelfHealing     `mapstructure:"self_healing"`
 }
 
 var (
@@ -315,21 +283,6 @@ func setDefaultsFor(v *viper.Viper) {
 	v.SetDefault("capability_probe.cost_per_probe_usd", 0.001)
 	v.SetDefault("capability_probe.max_batch_cost_usd", 0.05)
 	v.SetDefault("capability_probe.max_total_cost_usd", 0.25)
-	v.SetDefault("self_healing.enabled", false)
-	v.SetDefault("self_healing.capture_success_baselines", false)
-	v.SetDefault("self_healing.baseline_ttl_seconds", 86400)
-	v.SetDefault("self_healing.sentinel_interval_seconds", 1800)
-	v.SetDefault("self_healing.failure_threshold", 3)
-	v.SetDefault("self_healing.failure_window_seconds", 300)
-	v.SetDefault("self_healing.diagnostic.max_variants", 8)
-	v.SetDefault("self_healing.diagnostic.max_concurrency", 1)
-	v.SetDefault("self_healing.diagnostic.queue_depth", 16)
-	v.SetDefault("self_healing.diagnostic.requests_per_minute", 6)
-	v.SetDefault("self_healing.diagnostic.timeout_seconds", 30)
-	v.SetDefault("self_healing.diagnostic.session_ttl_seconds", 300)
-	v.SetDefault("self_healing.diagnostic.cost_per_request_usd", 0.001)
-	v.SetDefault("self_healing.diagnostic.max_batch_cost_usd", 0.01)
-	v.SetDefault("self_healing.diagnostic.max_total_cost_usd", 0.05)
 }
 
 func Validate(config Config) error {
@@ -497,58 +450,6 @@ func Validate(config Config) error {
 	}
 	if probe.MaxBatchCostUSD > probe.MaxTotalCostUSD {
 		return fmt.Errorf("capability_probe.max_batch_cost_usd must not exceed max_total_cost_usd")
-	}
-	if config.SelfHealing.BaselineTTLSeconds < 60 || config.SelfHealing.BaselineTTLSeconds > 90*24*60*60 {
-		return fmt.Errorf("self_healing.baseline_ttl_seconds must be between 60 and 7776000")
-	}
-	if config.SelfHealing.SentinelIntervalSeconds < 60 || config.SelfHealing.SentinelIntervalSeconds > 24*60*60 {
-		return fmt.Errorf("self_healing.sentinel_interval_seconds must be between 60 and 86400")
-	}
-	if config.SelfHealing.FailureThreshold < 1 || config.SelfHealing.FailureThreshold > 100 {
-		return fmt.Errorf("self_healing.failure_threshold must be between 1 and 100")
-	}
-	if config.SelfHealing.FailureWindowSeconds < 60 || config.SelfHealing.FailureWindowSeconds > 24*60*60 {
-		return fmt.Errorf("self_healing.failure_window_seconds must be between 60 and 86400")
-	}
-	diagnostic := config.SelfHealing.Diagnostic
-	if diagnostic.MaxVariants < 1 || diagnostic.MaxVariants > 16 {
-		return fmt.Errorf("self_healing.diagnostic.max_variants must be between 1 and 16")
-	}
-	if diagnostic.MaxConcurrency < 1 || diagnostic.MaxConcurrency > 8 {
-		return fmt.Errorf("self_healing.diagnostic.max_concurrency must be between 1 and 8")
-	}
-	if diagnostic.QueueDepth < 1 || diagnostic.QueueDepth > 256 {
-		return fmt.Errorf("self_healing.diagnostic.queue_depth must be between 1 and 256")
-	}
-	if diagnostic.RequestsPerMinute < 1 || diagnostic.RequestsPerMinute > 600 {
-		return fmt.Errorf("self_healing.diagnostic.requests_per_minute must be between 1 and 600")
-	}
-	if diagnostic.TimeoutSeconds < 1 || diagnostic.TimeoutSeconds > 300 {
-		return fmt.Errorf("self_healing.diagnostic.timeout_seconds must be between 1 and 300")
-	}
-	if diagnostic.SessionTTLSeconds < 60 || diagnostic.SessionTTLSeconds > 3600 {
-		return fmt.Errorf("self_healing.diagnostic.session_ttl_seconds must be between 60 and 3600")
-	}
-	if diagnostic.CostPerRequestUSD <= 0 || diagnostic.CostPerRequestUSD > 10 {
-		return fmt.Errorf("self_healing.diagnostic.cost_per_request_usd must be greater than 0 and at most 10")
-	}
-	if diagnostic.MaxBatchCostUSD <= 0 || diagnostic.MaxBatchCostUSD > 1000 {
-		return fmt.Errorf("self_healing.diagnostic.max_batch_cost_usd must be greater than 0 and at most 1000")
-	}
-	if diagnostic.MaxTotalCostUSD <= 0 || diagnostic.MaxTotalCostUSD > 10000 {
-		return fmt.Errorf("self_healing.diagnostic.max_total_cost_usd must be greater than 0 and at most 10000")
-	}
-	if diagnostic.MaxBatchCostUSD > diagnostic.MaxTotalCostUSD {
-		return fmt.Errorf("self_healing.diagnostic.max_batch_cost_usd must not exceed max_total_cost_usd")
-	}
-	if len(diagnostic.ExtraUserAgents) > 8 || len(diagnostic.ExtraHeaders) > 8 {
-		return fmt.Errorf("self_healing.diagnostic.extra_user_agents and extra_headers each allow at most 8 entries")
-	}
-	for _, header := range diagnostic.ExtraHeaders {
-		name, _, found := strings.Cut(header, ":")
-		if !found || strings.TrimSpace(name) == "" {
-			return fmt.Errorf("self_healing.diagnostic.extra_headers entries must use \"name: value\" form, got %q", header)
-		}
 	}
 	return nil
 }

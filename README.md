@@ -413,20 +413,11 @@ The program automatically appends API paths based on channel type. You only need
 |--------------|-------------------|----------|--------------------------|
 | OpenAI Chat | `/chat/completions` | `https://api.openai.com/v1` | `https://api.openai.com/v1/chat/completions` |
 | OpenAI Responses | `/responses` | `https://api.openai.com/v1` | `https://api.openai.com/v1/responses` |
-| Codex OAuth | `/responses` | `https://chatgpt.com/backend-api/codex` (fixed) | `https://chatgpt.com/backend-api/codex/responses` |
 | OpenAI Images | `/images/generations`, `/images/edits`, `/images/variations` | `https://api.openai.com/v1` | `https://api.openai.com/v1/images/generations` |
 | Anthropic | `/messages` | `https://api.anthropic.com/v1` | `https://api.anthropic.com/v1/messages` |
 | Gemini | `/models/:model:generateContent` | `https://generativelanguage.googleapis.com/v1beta` | `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent` |
 
 > 💡 **Tip**: No need to include specific API endpoint paths in the Base URL - the program handles this automatically.
-
-A Codex OAuth channel uses a complete Codex credential JSON document rather
-than a normal OpenAI API key. Select **Codex OAuth**, import a local JSON file
-or paste the full document into **Codex OAuth JSON**, and keep the fixed
-official Base URL. Octopus refreshes tokens before expiry and writes rotations
-back atomically. See the
-[Codex OAuth channel guide](docs/codex-oauth-channel.md) for credential and
-attachment request examples.
 
 ---
 

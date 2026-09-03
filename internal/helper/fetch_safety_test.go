@@ -57,23 +57,6 @@ func TestApplyCustomHeadersProtectsAuthentication(t *testing.T) {
 	}
 }
 
-func TestFetchModelsReturnsStaticCodexCatalogWithoutCredentialOrNetwork(t *testing.T) {
-	pattern := `^gpt-5\.3-codex$`
-	models, err := FetchModels(context.Background(), model.Channel{
-		Type:       model.ChannelTypeOpenAICodex,
-		Name:       "codex",
-		MatchRegex: &pattern,
-		// Deliberately omit keys and base URLs: Codex model discovery is a
-		// static provider catalog and must never send the OAuth JSON to /models.
-	})
-	if err != nil {
-		t.Fatalf("FetchModels() error = %v", err)
-	}
-	if len(models) != 1 || models[0] != "gpt-5.3-codex" {
-		t.Fatalf("models = %v", models)
-	}
-}
-
 func TestModelPaginationClosesEachBodyBeforeNextRequest(t *testing.T) {
 	tests := []struct {
 		name    string

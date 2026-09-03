@@ -2,15 +2,13 @@
 
 import { Activity, CheckCircle2, Clock, DollarSign, FileText, Globe, Key, ShieldAlert, Trash2, TrendingUp, XCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { ChannelType, useChannelCircuit, useChannelQuota, useChannelRuntimeURLs, useResetChannelCircuit, type Channel } from '@/api/endpoints/channel';
+import { useChannelCircuit, useChannelRuntimeURLs, useResetChannelCircuit, type Channel } from '@/api/endpoints/channel';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { ChannelErrorOverview } from '@/components/modules/error-observability';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn, formatMoney } from '@/lib/utils';
 import { CapabilityEvidencePanel } from './CapabilityEvidence';
-import { CodexQuotaCard } from './CodexQuotaCard';
-import { SelfHealingPanel } from './SelfHealing';
 
 export function ChannelOverview({
     channel,
@@ -40,9 +38,7 @@ export function ChannelOverview({
                 </Button>
             </div>
             <div className="max-h-[68vh] space-y-4 overflow-y-auto sm:max-h-[72vh] sm:space-y-5">
-                <ChannelQuotaPanel channel={channel} />
-                {!isCodexChannel(channel) && <>
-                <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+				<dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <SummaryMetric icon={Activity} label={t('metrics.totalRequests')} value={stats.request_count.formatted.value} unit={stats.request_count.formatted.unit} color="text-chart-1" />
                     <SummaryMetric icon={FileText} label={t('metrics.totalToken')} value={stats.total_token.formatted.value} unit={stats.total_token.formatted.unit} color="text-chart-3" />
                     <SummaryMetric icon={DollarSign} label={t('metrics.totalCost')} value={stats.total_cost.formatted.value} unit={stats.total_cost.formatted.unit} color="text-chart-5" />
@@ -55,8 +51,7 @@ export function ChannelOverview({
 
                 <ChannelErrorOverview channelId={channel.id} />
                 <ChannelCircuitPanel channelId={channel.id} />
-                <SelfHealingPanel channel={channel} />
-                <CapabilityEvidencePanel channel={channel} />
+				<CapabilityEvidencePanel channel={channel} />
                 <MetricSection title={t('sections.requests')} icon={TrendingUp}>
                     <DetailMetric icon={CheckCircle2} label={t('metrics.successRequests')} value={stats.request_success.formatted.value} unit={stats.request_success.formatted.unit} color="text-accent" />
                     <DetailMetric icon={XCircle} label={t('metrics.failedRequests')} value={stats.request_failed.formatted.value} unit={stats.request_failed.formatted.unit} color="text-destructive" />
@@ -80,36 +75,9 @@ export function ChannelOverview({
                     <dt className="mb-2 flex items-center gap-2 text-xs text-muted-foreground"><Clock className="size-4 text-primary" />{t('metrics.avgWaitTime')}</dt>
                     <dd className="text-2xl font-bold text-primary">{stats.wait_time.formatted.value}<span className="ml-1 text-sm font-normal text-muted-foreground">{stats.wait_time.formatted.unit}</span></dd>
                 </dl>
-                </>}
-            </div>
+			</div>
         </>
     );
-}
-
-function ChannelQuotaPanel({ channel }: { channel: Channel }) {
-    const t = useTranslations('channel.detail.quota');
-    const isCodex = isCodexChannel(channel);
-    const { data: quotas, isLoading, isError } = useChannelQuota(channel.id, isCodex);
-    if (!isCodex) return null;
-
-    const quotaByKey = new Map((quotas ?? []).map((quota) => [quota.channel_key_id, quota]));
-
-    return (
-        <section className="space-y-3">
-            {isLoading && <div className="rounded-2xl border bg-card p-4 text-sm text-muted-foreground">{t('loading')}</div>}
-            {isError && <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{t('loadFailed')}</div>}
-            {!isLoading && !isError && !channel.keys?.length && <div className="rounded-2xl border bg-card p-4 text-sm text-muted-foreground">{t('empty')}</div>}
-            {!isLoading && !isError && channel.keys?.length ? (
-                <div className="space-y-3">
-                    {channel.keys.map((key) => <CodexQuotaCard key={key.id} channel={channel} keyData={key} quota={quotaByKey.get(key.id)} />)}
-                </div>
-            ) : null}
-        </section>
-    );
-}
-
-function isCodexChannel(channel: Pick<Channel, 'type'>) {
-    return String(channel.type).trim().toLowerCase() === ChannelType.OpenAICodex;
 }
 
 // ChannelCircuitPanel 展示当前被熔断冻结的 key×模型条目及剩余冷却，
@@ -181,7 +149,7 @@ function RuntimeLists({ channel }: { channel: Channel }) {
                     {channel.keys?.map((key) => (
                         <div key={key.id} className="flex items-center gap-3 border-b p-3 transition-colors last:border-0 hover:bg-accent/5 sm:p-4">
                             <div className={cn('size-2 shrink-0 rounded-full', key.enabled ? 'bg-emerald-500' : 'bg-destructive')} />
-                            <span className="min-w-0 flex-1 truncate font-mono text-sm">{isCodexChannel(channel) ? t('codexOAuthMasked') : maskChannelKey(key.channel_key)}</span>
+							<span className="min-w-0 flex-1 truncate font-mono text-sm">{maskChannelKey(key.channel_key)}</span>
                             {key.remark && <span className="max-w-24 truncate text-xs text-muted-foreground" title={key.remark}>{key.remark}</span>}
                             <div className="flex shrink-0 items-center gap-2">
                                 {key.last_use_time_stamp > 0 && <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline-block">{new Date(key.last_use_time_stamp * 1000).toLocaleString()}</span>}

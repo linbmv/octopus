@@ -31,7 +31,6 @@ function initialChannelForm(channel: Channel): ChannelFormData {
         max_concurrency: channel.max_concurrency ?? 0,
         user_agent: channel.user_agent ?? '',
         policy_profile: channel.policy_profile ?? 'standard',
-        self_healing_enabled: channel.self_healing_enabled ?? false,
         first_token_timeout_exception_enabled: channel.first_token_timeout_exception_enabled ?? false,
         first_token_timeout_exception_seconds: channel.first_token_timeout_exception_seconds ?? 0,
     };
@@ -64,9 +63,6 @@ function channelUpdateRequest(channel: Channel, form: ChannelFormData): UpdateCh
     setTrimmedChange(request, 'user_agent', form.user_agent, channel.user_agent);
     if (form.policy_profile !== channel.policy_profile) request.policy_profile = form.policy_profile;
     if (form.raw_passthrough !== channel.raw_passthrough) request.raw_passthrough = form.raw_passthrough;
-    if (form.self_healing_enabled !== (channel.self_healing_enabled ?? false)) {
-        request.self_healing_enabled = form.self_healing_enabled;
-    }
     if (form.first_token_timeout_exception_enabled !== (channel.first_token_timeout_exception_enabled ?? false)) {
         request.first_token_timeout_exception_enabled = form.first_token_timeout_exception_enabled;
     }

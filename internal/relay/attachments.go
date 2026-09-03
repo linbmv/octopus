@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
@@ -77,7 +76,7 @@ func collectRelayAttachmentTurns(format llm.APIFormat, body []byte) []relayAttac
 	switch format {
 	case llm.APIFormatOpenAIChatCompletion, llm.APIFormatAnthropicMessage:
 		return collectMessageAttachmentTurns(root["messages"])
-	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact, dbmodel.ChannelTypeOpenAICodex:
+	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
 		return collectResponsesAttachmentTurns(root["input"])
 	case llm.APIFormatGeminiContents:
 		return collectGeminiAttachmentTurns(root["contents"])
@@ -269,7 +268,7 @@ func patchRelayAttachmentBody(body []byte, target llm.APIFormat, turns []relayAt
 	switch target {
 	case llm.APIFormatOpenAIChatCompletion:
 		changed = patchOpenAIChatAttachments(root, turns)
-	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact, dbmodel.ChannelTypeOpenAICodex:
+	case llm.APIFormatOpenAIResponse, llm.APIFormatOpenAIResponseCompact:
 		changed = patchOpenAIResponsesAttachments(root, turns)
 	case llm.APIFormatAnthropicMessage:
 		changed = patchAnthropicAttachments(root, turns)

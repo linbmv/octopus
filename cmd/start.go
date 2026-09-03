@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"slices"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay"
 	appruntime "github.com/bestruirui/octopus/internal/runtime"
-	"github.com/bestruirui/octopus/internal/selfheal"
 	"github.com/bestruirui/octopus/internal/server"
 	"github.com/bestruirui/octopus/internal/task"
 	"github.com/bestruirui/octopus/internal/tracing"
@@ -84,21 +82,11 @@ var startCmd = &cobra.Command{
 		if err := runtimeManager.Register("capability_probe", capabilityWorker); err != nil {
 			return fmt.Errorf("register capability probe worker: %w", err)
 		}
-		selfHealingWorker, err := selfheal.InstallDefault(config.SelfHealing)
-		if err != nil {
-			return fmt.Errorf("configure self-healing worker: %w", err)
-		}
-		if err := runtimeManager.Register("self_healing", selfHealingWorker); err != nil {
-			return fmt.Errorf("register self-healing worker: %w", err)
-		}
 		if err := runtimeManager.Register("async_persistence", op.DefaultAsyncWorker()); err != nil {
 			return fmt.Errorf("register persistence workers: %w", err)
 		}
 		if err := runtimeManager.Register("health_persistence", relay.DefaultHealthPersistenceWorker()); err != nil {
 			return fmt.Errorf("register health persistence worker: %w", err)
-		}
-		if err := runtimeManager.Register("codex_oauth_refresh", relay.DefaultCodexOAuthRefreshWorker()); err != nil {
-			return fmt.Errorf("register Codex OAuth refresh worker: %w", err)
 		}
 		if err := runtimeManager.Register("scheduled_tasks", task.DefaultRuntimeWorker()); err != nil {
 			return fmt.Errorf("register scheduled workers: %w", err)
@@ -175,9 +163,6 @@ func applyConfigUpdates(ctx context.Context, previous conf.Config, updates <-cha
 			}
 			if previous.CapabilityProbe != config.CapabilityProbe {
 				log.Warnf("capability probe worker configuration changed; restart required for that field")
-			}
-			if !reflect.DeepEqual(previous.SelfHealing, config.SelfHealing) {
-				log.Warnf("self-healing worker configuration changed; restart required for that field")
 			}
 			log.Infof("config reloaded")
 			previous = config

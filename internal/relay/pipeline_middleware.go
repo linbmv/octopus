@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bestruirui/octopus/internal/conf"
-	"github.com/bestruirui/octopus/internal/requestartifact"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -56,43 +54,7 @@ func (m *relayPipelineMiddleware) OnOutboundRawRequest(ctx context.Context, requ
 	if err := m.attempt.applyRelayAttachmentCompatibility(request); err != nil {
 		log.Warnf("failed to preserve outbound attachments: %v", err)
 	}
-	m.captureOutboundRequestArtifact(request)
-
 	return request, nil
-}
-
-func (m *relayPipelineMiddleware) captureOutboundRequestArtifact(request *httpclient.Request) {
-	if m == nil || m.attempt == nil || m.attempt.channel == nil || m.attempt.metrics == nil {
-		return
-	}
-	// Artifact building parses and hashes the full body; skip the cost entirely
-	// when self-healing (the only consumer) is disabled.
-	if !conf.Current().SelfHealing.Enabled {
-		return
-	}
-	rewrite := requestartifact.RewriteSummary{}
-	if summary := m.attempt.metrics.OutboundRequestSummary; summary != nil {
-		rewrite = requestartifact.RewriteSummary{
-			RawPassthrough:        summary.RawPassthrough,
-			ParamOverrideApplied:  summary.ParamOverrideApplied,
-			JSONRewriteApplied:    summary.JSONRewriteApplied,
-			HeaderRewriteApplied:  summary.HeaderRewriteApplied,
-			RequestRewriteApplied: summary.RequestRewriteApplied,
-		}
-	}
-	m.attempt.metrics.OutboundRequestArtifact = requestartifact.Build(
-		request,
-		string(m.attempt.channel.Type),
-		m.attempt.metrics.ActualModel,
-		rewrite,
-	)
-	// The summary is written before codex stripping; the artifact built here is
-	// the final shape, so it owns the redacted shape hash.
-	if artifact := m.attempt.metrics.OutboundRequestArtifact; artifact != nil {
-		if summary := m.attempt.metrics.OutboundRequestSummary; summary != nil {
-			summary.ShapeSHA256 = artifact.ShapeSHA256
-		}
-	}
 }
 
 func (m *relayPipelineMiddleware) OnOutboundRawError(ctx context.Context, err error) {

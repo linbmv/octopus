@@ -11,24 +11,18 @@ import (
 type AuditEvent string
 
 const (
-	EventUserLogin                    AuditEvent = "user.login"
-	EventUserLoginFailed              AuditEvent = "user.login.failed"
-	EventUserLogout                   AuditEvent = "user.logout"
-	EventPasswordChange               AuditEvent = "user.password.change"
-	EventUsernameChange               AuditEvent = "user.username.change"
-	EventUsernameChangeFailed         AuditEvent = "user.username.change.failed"
-	EventChannelCreate                AuditEvent = "channel.create"
-	EventChannelUpdate                AuditEvent = "channel.update"
-	EventChannelDelete                AuditEvent = "channel.delete"
-	EventChannelCapabilityProbe       AuditEvent = "channel.capability.probe"
-	EventChannelSelfHealingPreview    AuditEvent = "channel.self_healing.preview"
-	EventChannelSelfHealingCompare    AuditEvent = "channel.self_healing.compare"
-	EventChannelSelfHealingDiagnostic AuditEvent = "channel.self_healing.diagnostic"
-	EventChannelSelfHealingView       AuditEvent = "channel.self_healing.view"
-	EventChannelSelfHealingApply      AuditEvent = "channel.self_healing.apply"
-	EventChannelSelfHealingRollback   AuditEvent = "channel.self_healing.rollback"
-	EventSettingsUpdate               AuditEvent = "settings.update"
-	EventSensitiveOperationDenied     AuditEvent = "sensitive.operation.denied"
+	EventUserLogin                AuditEvent = "user.login"
+	EventUserLoginFailed          AuditEvent = "user.login.failed"
+	EventUserLogout               AuditEvent = "user.logout"
+	EventPasswordChange           AuditEvent = "user.password.change"
+	EventUsernameChange           AuditEvent = "user.username.change"
+	EventUsernameChangeFailed     AuditEvent = "user.username.change.failed"
+	EventChannelCreate            AuditEvent = "channel.create"
+	EventChannelUpdate            AuditEvent = "channel.update"
+	EventChannelDelete            AuditEvent = "channel.delete"
+	EventChannelCapabilityProbe   AuditEvent = "channel.capability.probe"
+	EventSettingsUpdate           AuditEvent = "settings.update"
+	EventSensitiveOperationDenied AuditEvent = "sensitive.operation.denied"
 )
 
 // AuditLog 记录用户操作审计日志

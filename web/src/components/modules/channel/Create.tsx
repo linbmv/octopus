@@ -35,7 +35,6 @@ export function CreateDialogContent() {
         max_concurrency: 0,
         user_agent: '',
         policy_profile: ChannelPolicyProfile.Standard,
-        self_healing_enabled: false,
         first_token_timeout_exception_enabled: false,
         first_token_timeout_exception_seconds: 0,
     });
@@ -79,7 +78,6 @@ export function CreateDialogContent() {
                 max_concurrency: Math.max(0, Number(formData.max_concurrency || 0)),
                 user_agent: formData.user_agent.trim(),
                 policy_profile: formData.policy_profile,
-                self_healing_enabled: formData.self_healing_enabled,
                 first_token_timeout_exception_enabled: formData.first_token_timeout_exception_enabled,
                 first_token_timeout_exception_seconds: formData.first_token_timeout_exception_seconds,
             },
@@ -107,7 +105,6 @@ export function CreateDialogContent() {
                         max_concurrency: 0,
                         user_agent: '',
                         policy_profile: ChannelPolicyProfile.Standard,
-                        self_healing_enabled: false,
                         first_token_timeout_exception_enabled: false,
                         first_token_timeout_exception_seconds: 0,
                     });

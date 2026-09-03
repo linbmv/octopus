@@ -85,53 +85,6 @@ func TestValidateChannelUpdateFirstTokenTimeoutException(t *testing.T) {
 	}
 }
 
-func TestValidateChannelAcceptsOfficialCodexOAuthCredential(t *testing.T) {
-	channel := Channel{
-		Name:     "codex-oauth",
-		Type:     ChannelTypeOpenAICodex,
-		BaseUrls: []BaseUrl{{URL: " https://chatgpt.com/backend-api/codex/ "}},
-		Keys: []ChannelKey{{Enabled: true, ChannelKey: `{
-			"type":"codex","access_token":"header.payload.signature","refresh_token":"refresh",
-			"account_id":"account","expired":"2099-01-01T00:00:00Z","custom_metadata":{"source":"import"}
-		}`}},
-	}
-	if err := ValidateChannel(&channel); err != nil {
-		t.Fatalf("ValidateChannel() error = %v", err)
-	}
-	if channel.BaseUrls[0].URL != "https://chatgpt.com/backend-api/codex/" {
-		t.Fatalf("validated base URL = %q", channel.BaseUrls[0].URL)
-	}
-}
-
-func TestValidateChannelRejectsUnsafeCodexOAuthConfiguration(t *testing.T) {
-	validCredential := `{"type":"codex","access_token":"header.payload.signature","refresh_token":"refresh","expired":"2099-01-01T00:00:00Z"}`
-	tests := []struct {
-		name       string
-		baseURL    string
-		credential string
-	}{
-		{name: "arbitrary host", baseURL: "https://attacker.example/backend-api/codex", credential: validCredential},
-		{name: "insecure scheme", baseURL: "http://chatgpt.com/backend-api/codex", credential: validCredential},
-		{name: "query parameters", baseURL: "https://chatgpt.com/backend-api/codex?target=other", credential: validCredential},
-		{name: "custom port", baseURL: "https://chatgpt.com:444/backend-api/codex", credential: validCredential},
-		{name: "fragment", baseURL: "https://chatgpt.com/backend-api/codex#other", credential: validCredential},
-		{name: "plain API key", baseURL: "https://chatgpt.com/backend-api/codex", credential: "sk-not-an-oauth-document"},
-		{name: "wrong credential type", baseURL: "https://chatgpt.com/backend-api/codex", credential: `{"type":"openai","access_token":"token"}`},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			channel := Channel{
-				Name: "codex-oauth", Type: ChannelTypeOpenAICodex,
-				BaseUrls: []BaseUrl{{URL: test.baseURL}},
-				Keys:     []ChannelKey{{Enabled: true, ChannelKey: test.credential}},
-			}
-			if err := ValidateChannel(&channel); err == nil {
-				t.Fatal("ValidateChannel() accepted unsafe Codex OAuth configuration")
-			}
-		})
-	}
-}
-
 func TestValidateChannelRejectsUnsafeShapes(t *testing.T) {
 	tests := []struct {
 		name   string

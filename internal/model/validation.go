@@ -9,7 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/bestruirui/octopus/internal/codexauth"
 	"github.com/bestruirui/octopus/internal/requestrewrite"
 	"github.com/looplj/axonhub/llm"
 )
@@ -58,7 +57,6 @@ var supportedChannelTypes = map[llm.APIFormat]struct{}{
 	llm.APIFormatOpenAIImageVariation:  {},
 	llm.APIFormatAnthropicMessage:      {},
 	llm.APIFormatGeminiContents:        {},
-	ChannelTypeOpenAICodex:             {},
 	ChannelTypeDoubao:                  {},
 }
 
@@ -90,9 +88,6 @@ func ValidateChannel(channel *Channel) error {
 		if err := validateOptionalText(fmt.Sprintf("channel key remark %d", i), channel.Keys[i].Remark, MaxHeaderValueBytes); err != nil {
 			return err
 		}
-	}
-	if err := ValidateChannelAuthentication(channel.Type, channel.BaseUrls, channel.Keys); err != nil {
-		return err
 	}
 	channel.Model = strings.TrimSpace(channel.Model)
 	channel.CustomModel = strings.TrimSpace(channel.CustomModel)
@@ -247,37 +242,6 @@ func ValidateChannelType(channelType llm.APIFormat) error {
 	return nil
 }
 
-// ValidateChannelAuthentication enforces provider-specific credential and
-// endpoint boundaries. Codex OAuth bearer tokens must never be sent to an
-// arbitrary host, and every configured key must be a supported OAuth document.
-func ValidateChannelAuthentication(channelType llm.APIFormat, baseURLs []BaseUrl, keys []ChannelKey) error {
-	if channelType != ChannelTypeOpenAICodex {
-		for i, key := range keys {
-			if err := validateRequiredText(fmt.Sprintf("channel key %d", i), key.ChannelKey, MaxChannelKeyBytes); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	for i, baseURL := range baseURLs {
-		parsed, err := url.Parse(strings.TrimSpace(baseURL.URL))
-		if err != nil || !strings.EqualFold(parsed.Scheme, "https") || !strings.EqualFold(parsed.Hostname(), "chatgpt.com") ||
-			parsed.Port() != "" || parsed.User != nil || parsed.Opaque != "" || parsed.Fragment != "" || parsed.RawQuery != "" || parsed.ForceQuery ||
-			strings.TrimRight(parsed.EscapedPath(), "/") != "/backend-api/codex" {
-			return fmt.Errorf("codex OAuth base URL %d must be %s", i, codexauth.OfficialBaseURL)
-		}
-	}
-	for i, key := range keys {
-		if _, err := codexauth.Parse(key.ChannelKey); err != nil {
-			return fmt.Errorf("codex OAuth credential %d is invalid: %w", i, err)
-		}
-	}
-	return nil
-}
-
-// validateChannelKeyEnvelope permits formatting whitespace only when the
-// complete value is already a valid Codex OAuth document. Provider-aware
-// validation below still rejects line breaks for ordinary API keys.
 func validateChannelKeyEnvelope(field, value string) error {
 	if !utf8.ValidString(value) {
 		return fmt.Errorf("%s must be valid UTF-8", field)
@@ -289,9 +253,6 @@ func validateChannelKeyEnvelope(field, value string) error {
 		return fmt.Errorf("%s exceeds %d bytes", field, MaxChannelKeyBytes)
 	}
 	if !strings.ContainsAny(value, "\r\n\t") {
-		return nil
-	}
-	if _, err := codexauth.Parse(value); err == nil {
 		return nil
 	}
 	return fmt.Errorf("%s contains a forbidden control character", field)
