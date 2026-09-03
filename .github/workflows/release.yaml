@@ -453,10 +453,14 @@ jobs:
       - name: Generate SBOM and enforce image security gate
         env:
           SBOM_VERSION: ${{ github.ref_name }}
-          SYFT_BIN: ${{ steps.syft.outputs.cmd }}
+          SYFT_BIN: syft
+          SYFT_REGISTRY_AUTH_USERNAME: ${{ github.actor }}
+          SYFT_REGISTRY_AUTH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           SYFT_IMAGE_SOURCE: registry
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
           TRIVY_IMAGE_SOURCE: remote
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           XDG_CACHE_HOME: ${{ runner.temp }}/syft-cache
         run: scripts/security/scan-container.sh \
           "${{ steps.staging.outputs.image }}@${{ steps.build_staging.outputs.digest }}" \
