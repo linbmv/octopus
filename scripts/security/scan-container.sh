@@ -62,8 +62,14 @@ rm -f -- "${SBOM_PATH}" "${REPORT_PATH}"
 export SYFT_CHECK_FOR_APP_UPDATE=false
 syft_platform_args=()
 trivy_platform_args=()
-if [ -n "${IMAGE_PLATFORM}" ]; then
+# A Docker source has already been pulled with the requested platform. Passing
+# --platform again makes the scanner resolve the local daemon image a second
+# time and is inconsistent across Docker/Buildx versions. Keep the platform
+# metadata below, but let the local image source determine the scanned image.
+if [ -n "${IMAGE_PLATFORM}" ] && [ "${SYFT_IMAGE_SOURCE}" != docker ]; then
     syft_platform_args=(--platform "${IMAGE_PLATFORM}")
+fi
+if [ -n "${IMAGE_PLATFORM}" ] && [ "${TRIVY_IMAGE_SOURCE}" != docker ]; then
     trivy_platform_args=(--platform "${IMAGE_PLATFORM}")
 fi
 
